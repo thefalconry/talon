@@ -14,38 +14,56 @@ import type { SharedActionHandlers } from "./types.js";
 
 export const meshHandlers: SharedActionHandlers = {
   list_devices: () => getMeshService().describeDevices(),
-  get_device_location: (body) => getMeshService().locateDevice(body.device),
+  get_device_location: (body) =>
+    getMeshService().locateDevice(body.device ?? body.deviceId),
   get_device_history: (body) =>
-    getMeshService().deviceHistory(body.device, body.hours),
-  ring_device: (body) => getMeshService().ringDevice(body.device, body.message),
+    getMeshService().deviceHistory(body.device ?? body.deviceId, body.hours),
+  ring_device: (body) =>
+    getMeshService().ringDevice(body.device ?? body.deviceId, body.message),
   // Registry hygiene: drop a stale/superseded device entry. Requires an
   // explicit target — a destructive action must never default-pick a device.
-  remove_device: (body) => getMeshService().removeDevice(body.device),
-  get_device_status: (body) => getMeshService().getDeviceStatus(body.device),
+  remove_device: (body) =>
+    getMeshService().removeDevice(body.device ?? body.deviceId),
+  get_device_status: (body) =>
+    getMeshService().getDeviceStatus(body.device ?? body.deviceId),
   // Exec + filesystem surface — the substrate teleport routes through.
   device_exec: (body) =>
     getMeshService().execOnDevice(
-      body.device,
+      body.device ?? body.deviceId,
       body.cmd,
       body.cwd,
       body.timeout_sec,
     ),
   device_list_dir: (body) =>
-    getMeshService().listDirOnDevice(body.device, body.path),
-  device_stat: (body) => getMeshService().statOnDevice(body.device, body.path),
+    getMeshService().listDirOnDevice(
+      body.device ?? body.deviceId,
+      body.path,
+    ),
+  device_stat: (body) =>
+    getMeshService().statOnDevice(
+      body.device ?? body.deviceId,
+      body.path,
+    ),
   device_read_file: (body) =>
-    getMeshService().readFileFromDevice(body.device, body.path),
+    getMeshService().readFileFromDevice(
+      body.device ?? body.deviceId,
+      body.path,
+    ),
   device_write_file: (body) =>
-    getMeshService().writeFileToDevice(body.device, body.path, body.content),
+    getMeshService().writeFileToDevice(
+      body.device ?? body.deviceId,
+      body.path,
+      body.content,
+    ),
   device_pull_file: (body) =>
     getMeshService().pullFileFromDevice(
-      body.device,
+      body.device ?? body.deviceId,
       body.remote_path,
       body.local_path,
     ),
   device_push_file: (body) =>
     getMeshService().pushFileToDevice(
-      body.device,
+      body.device ?? body.deviceId,
       body.local_path,
       body.remote_path,
     ),
@@ -53,7 +71,7 @@ export const meshHandlers: SharedActionHandlers = {
   // the mesh connection across the app restart.
   update_device: (body) =>
     getMeshService().updateDeviceApp(
-      body.device,
+      body.device ?? body.deviceId,
       body.apk_path,
       body.remote_path,
     ),
@@ -63,7 +81,7 @@ export const meshHandlers: SharedActionHandlers = {
   // platform/arch itself (source build or verified release download).
   update_node: (body) =>
     getMeshService().updateNodeBinary(
-      body.device,
+      body.device ?? body.deviceId,
       body.binary_path,
       body.remote_path,
     ),
