@@ -122,6 +122,11 @@ function machine(): Machine {
     '{"type":"session_meta"}\n',
   );
   sqliteStore(join(userHome, ".local", "share", "opencode", "opencode.db"));
+  // Mesh registry + the per-device credential store that authenticates it.
+  // Both must survive a disaster-recovery restore, or restored devices are
+  // present in the registry but rejected on their next heartbeat.
+  write(join(home, "mesh-devices.json"), '{"devices":[]}');
+  write(join(home, "mesh-credentials.json"), '{"credentials":[]}');
   return { root, home, userHome };
 }
 
@@ -167,6 +172,11 @@ describe("full-state snapshot contents", () => {
     expect(state.some((p) => p.includes("/dist"))).toBe(false);
     expect(state.some((p) => p.includes(".venv"))).toBe(false);
     expect(state).toContain("plugins-manifest.json");
+
+    // Mesh registry AND its credential store — restoring the registry without
+    // the credentials would lock every paired device out after a restore.
+    expect(state).toContain("mesh-devices.json");
+    expect(state).toContain("mesh-credentials.json");
 
     // Bulk workspace directories stay out by default.
     expect(state.some((p) => p.startsWith("workspace/media"))).toBe(false);

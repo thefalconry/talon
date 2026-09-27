@@ -75,6 +75,7 @@ export const HOME_INCLUDES: readonly string[] = [
   "google",
   "plugins",
   "mesh-devices.json",
+  "mesh-credentials.json",
   "mesh-history.json",
   "mesh-locations.json",
   "teleport-state.json",
