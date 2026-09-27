@@ -70,10 +70,13 @@ WORKDIR /app
 # Antigravity `agy` backend needs git + ripgrep on PATH (docker/agy-test
 # carries the same set), and the Claude Code CLI uses them too when
 # present. ca-certificates keeps outbound HTTPS working on both bases;
-# curl is here for the optional agy download below.
+# curl is here for the optional agy download below. zip/unzip are here
+# because both slim bases ship tar and gzip but not them, so an agent asked
+# to pack or unpack a .zip falls back to writing a Python zipfile script on
+# every call — slower, more tokens, and more places to get it wrong.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-       ca-certificates curl git ripgrep \
+       ca-certificates curl git ripgrep unzip zip \
   && rm -rf /var/lib/apt/lists/*
 
 # Antigravity CLI (`backend: "agy"`). Google ships it as a standalone
