@@ -277,6 +277,20 @@ describe("AgentRegistry reads", () => {
     expect(registry.killRequested("agt_1")).toBe(true);
   });
 
+  it("honours a kill requested while still queued when the abort handle binds at start", () => {
+    const registry = makeRegistry();
+    register(registry);
+    // Kill arrives during the queued window — before any abort handle exists,
+    // so this only records the flag (nothing to abort yet).
+    expect(registry.requestKill("agt_1")).toBe(true);
+    expect(registry.killRequested("agt_1")).toBe(true);
+    // When the handle finally binds at start(), the pending kill must reach it,
+    // or the fresh un-aborted controller lets the run proceed and the kill is lost.
+    const abort = new AbortController();
+    registry.start("agt_1", { model: "sonnet", abort });
+    expect(abort.signal.aborted).toBe(true);
+  });
+
   it("killAll signals every live agent", () => {
     const registry = makeRegistry();
     register(registry);

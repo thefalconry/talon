@@ -216,6 +216,22 @@ export class AgentRegistry {
     const entry = this.live.get(id);
     if (!entry || entry.record.state !== "queued") return;
     entry.abort = binding.abort;
+    // A kill can arrive while the agent is still `queued` — before any abort
+    // handle exists, so requestKill's `entry.abort?.abort()` was a no-op that
+    // only set the flag. When the handle finally binds here, honour that
+    // pending kill; otherwise the fresh, un-aborted controller lets the run
+    // proceed and the kill is silently lost. The runner checks the signal
+    // right after start() and settles the run as "killed".
+    if (entry.killRequested) {
+      try {
+        binding.abort.abort();
+      } catch (err) {
+        logWarn(
+          "agents",
+          `Abort hook threw on start agent=${id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     entry.record.model = binding.model;
     entry.record.state = "running";
     entry.record.startedAt = Date.now();
