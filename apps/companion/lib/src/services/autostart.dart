@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:launch_at_startup/launch_at_startup.dart';
 
 import 'log.dart';
+import 'sandbox.dart';
 
 /// Desktop launch-at-login.
 ///
@@ -14,8 +15,24 @@ import 'log.dart';
 class Autostart {
   Autostart._();
 
-  static bool get isSupported =>
-      !kIsWeb && (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
+  /// Whether the launch-at-login toggle can do anything on this build.
+  ///
+  /// Not inside Flatpak. `launch_at_startup` writes a `.desktop` entry into
+  /// `~/.config/autostart` pointing at [Platform.resolvedExecutable], which
+  /// inside the sandbox is `/app/bin/...` — a path the host session cannot
+  /// run. The entry is written, the toggle reports enabled, and the app
+  /// never starts at login: the toggle lies. Flatpak apps request this
+  /// through the XDG Background portal instead, so until that exists the
+  /// honest thing is not to offer the switch. Same treatment the self-updater
+  /// and mesh device control already get.
+  ///
+  /// [sandboxed] is a test seam; production reads [isFlatpak].
+  static bool isSupportedIn({bool? sandboxed}) =>
+      !kIsWeb &&
+      !(sandboxed ?? isFlatpak) &&
+      (Platform.isMacOS || Platform.isWindows || Platform.isLinux);
+
+  static bool get isSupported => isSupportedIn();
 
   static bool _setup = false;
 

@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:talon_companion/src/services/autostart.dart';
 import 'package:talon_companion/src/services/device_exec.dart';
 import 'package:talon_companion/src/services/mesh_service.dart';
 import 'package:talon_companion/src/services/prefs.dart';
@@ -171,6 +172,20 @@ void main() {
         MeshService.deviceControlAllowed(prefs, sandboxed: false),
         isTrue,
       );
+    });
+  });
+
+  group('Autostart', () {
+    test('is not offered inside Flatpak', () {
+      // launch_at_startup would write ~/.config/autostart/Talon.desktop
+      // pointing at /app/bin/... — unreachable from the host session, so the
+      // toggle would report success and nothing would start at login.
+      expect(Autostart.isSupportedIn(sandboxed: true), isFalse);
+    });
+
+    test('is offered on desktop outside Flatpak', () {
+      final desktop = Platform.isLinux || Platform.isMacOS || Platform.isWindows;
+      expect(Autostart.isSupportedIn(sandboxed: false), desktop);
     });
   });
 }
