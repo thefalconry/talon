@@ -895,7 +895,9 @@ export class MeshService {
                 (d) =>
                   `${d.name} [id: ${d.id}, ${d.online ? "online" : "offline"}]`,
               )
-              .join(", ")}. Use the device id${exactNames.size > 1 ? " or full name" : ""}.`,
+              .join(
+                ", ",
+              )}. Use the device id${exactNames.size > 1 ? " or full name" : ""}.`,
           };
         }
         return undefined;

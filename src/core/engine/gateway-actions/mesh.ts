@@ -35,15 +35,9 @@ export const meshHandlers: SharedActionHandlers = {
       body.timeout_sec,
     ),
   device_list_dir: (body) =>
-    getMeshService().listDirOnDevice(
-      body.device ?? body.deviceId,
-      body.path,
-    ),
+    getMeshService().listDirOnDevice(body.device ?? body.deviceId, body.path),
   device_stat: (body) =>
-    getMeshService().statOnDevice(
-      body.device ?? body.deviceId,
-      body.path,
-    ),
+    getMeshService().statOnDevice(body.device ?? body.deviceId, body.path),
   device_read_file: (body) =>
     getMeshService().readFileFromDevice(
       body.device ?? body.deviceId,
