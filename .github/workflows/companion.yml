@@ -177,6 +177,9 @@ jobs:
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "APP_BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
           echo "Companion version: $VERSION ($BUILD_NUMBER)"
+          # Rewrite pubspec.yaml so desktop builds (Linux/Windows) embed the release
+          # version into flutter_assets/version.json rather than building with 1.0.0.
+          sed -i.bak "s/^version: .*/version: $VERSION+$BUILD_NUMBER/" pubspec.yaml
 
       # Stable release signing (see android/app/build.gradle.kts): decode
       # the keystore secret so every release APK carries the same signature

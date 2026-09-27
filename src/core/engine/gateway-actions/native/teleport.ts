@@ -11,7 +11,7 @@ import type { Result } from "./results.js";
 import type { SharedActionHandlers } from "../types.js";
 
 export const teleportHandlers: SharedActionHandlers = {
-  teleport: (body, chatId) => teleport(chatId, body.device),
+  teleport: (body, chatId) => teleport(chatId, body.device ?? body.deviceId),
   teleport_back: (_body, chatId) => teleportBack(chatId),
 };
 
