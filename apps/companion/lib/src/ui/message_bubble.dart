@@ -1,3 +1,5 @@
+import 'dart:io' show File;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -48,6 +50,11 @@ class MessageBubble extends StatelessWidget {
   /// used to ride in the URL as `?token=`.
   final Map<String, String> mediaHeaders;
 
+  /// The bridge base URL (e.g. `https://host:port`). A link in message text
+  /// that points at this origin is a bridge attachment and is fetched in-app
+  /// with [mediaHeaders]; every other link opens in the external browser.
+  final String mediaBaseUrl;
+
   /// False when this row is grouped under a previous assistant row from the
   /// same run — the avatar + name header is skipped.
   final bool showHeader;
@@ -64,6 +71,7 @@ class MessageBubble extends StatelessWidget {
     this.imageUrl,
     this.files = const [],
     this.mediaHeaders = const {},
+    this.mediaBaseUrl = '',
     this.showHeader = true,
     this.showTime = true,
   });
@@ -290,16 +298,13 @@ class MessageBubble extends StatelessWidget {
             if (!((imageUrl != null || files.isNotEmpty) &&
                 message.text.isEmpty))
               SelectionArea(
-                child: MarkdownBody(
-                  data: message.text.isEmpty ? '…' : message.text,
-                  builders: {'code': CodeElementBuilder()},
-                  onTapLink: (_, href, __) {
-                    if (href != null) {
-                      launchUrl(Uri.parse(href),
-                          mode: LaunchMode.externalApplication);
-                    }
-                  },
-                  styleSheet: talonMarkdownStyle(),
+                child: Builder(
+                  builder: (context) => MarkdownBody(
+                    data: message.text.isEmpty ? '…' : message.text,
+                    builders: {'code': CodeElementBuilder()},
+                    onTapLink: (_, href, __) => _onTapLink(context, href),
+                    styleSheet: talonMarkdownStyle(),
+                  ),
                 ),
               ),
             if (files.isNotEmpty)
@@ -316,6 +321,44 @@ class MessageBubble extends StatelessWidget {
           ],
         ),
       );
+
+  /// A tapped link in message text. A bridge attachment (same origin as
+  /// [mediaBaseUrl]) is fetched in-app through the authenticated media stack —
+  /// so the bearer token never rides in a browser-visible URL and mTLS still
+  /// applies — then opened locally. Everything else opens in the browser.
+  void _onTapLink(BuildContext context, String? href) {
+    if (href == null) return;
+    if (mediaBaseUrl.isNotEmpty && _isBridgeMedia(href)) {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      AttachmentOpener.instance
+          .openLink(url: href, headers: mediaHeaders)
+          .catchError((Object e) {
+        messenger?.showSnackBar(
+          SnackBar(content: Text("Couldn't open link: $e")),
+        );
+        return File('');
+      });
+      return;
+    }
+    launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
+  }
+
+  bool _isBridgeMedia(String href) => isBridgeMediaLink(href, mediaBaseUrl);
+
+  /// True when [href] targets the connected bridge's `/media` endpoint. Scheme,
+  /// host and port must all match [baseUrl] so a look-alike host in message
+  /// text never receives the bridge's auth header.
+  @visibleForTesting
+  static bool isBridgeMediaLink(String href, String baseUrl) {
+    if (baseUrl.isEmpty) return false;
+    final link = Uri.tryParse(href);
+    final base = Uri.tryParse(baseUrl);
+    if (link == null || base == null) return false;
+    return link.scheme == base.scheme &&
+        link.host == base.host &&
+        link.port == base.port &&
+        link.path == '/media';
+  }
 
   Widget _buttons() => Padding(
         padding: const EdgeInsets.only(top: TalonSpace.sm),

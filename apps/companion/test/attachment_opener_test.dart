@@ -23,6 +23,15 @@ void main() {
       if (!ok) {
         req.response.statusCode = 401;
       } else {
+        // Optional headers a link-download test can steer: `ct` sets the
+        // Content-Type, `fn` sets a Content-Disposition filename.
+        final ct = req.uri.queryParameters['ct'];
+        if (ct != null) req.response.headers.contentType = ContentType.parse(ct);
+        final fn = req.uri.queryParameters['fn'];
+        if (fn != null) {
+          req.response.headers
+              .set('content-disposition', 'attachment; filename="$fn"');
+        }
         req.response.write('file-bytes:${req.uri.queryParameters['id']}');
       }
       await req.response.close();
@@ -115,5 +124,50 @@ void main() {
     expect(AttachmentOpener.safeName('..'), 'attachment');
     expect(AttachmentOpener.safeName(''), 'attachment');
     expect(AttachmentOpener.safeName(r'a\b:c'), 'a_b_c');
+  });
+
+  // A bare `/media?id=…` link in message text carries no name or MIME, so
+  // openLink recovers both from the response and opens the local copy.
+  test('openLink names the file from Content-Disposition and opens it',
+      () async {
+    final file = await opener().openLink(
+      url: '${url('z')}&ct=application/pdf&fn=invoice.pdf',
+      headers: const {'Authorization': 'Bearer secret'},
+    );
+
+    expect(requests, hasLength(1));
+    expect(await file.readAsString(), 'file-bytes:z');
+    expect(file.path, endsWith('${Platform.pathSeparator}invoice.pdf'));
+    expect(launched, [(file.path, 'application/pdf')]);
+  });
+
+  test('openLink falls back to the media id plus a MIME extension', () async {
+    final file = await opener().openLink(
+      url: '${url('mmuk3t31w')}&ct=application/zip',
+      headers: const {'Authorization': 'Bearer secret'},
+    );
+
+    expect(file.path, endsWith('${Platform.pathSeparator}mmuk3t31w.zip'));
+    expect(launched.single.$2, 'application/zip');
+  });
+
+  test('openLink without the auth header is refused and opens nothing',
+      () async {
+    await expectLater(
+      opener().openLink(url: url('q')),
+      throwsA(isA<AttachmentException>()),
+    );
+    expect(launched, isEmpty);
+  });
+
+  test('nameFromResponse prefers disposition, then id, then a default', () {
+    String n(Map<String, String> h, String ct, {String u = 'http://x/media?id=abc'}) =>
+        AttachmentOpener.nameFromResponse(u, h, ct);
+
+    expect(n({'content-disposition': 'attachment; filename="a.pdf"'}, 'x'),
+        'a.pdf');
+    expect(n(const {}, 'application/zip'), 'abc.zip');
+    expect(n(const {}, 'application/octet-stream'), 'abc');
+    expect(n(const {}, 'image/png', u: 'http://x/media'), 'media.png');
   });
 }

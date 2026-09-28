@@ -507,6 +507,35 @@ void main() {
       expect(snap.attachments.map((a) => a.name), ['a.png', 'b.zip']);
     });
 
+    test('only a same-origin /media link counts as a bridge attachment', () {
+      const base = 'http://host:8080';
+      // The connected bridge's own media endpoint — fetched in-app.
+      expect(
+          MessageBubble.isBridgeMediaLink(
+              'http://host:8080/media?id=mmuk3t31w', base),
+          isTrue);
+      // A foreign host, even at /media — must stay in the browser so the auth
+      // header is never sent off-origin.
+      expect(
+          MessageBubble.isBridgeMediaLink(
+              'https://example.com/media?id=x', base),
+          isFalse);
+      // Right host, wrong port / scheme / path — not the bridge media route.
+      expect(
+          MessageBubble.isBridgeMediaLink('http://host:9090/media', base),
+          isFalse);
+      expect(
+          MessageBubble.isBridgeMediaLink('https://host:8080/media', base),
+          isFalse);
+      expect(
+          MessageBubble.isBridgeMediaLink('http://host:8080/other', base),
+          isFalse);
+      // No configured bridge base — nothing is ever treated as in-app.
+      expect(
+          MessageBubble.isBridgeMediaLink('http://host:8080/media', ''),
+          isFalse);
+    });
+
     testWidgets('a text-only message renders no chips', (tester) async {
       await tester.pumpWidget(host(MessageBubble(
         message: ClientMessage(
