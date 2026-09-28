@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.20.1](https://github.com/thefalconry/talon/compare/v5.20.0...v5.20.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **gateway:** let sub-agents reach chat-free actions (mesh, send_via, backup) ([#1109](https://github.com/thefalconry/talon/issues/1109)) ([2616d75](https://github.com/thefalconry/talon/commit/2616d75230258a272172b5c38bd092d574423c91))
+
+
+### Tests
+
+* **companion:** fix the flaky voice watchdog tests ([#1108](https://github.com/thefalconry/talon/issues/1108)) ([9bc888a](https://github.com/thefalconry/talon/commit/9bc888acb0a9cf47ff0c0d519af88d62f2a9f792))
+
 ## [5.20.0](https://github.com/thefalconry/talon/compare/v5.19.1...v5.20.0) (2026-09-28)
 
 
