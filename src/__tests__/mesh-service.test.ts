@@ -1703,6 +1703,50 @@ describe("MeshService node provisioning", () => {
     expect(service.openNodeBinary(token)).toBeNull();
   });
 
+  it("pins install links to the bridge key and refuses shell-unsafe URLs", async () => {
+    const { resolver } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    const pin = "pL1+qb9HTMRZJmuC/bB/ZI9d302BYrrqiVuRyW+DGrU=";
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "100.64.0.7",
+      port: 19880,
+      token: "bearer-secret",
+      fingerprint: "cd".repeat(32),
+      spkiPin: pin,
+    });
+
+    const pinned = await service.makeNodeInstallLink("linux", "amd64");
+    expect(pinned.text).toContain(`--pinnedpubkey "sha256//${pin}"`);
+
+    for (const bad of [
+      'https://x/"; id; "',
+      "https://x/$(id)",
+      "https://x/`id`",
+      "file:///etc/passwd",
+    ]) {
+      const refused = await service.makeNodeInstallLink(
+        "linux",
+        "amd64",
+        undefined,
+        bad,
+      );
+      expect(refused.ok).toBe(false);
+      expect(refused.text).toContain("bridge_url must be a plain http(s) URL");
+    }
+
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "0.0.0.0",
+      port: 19880,
+      token: "bearer-secret",
+      publicUrl: "https://talon.example/$(reboot)",
+    });
+    const badPublic = await service.makeNodeInstallLink("linux", "amd64");
+    expect(badPublic.ok).toBe(false);
+    expect(badPublic.text).toContain("native.publicUrl must be");
+  });
+
   it("refuses install links when the bridge is loopback-only or absent", async () => {
     const service = await tempService();
     const none = await service.makeNodeInstallLink("linux", "amd64");

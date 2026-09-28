@@ -23,7 +23,11 @@ import {
   normalizeGoos,
   type NodeBinaryResolver,
 } from "./node-binaries.js";
-import { installOneLiner, NodeProvisionStore } from "./node-provision.js";
+import {
+  checkBridgeUrl,
+  installOneLiner,
+  NodeProvisionStore,
+} from "./node-provision.js";
 import {
   DEFAULT_COMPANION_SCOPES,
   NODE_SCOPES,
@@ -56,6 +60,8 @@ export type MeshBridgeInfo = {
   token?: string;
   /** TLS certificate SHA-256 (absent over plain HTTP). */
   fingerprint?: string;
+  /** Base64 SHA-256 of the TLS key's SPKI, curl's pin (absent over HTTP). */
+  spkiPin?: string;
   /**
    * The operator's `native.publicUrl`: what devices dial when the bind
    * address isn't reachable as-is (containers, NAT, proxies).
@@ -172,6 +178,7 @@ export class BridgeLinks {
       bridgeUrl: base,
       bearerToken: this.linkCredential(info.token, NODE_SCOPES, "install"),
       ...(info.fingerprint ? { fingerprint: info.fingerprint } : {}),
+      ...(info.spkiPin ? { spkiPin: info.spkiPin } : {}),
     });
     return {
       ok: true,
@@ -318,17 +325,17 @@ export class BridgeLinks {
     info: MeshBridgeInfo,
     explicit?: unknown,
   ): string | { error: string } {
+    // Both URLs end up inside generated installer scripts, so they are held
+    // to a quote-safe alphabet (checkBridgeUrl), not just "looks like a URL".
     if (typeof explicit === "string" && explicit.trim()) {
-      const url = explicit.trim().replace(/\/+$/, "");
-      if (!/^https?:\/\/\S+$/.test(url)) {
-        return { error: `bridge_url must be an http(s) URL, got "${url}".` };
-      }
-      return url;
+      return checkBridgeUrl(explicit);
     }
     // Inside a container the "first external IPv4" is the container's own
     // bridge-network address, which no phone can reach — the operator's
     // public URL is the only right answer there.
-    if (info.publicUrl) return info.publicUrl.trim().replace(/\/+$/, "");
+    if (info.publicUrl) {
+      return checkBridgeUrl(info.publicUrl, "native.publicUrl");
+    }
     let host = info.host;
     if (host === "0.0.0.0" || host === "::") {
       const external = firstExternalIPv4();
