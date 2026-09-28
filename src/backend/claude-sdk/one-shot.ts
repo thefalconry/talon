@@ -279,6 +279,34 @@ async function formatAndAppendMessage(
  * spawner (us) and contains the env vars Talon set when launching the SDK
  * subprocess via MCP launcher. SIGTERM with a short grace, then SIGKILL.
  */
+/**
+ * Decide whether a `/proc` entry is a run orphan this sweep may kill.
+ *
+ * Carrying the chat id is necessary but NOT sufficient. Every chat-scoped
+ * child Talon spawns inherits `TALON_CHAT_ID` — including trigger watchers
+ * (`core/background/triggers/spawn.ts` sets it alongside `TALON_TRIGGER_ID`)
+ * and their descendants, which are long-lived by design and belong to no run.
+ * Matching on the chat id alone made every orphan sweep kill that chat's
+ * triggers: the warden respawned them, the next sweep killed them again, and
+ * the only visible symptom was a trigger stuck in "errored" with no output.
+ *
+ * Two independent guards, because this function issues SIGKILL:
+ *  - refuse anything tagged `TALON_TRIGGER_ID` (a trigger, or its child);
+ *  - require the argv to actually be the `claude` SDK binary, which is the
+ *    only thing this sweep was ever meant to reap.
+ */
+export function isEvictableOrphan(
+  envEntries: string[],
+  argv: string[],
+  target: string,
+): boolean {
+  if (!envEntries.includes(target)) return false;
+  if (envEntries.some((entry) => entry.startsWith("TALON_TRIGGER_ID="))) {
+    return false;
+  }
+  return argv.some((arg) => arg === "claude" || arg.endsWith("/claude"));
+}
+
 export async function evictOrphanSubprocesses(contextLabel: string): Promise<{
   found: number;
   termed: number;
@@ -306,12 +334,14 @@ export async function evictOrphanSubprocesses(contextLabel: string): Promise<{
     if (!Number.isInteger(pid) || pid === myPid) continue;
     try {
       const environRaw = await readFile(`/proc/${pid}/environ`, "utf-8");
+      const argvRaw = await readFile(`/proc/${pid}/cmdline`, "utf-8");
       // /proc/<pid>/environ is NUL-delimited. Split on \0 and match exact
       // entries — a raw .includes() can false-positive on other vars whose
       // value happens to contain the substring. Since this code can SIGKILL,
       // err on the side of strict matching. (Copilot review on #144.)
-      const envEntries = environRaw.split("\0");
-      if (envEntries.includes(target)) {
+      if (
+        isEvictableOrphan(environRaw.split("\0"), argvRaw.split("\0"), target)
+      ) {
         matched.push(pid);
       }
     } catch {

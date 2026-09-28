@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../models/connection.dart';
 import 'log.dart';
@@ -49,6 +50,9 @@ class Prefs {
       snapshotFile: fileSnapshot ? await _resolveSnapshotFile() : null,
     );
     await prefs._migrateMeshGrants();
+    if (prefs.meshDeviceId == null || prefs.meshDeviceId!.isEmpty) {
+      await prefs.setMeshDeviceId(const Uuid().v4());
+    }
     return prefs;
   }
 

@@ -877,6 +877,7 @@ export class MeshService {
       const q = raw.toLowerCase();
       const byId = devices.find((d) => d.id.toLowerCase() === q);
       if (byId) return { target: byId };
+
       const fold = (s: string): string =>
         s.toLowerCase().replace(/[^a-z0-9]+/g, "");
       const folded = fold(raw);
@@ -885,6 +886,7 @@ export class MeshService {
       ): { target: DeviceInfo } | { error: string } | undefined => {
         if (candidates.length === 1) return { target: candidates[0]! };
         if (candidates.length > 1) {
+          const exactNames = new Set(candidates.map((d) => fold(d.name)));
           const online = candidates.filter((d) => d.online);
           if (online.length === 1) return { target: online[0]! };
           return {
@@ -893,13 +895,32 @@ export class MeshService {
                 (d) =>
                   `${d.name} [id: ${d.id}, ${d.online ? "online" : "offline"}]`,
               )
-              .join(", ")}. Use the device id or full name.`,
+              .join(
+                ", ",
+              )}. Use the device id${exactNames.size > 1 ? " or full name" : ""}.`,
           };
         }
         return undefined;
       };
+
+      const exactMatch = pick(devices.filter((d) => fold(d.name) === folded));
+      if (exactMatch) return exactMatch;
+
+      if (q.length >= 6) {
+        const byPrefix = devices.filter((d) =>
+          d.id.toLowerCase().startsWith(q),
+        );
+        if (byPrefix.length === 1) return { target: byPrefix[0]! };
+        if (byPrefix.length > 1) {
+          return {
+            error: `Device id prefix "${raw}" matches ${byPrefix.length} devices: ${byPrefix
+              .map((d) => `${d.name} [id: ${d.id}]`)
+              .join(", ")}. Provide more characters of the id.`,
+          };
+        }
+      }
+
       return (
-        pick(devices.filter((d) => fold(d.name) === folded)) ??
         (folded
           ? pick(devices.filter((d) => fold(d.name).includes(folded)))
           : undefined) ?? { error: this.noSuchDevice(query).text }
