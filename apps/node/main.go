@@ -66,7 +66,9 @@ Usage:
   talon-node run        Connect to the bridge and serve mesh commands
   talon-node install    Install and start as a system service (systemd/launchd/sc)
   talon-node uninstall  Stop and remove the system service
-  talon-node status     Show config, bridge reachability, and service state
+  talon-node status     Show config, bridge reachability, service state, and
+                        the last commands run here
+  talon-node audit      Print the on-device command log (-n <count>, --json)
   talon-node version    Print the version
 
 Flags (run/install/status):
@@ -107,6 +109,8 @@ func main() {
 	case "status":
 		cfg := mustLoadConfig(rest)
 		statusCmd(cfg)
+	case "audit":
+		auditCmd(rest)
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -160,6 +164,7 @@ func statusCmd(cfg *Config) {
 	}
 	fmt.Printf("credential:  %s\n", credentialKind(cfg.Token))
 	fmt.Printf("service:     %s\n", serviceState())
+	printAuditTail(cfg.Path)
 	if cfg.Bridge == "" {
 		return
 	}

@@ -100,10 +100,17 @@ type Node struct {
 	workersOnce sync.Once
 	commands    chan map[string]any
 	rejects     chan map[string]any
+
+	// audit is the on-device command log next to config.json (audit.go);
+	// nil when the node has no config path to put it beside.
+	audit *auditLog
 }
 
 func NewNode(cfg *Config) (*Node, error) {
 	n := &Node{cfg: cfg, DeviceID: cfg.DeviceID}
+	if cfg.Path != "" {
+		n.audit = newAuditLog(auditPath(cfg.Path))
+	}
 	transport := &http.Transport{
 		// The bridge mints a self-signed certificate; identity is proven by
 		// pinning its SHA-256 (exactly like the companion app), not by a CA
@@ -534,12 +541,19 @@ func (n *Node) handleCommand(ctx context.Context, event map[string]any) {
 		params = map[string]any{}
 	}
 	log.Printf("command %q (%s)", name, id)
+	started := time.Now()
 	result := dispatch(ctx, n, name, params)
+	elapsed := time.Since(started)
 	result.CommandID = id
 	postCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := n.PostCommandResult(postCtx, result); err != nil {
 		log.Printf("could not answer command %q (%s): %v", name, id, err)
+	}
+	// Audited after the answer is on its way (so the log never delays a
+	// reply) but before any re-exec (so an update is still recorded).
+	if n.audit != nil {
+		n.audit.record(newAuditEntry(id, name, params, result, elapsed, n.token()))
 	}
 	// A successful update_node swapped the on-disk binary; now that the ack
 	// has been delivered, restart into it. Under systemd/launchd this is an

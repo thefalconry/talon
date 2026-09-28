@@ -1,7 +1,8 @@
 /// This device's mesh membership: location sharing, periodic reporting,
 /// device control and its Android privilege ladder, desktop start-at-login,
-/// and the registered device list. The switches are all prefs-backed and
-/// about *this* machine; the ladder is read from the platform bridges.
+/// the on-device command audit, and the registered device list. The
+/// switches are all prefs-backed and about *this* machine; the ladder is
+/// read from the platform bridges.
 library;
 
 import 'dart:async';
@@ -19,6 +20,7 @@ import '../../services/mesh_background.dart';
 import '../../services/sandbox.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
+import 'mesh_audit_section.dart';
 import 'settings_widgets.dart';
 
 class MeshCard extends StatefulWidget {
@@ -240,6 +242,8 @@ class _MeshCardState extends State<MeshCard> {
             ),
             if (prefs.meshElevated) _privilegeRow(),
           ],
+          const Divider(height: 22),
+          const MeshAuditSection(),
           const Divider(height: 22),
           Row(
             children: [

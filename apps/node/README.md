@@ -101,6 +101,22 @@ touch the config directory or the node's own binary.
 Paths are checked after resolving symlinks. Path limits only mean something
 with `disableExec`, because a shell can reach any file.
 
+### Command audit
+
+Every mesh command the node runs is logged to `audit.jsonl` next to
+`config.json` (0600, the newest 500–999 entries). One JSON line per command:
+
+```json
+{"time":"2026-09-28T10:00:00Z","commandId":"…","name":"exec","target":"sha256:…","ok":true,"durationMs":12,"credential":"device:0123456789abcdef"}
+```
+
+`target` is the path a filesystem command touched (`from -> to` for
+`move`), or the SHA-256 of an `exec` command line. File contents and command
+lines are never recorded. `credential` names the bearer the node was using
+(`device:<credential id>`, `shared`), never the secret. `talon-node status`
+shows the last 10 entries; `talon-node audit [-n 50] [--json]` prints more.
+Writing the log never delays or fails a command.
+
 ## How it plugs in
 
 ```
