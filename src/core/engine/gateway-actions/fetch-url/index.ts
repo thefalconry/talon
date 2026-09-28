@@ -75,8 +75,9 @@ export const fetchUrlHandlers: SharedActionHandlers = {
     const invalid = urlError(url);
     if (invalid) return { ok: false, error: invalid };
     try {
-      // Every hop is checked against private/loopback/link-local ranges
-      // (see guard.ts) unless the operator opted out for local use.
+      // Local addresses are reachable by default; with
+      // `fetchUrl.allowPrivateNetworks: false` every hop is checked against
+      // private/loopback/link-local ranges (see guard.ts).
       const resp = await guardedFetch(
         url,
         {
@@ -85,7 +86,7 @@ export const fetchUrlHandlers: SharedActionHandlers = {
         },
         {
           allowPrivateNetworks:
-            getPoolConfig()?.fetchUrl?.allowPrivateNetworks === true,
+            getPoolConfig()?.fetchUrl?.allowPrivateNetworks !== false,
         },
       );
       if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };

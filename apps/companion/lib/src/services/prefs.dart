@@ -28,6 +28,11 @@ class Prefs {
   static const _kMeshElevated = 'mesh.elevated.v1';
   static const _kMeshControlBridge = 'mesh.controlBridge.v1';
   static const _kMeshGrantsMigrated = 'mesh.grantsMigrated.v1';
+  static const _kMeshGrantsMigrated2 = 'mesh.grantsMigrated.v2';
+  static const _kMeshGrantsPerPairing = 'mesh.grantsPerPairing.v1';
+  static const _kMeshMaxConcurrent = 'mesh.maxConcurrent.v1';
+  static const _kMeshMaxQueued = 'mesh.maxQueued.v1';
+  static const _kMeshMaxWriteGiB = 'mesh.maxWriteGiB.v1';
   static const _kMeshBgAliveAt = 'mesh.bg.alive_at.v1';
   static const _kMeshBgStartedAt = 'mesh.bg.started_at.v1';
 
@@ -67,24 +72,23 @@ class Prefs {
     }
   }
 
-  /// Device control used to default to on, for every bridge. It is now an
-  /// explicit, per-bridge grant (see [meshDeviceControl]); an install that
-  /// was already set up keeps what it had — bound to the bridge it is
-  /// connected to today — while a fresh install starts with it off.
-  /// Idempotent, so the UI and background isolates can both run it.
+  /// Device control and elevated access are on by default again, for every
+  /// bridge. Between #1064 and this, both were an opt-in, per-bridge grant
+  /// that every pairing link wiped by writing `false` — so a stored `false`
+  /// with no bridge recorded is that wipe (or the old default), not a
+  /// choice, and goes back to the default. A value stored next to a
+  /// recorded bridge was set through the settings screen (or kept from
+  /// before #1064) and stays. Installs that never ran the #1064 migration
+  /// only ever stored what the user set. Idempotent, so the UI and
+  /// background isolates can both run it.
   Future<void> _migrateMeshGrants() async {
-    if (_sp.getBool(_kMeshGrantsMigrated) ?? false) return;
-    if (onboarded) {
-      final legacy = _sp.getBool(_kMeshDeviceControl) ?? true;
-      await _sp.setBool(_kMeshDeviceControl, legacy);
-      // Before this, device control always climbed to root/Shizuku when it
-      // could; keep that for the bridge that already had it.
-      await _sp.setBool(_kMeshElevated, legacy);
-      if (legacy) {
-        await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
-      }
+    if (_sp.getBool(_kMeshGrantsMigrated2) ?? false) return;
+    final hadOptIn = _sp.getBool(_kMeshGrantsMigrated) ?? false;
+    if (hadOptIn && _sp.getString(_kMeshControlBridge) == null) {
+      await _sp.remove(_kMeshDeviceControl);
+      await _sp.remove(_kMeshElevated);
     }
-    await _sp.setBool(_kMeshGrantsMigrated, true);
+    await _sp.setBool(_kMeshGrantsMigrated2, true);
   }
 
   /// Re-read the backing store from disk. SharedPreferences caches per
@@ -240,42 +244,75 @@ class Prefs {
       _sp.setInt(_kMeshInterval, v.clamp(60, 3600));
 
   /// Whether this device answers remote shell/filesystem commands (the
-  /// "teleport" substrate) for the bridge it is connected to now.
+  /// "teleport" substrate) for the bridge it is connected to now. Default
+  /// on; the user can turn it off in settings.
   ///
-  /// Off by default, and granted per bridge: turning it on records which
-  /// bridge it was turned on for, and a profile pointed at any other bridge
-  /// (a new pairing, a different host) reads it as off until the user turns
-  /// it on again there.
-  bool get meshDeviceControl =>
-      (_sp.getBool(_kMeshDeviceControl) ?? false) &&
-      _sp.getString(_kMeshControlBridge) == connection.bridgeKey;
+  /// With [meshGrantsPerPairing] on, the grant is also tied to the bridge it
+  /// was given to: a profile pointed at any other bridge reads it as off
+  /// until the user turns it on again there.
+  bool get meshDeviceControl {
+    final on = _sp.getBool(_kMeshDeviceControl) ?? true;
+    if (!meshGrantsPerPairing) return on;
+    return on && _sp.getString(_kMeshControlBridge) == connection.bridgeKey;
+  }
 
   Future<void> setMeshDeviceControl(bool v) async {
     await _sp.setBool(_kMeshDeviceControl, v);
-    if (v) {
-      await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
-    } else {
-      await _sp.setBool(_kMeshElevated, false);
-    }
+    if (v) await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
   }
 
   /// Whether device control may climb to an elevated tier (root, or
-  /// Shizuku's shell UID) on Android. Off by default and never on without
-  /// [meshDeviceControl] for the same bridge; while off, commands run as the
-  /// app itself and nothing asks the root manager or Shizuku for a grant.
+  /// Shizuku's shell UID) on Android. Default on, never on without
+  /// [meshDeviceControl]; while off, commands run as the app itself and
+  /// nothing asks the root manager or Shizuku for a grant.
   bool get meshElevated =>
-      meshDeviceControl && (_sp.getBool(_kMeshElevated) ?? false);
+      meshDeviceControl && (_sp.getBool(_kMeshElevated) ?? true);
 
   Future<void> setMeshElevated(bool v) => _sp.setBool(_kMeshElevated, v);
 
-  /// Withdraw device control and elevation — done whenever a pairing link
-  /// points the app at a bridge, so a newly paired bridge always starts with
-  /// neither, whatever the previous one had.
-  Future<void> revokeMeshGrants() async {
+  /// Opt-in restriction: every pairing starts with device control and
+  /// elevated access off, and a grant only holds for the bridge it was given
+  /// to. Default off — the grants are the user's, not the bridge's.
+  bool get meshGrantsPerPairing =>
+      _sp.getBool(_kMeshGrantsPerPairing) ?? false;
+
+  Future<void> setMeshGrantsPerPairing(bool v) async {
+    await _sp.setBool(_kMeshGrantsPerPairing, v);
+    // Turning it on keeps whatever the current bridge already has.
+    if (v) await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
+  }
+
+  /// Whether a bridge paired now would get device control straight away —
+  /// what the pairing dialog tells the user.
+  bool get meshDeviceControlOnPairing =>
+      !meshGrantsPerPairing && (_sp.getBool(_kMeshDeviceControl) ?? true);
+
+  /// Run whenever a pairing link (or a forgotten connection) points the app
+  /// at a bridge. A no-op by default; with [meshGrantsPerPairing] on it
+  /// withdraws device control and elevation, so the new bridge starts with
+  /// neither, even at the same address.
+  Future<void> resetMeshGrantsForPairing() async {
+    if (!meshGrantsPerPairing) return;
     await _sp.setBool(_kMeshDeviceControl, false);
     await _sp.setBool(_kMeshElevated, false);
     await _sp.remove(_kMeshControlBridge);
   }
+
+  /// User overrides for the mesh command limits; null keeps the built-in
+  /// default (`MeshService.maxConcurrentCommands` / `maxQueuedCommands`,
+  /// `DeviceExec.maxWriteBytes`).
+  int? get meshMaxConcurrent => _sp.getInt(_kMeshMaxConcurrent);
+  Future<void> setMeshMaxConcurrent(int v) =>
+      _sp.setInt(_kMeshMaxConcurrent, v.clamp(1, 64));
+
+  int? get meshMaxQueued => _sp.getInt(_kMeshMaxQueued);
+  Future<void> setMeshMaxQueued(int v) =>
+      _sp.setInt(_kMeshMaxQueued, v.clamp(0, 1024));
+
+  /// Largest file a mesh write may produce, in GiB.
+  int? get meshMaxWriteGiB => _sp.getInt(_kMeshMaxWriteGiB);
+  Future<void> setMeshMaxWriteGiB(int v) =>
+      _sp.setInt(_kMeshMaxWriteGiB, v.clamp(1, 1024));
 
   int? get meshBgAliveAt => _sp.getInt(_kMeshBgAliveAt);
   Future<void> setMeshBgAliveAt(int epochMs) =>

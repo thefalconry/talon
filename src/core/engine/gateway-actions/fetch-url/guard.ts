@@ -17,9 +17,9 @@
  * direct, redirect and static-DNS paths; rebinding needs a hostile DNS
  * server and a lucky race.
  *
- * Operators who run Talon next to services they WANT it to read (a home
- * lab, a local dev server) can opt out with
- * `fetchUrl.allowPrivateNetworks: true`.
+ * The guard is opt-in: `fetch_url` applies it only when the operator sets
+ * `fetchUrl.allowPrivateNetworks: false`. By default the agent can read
+ * local services (a home lab, a local dev server).
  */
 
 import { lookup } from "node:dns/promises";
@@ -163,7 +163,7 @@ export async function assertPublicUrl(
   if (blocked) {
     throw new BlockedUrlError(
       `Refusing to fetch ${host}: it resolves to a private, loopback or link-local address (${blocked}). ` +
-        `Set fetchUrl.allowPrivateNetworks in config.json to allow local addresses.`,
+        `Remove fetchUrl.allowPrivateNetworks: false from config.json (or set it to true) to allow local addresses.`,
     );
   }
 }

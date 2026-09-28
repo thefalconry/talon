@@ -7,30 +7,46 @@ import '../models/connection.dart';
 /// Any app or web page can open a pairing link, so the dialog shows only what
 /// the app itself derived from it — the scheme, host and port it will dial and
 /// the certificate it will pin — and nothing the link merely *claims* (its
-/// suggested display name is never shown). Device control is not part of the
-/// deal: a newly paired bridge starts without it.
+/// suggested display name is never shown). It also says whether the bridge
+/// gets device control straight away (the default) or starts without it
+/// (the opt-in "ask again for each pairing" setting, or control turned off).
 class PairConfirmDialog extends StatelessWidget {
   final ConnectionConfig config;
 
   /// Whether a working connection would be replaced (changes the wording).
   final bool replacing;
 
+  /// Whether the bridge will be able to run commands here once connected.
+  final bool deviceControl;
+
   const PairConfirmDialog({
     super.key,
     required this.config,
     required this.replacing,
+    this.deviceControl = true,
   });
+
+  static const _controlOn = 'This bridge will be able to run shell and file '
+      'commands on this device (Settings → Mesh → Device control turns that '
+      'off).';
+  static const _controlOff = 'Device control stays off for this bridge until '
+      'you turn it on in Settings.';
 
   /// Show the dialog; true only when the user explicitly chose to connect.
   static Future<bool> ask(
     BuildContext context,
     ConnectionConfig config, {
     required bool replacing,
+    bool deviceControl = true,
   }) async {
     final answer = await showDialog<bool>(
       context: context,
       // Dismissing the dialog any other way means "no".
-      builder: (_) => PairConfirmDialog(config: config, replacing: replacing),
+      builder: (_) => PairConfirmDialog(
+        config: config,
+        replacing: replacing,
+        deviceControl: deviceControl,
+      ),
     );
     return answer ?? false;
   }
@@ -89,8 +105,7 @@ class PairConfirmDialog extends StatelessWidget {
             const SizedBox(height: 14),
             Text(
               '${replacing ? 'This replaces the current connection. ' : ''}'
-              'Device control stays off for this bridge until you turn it '
-              'on in Settings.',
+              '${deviceControl ? _controlOn : _controlOff}',
             ),
           ],
         ),

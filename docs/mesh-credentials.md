@@ -45,16 +45,26 @@ credential's own device — a credential for A **cannot act as B**, answer B's
 commands or claim B's stream. A `device`-only stream receives its own
 commands and mesh `locate` pings, never chat traffic.
 
-Defaults: talon-node gets `device`; a companion gets `device` + `client`
-(`native.companionScopes`). **Nobody gets `operator` automatically.** Grant
-it deliberately, to one device:
+Defaults: talon-node gets `device`; a companion gets all three —
+`device`, `client` and `operator` — so its settings screen can change config
+and toggle extensions, as it could with the shared token.
 
-```sh
-talon mesh scopes <device> device,client,operator
-```
+Narrowing is opt-in:
 
-Recommended posture: devices you consider high-risk (rooted, adb over the
-network, shared machines) keep `device` only.
+- `native.companionScopes: ["device", "client"]` — every companion paired or
+  upgraded from then on stays out of config, extensions and logs.
+- `talon mesh scopes <device> device,client` — one device. Scopes set this
+  way are marked as hand-set and survive rotation and default changes.
+
+Devices you consider high-risk (rooted, adb over the network, shared
+machines) are good candidates for `device` only.
+
+Upgrading from a release where the companion default was `device` +
+`client`: on startup the daemon moves every live credential that still holds
+exactly that pair to the current default, unless `native.companionScopes`
+is set (your list stands) or the credential's scopes were set by hand. A
+`talon mesh scopes <device> device,client` run before this release is not
+marked, so it is widened too; run it again to narrow that device.
 
 The shared `native.token` and an open loopback bridge (no token configured)
 still carry all three scopes — that is what they meant before.
@@ -66,7 +76,12 @@ still carry all three scopes — that is what they meant before.
   the shared token. It is *unbound* until first used: the first device id it
   names binds it for good, and it can never bind to an id another live
   credential already holds (a pairing link can add a device, never take one
-  over). Unbound credentials expire after 7 days.
+  over). Unbound credentials expire after 7 days. A companion credential
+  carries `native.companionScopes` (default all three).
+- A companion trading the shared token in band that asks for `client` also
+  gets `operator` whenever `native.companionScopes` includes it: shipped
+  companions ask for `device` + `client` only, a list written before
+  `operator` was part of the default.
 - **Existing devices** holding the shared token trade it **in band** — no
   re-pairing. The `/devices/register` reply (the 60 s heartbeat) and
   `GET /auth/whoami` tell a shared-token client `action: "upgrade"`; the
