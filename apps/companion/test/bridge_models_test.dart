@@ -4,14 +4,24 @@ import 'package:talon_companion/src/models/connection.dart';
 
 void main() {
   group('ConnectionConfig', () {
-    test('builds base + events URLs, with token on the SSE query', () {
+    test('builds base + events URLs; the token rides only in the header', () {
       const c = ConnectionConfig(host: '10.0.0.5', port: 1234, token: 'sk e/t');
       expect(c.baseUrl, 'http://10.0.0.5:1234');
-      expect(c.eventsUrl(), startsWith('http://10.0.0.5:1234/events?token='));
-      // token is URL-encoded; Uri.encodeQueryComponent uses form-encoding,
-      // so a space becomes '+' (the server's URLSearchParams decodes it back).
-      expect(c.eventsUrl(), contains('sk+e%2Ft'));
+      expect(c.eventsUrl(), 'http://10.0.0.5:1234/events');
       expect(c.authHeaders()['Authorization'], 'Bearer sk e/t');
+    });
+
+    test('events URL carries the device id, never the token', () {
+      const c = ConnectionConfig(host: 'h', port: 5, token: 'secret');
+      expect(
+          c.eventsUrl(deviceId: 'dev 1'), 'http://h:5/events?deviceId=dev+1');
+      expect(c.eventsUrl(deviceId: ''), 'http://h:5/events');
+    });
+
+    test('media URLs never carry the token', () {
+      const c = ConnectionConfig(host: 'h', port: 5, token: 'secret');
+      expect(c.mediaUrl('/media?id=1'), 'http://h:5/media?id=1');
+      expect(c.mediaUrl('/media?id=1'), isNot(contains('secret')));
     });
 
     test('loopback detection + no token => no auth header', () {

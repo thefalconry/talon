@@ -134,9 +134,9 @@
             android:foregroundServiceType="dataSync|location"
             android:stopWithTask="false"
             android:exported="false" />
-        <!-- Serves exactly one directory — the self-updater's download folder
-             inside the app's own external files dir — to the package
-             installer. A raw file:// URI for an APK throws
+        <!-- Serves two directories: the self-updater's download folder (to
+             the package installer) and the chat-attachment cache (to the app
+             that opens a tapped file). A raw file:// URI throws
              FileUriExposedException on Android 7+, so the content:// URI plus
              a per-intent read grant is the only working handoff. -->
         <provider

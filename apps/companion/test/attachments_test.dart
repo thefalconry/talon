@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:talon_companion/src/models/bridge_models.dart';
+import 'package:talon_companion/src/services/attachment_opener.dart';
 import 'package:talon_companion/src/state/composer_attachments.dart';
 import 'package:talon_companion/src/theme.dart';
 import 'package:talon_companion/src/ui/composer.dart';
@@ -405,6 +406,69 @@ void main() {
       expect(find.text('shot.png'), findsNothing);
     });
 
+    testWidgets('tapping a chip opens it with the auth header', (tester) async {
+      final fake = _RecordingOpener();
+      AttachmentOpener.instance = fake;
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm3',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        mediaHeaders: const {'Authorization': 'Bearer secret'},
+        files: const [
+          BubbleFile(
+            name: 'logs.zip',
+            sizeLabel: '1.0 MB',
+            mimeType: 'application/zip',
+            url: 'http://host/media?id=logs',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('logs.zip'));
+      await tester.pump();
+
+      expect(fake.calls, hasLength(1));
+      final call = fake.calls.single;
+      expect(call.url, 'http://host/media?id=logs');
+      expect(call.url, isNot(contains('token')));
+      expect(call.headers, {'Authorization': 'Bearer secret'});
+      expect(call.mimeType, 'application/zip');
+    });
+
+    testWidgets('a failed open says so', (tester) async {
+      AttachmentOpener.instance = _RecordingOpener(fail: true);
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm4',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        files: const [
+          BubbleFile(
+            name: 'x.bin',
+            sizeLabel: '',
+            mimeType: 'application/octet-stream',
+            url: 'http://host/media?id=x',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('x.bin'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining("Couldn't open x.bin"), findsOneWidget);
+    });
+
     testWidgets('parses attachments off the wire', (tester) async {
       final m = ClientMessage.fromJson({
         'id': '7',
@@ -458,4 +522,29 @@ void main() {
       expect(find.byIcon(Icons.open_in_new_rounded), findsNothing);
     });
   });
+}
+
+class _OpenCall {
+  final String url;
+  final String mimeType;
+  final Map<String, String> headers;
+  const _OpenCall(this.url, this.mimeType, this.headers);
+}
+
+class _RecordingOpener extends AttachmentOpener {
+  _RecordingOpener({this.fail = false});
+  final bool fail;
+  final calls = <_OpenCall>[];
+
+  @override
+  Future<File> open({
+    required String url,
+    required String name,
+    required String mimeType,
+    Map<String, String> headers = const {},
+  }) async {
+    calls.add(_OpenCall(url, mimeType, headers));
+    if (fail) throw const AttachmentException('No app could open it.');
+    return File(name);
+  }
 }

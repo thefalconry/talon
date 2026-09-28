@@ -102,6 +102,9 @@ class MockBridge {
   /// Every `/auth/upgrade` body, in order.
   final List<Map<String, dynamic>> upgradeRequests = [];
 
+  /// The URL and Authorization header of every `/events` request, in order.
+  final List<(Uri, String?)> eventRequests = [];
+
   /// The bearer of every authenticated request, in order.
   final List<String?> bearers = [];
 
@@ -211,7 +214,12 @@ class MockBridge {
       });
     }
 
-    if (req.method == 'GET' && path == '/events') return _openStream(req);
+    if (req.method == 'GET' && path == '/events') {
+      eventRequests.add(
+        (req.uri, req.headers.value(HttpHeaders.authorizationHeader)),
+      );
+      return _openStream(req);
+    }
     if (req.method == 'GET' && path == '/chats') {
       return _json(req.response, 200, {'chats': chats});
     }

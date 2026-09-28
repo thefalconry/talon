@@ -162,30 +162,23 @@ class ConnectionConfig {
   String get baseUrl =>
       usesDefaultPort ? '$scheme://$host' : '$scheme://$host:$port';
 
-  /// Resolve a relative bridge media path (e.g. `/media?id=…`) to a full URL,
-  /// appending the auth token as a query param (Image.network can't set an
-  /// Authorization header), mirroring how [eventsUrl] authorises the SSE GET.
-  String mediaUrl(String path) {
-    final t = token;
-    if (t == null || t.isEmpty) return '$baseUrl$path';
-    final sep = path.contains('?') ? '&' : '?';
-    return '$baseUrl$path${sep}token=${Uri.encodeQueryComponent(t)}';
-  }
+  /// Resolve a relative bridge media path (e.g. `/media?id=…`) to a full URL.
+  /// The token is never part of it: whoever fetches the URL sends
+  /// [authHeaders] (`NetworkImage(headers:)`, the attachment opener), so it
+  /// stays out of browser history, proxy logs and anything that prints URLs.
+  String mediaUrl(String path) => '$baseUrl$path';
 
   /// The SSE URL. [deviceId] claims this device's mesh identity on the
   /// stream: the daemon delivers `device_command` frames — which carry
   /// one-time transfer tokens, exec command lines and file bodies — only to
   /// the client that claimed the target id, instead of to every connected
   /// device. Omitted for plain UI connections (nothing to address).
-  String eventsUrl({String? deviceId}) {
-    final t = token;
-    final q = <String>[
-      if (t != null && t.isNotEmpty) 'token=${Uri.encodeQueryComponent(t)}',
-      if (deviceId != null && deviceId.isNotEmpty)
-        'deviceId=${Uri.encodeQueryComponent(deviceId)}',
-    ];
-    return q.isEmpty ? '$baseUrl/events' : '$baseUrl/events?${q.join('&')}';
-  }
+  ///
+  /// No token here either: the stream is opened with [authHeaders], which
+  /// every bridge since the first native release (#389) accepts on `/events`.
+  String eventsUrl({String? deviceId}) => deviceId == null || deviceId.isEmpty
+      ? '$baseUrl/events'
+      : '$baseUrl/events?deviceId=${Uri.encodeQueryComponent(deviceId)}';
 
   Map<String, String> authHeaders([Map<String, String>? extra]) {
     final h = <String, String>{...?extra};

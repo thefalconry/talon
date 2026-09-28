@@ -478,6 +478,7 @@ class _ChatViewState extends State<ChatView> {
                         ? null
                         : widget.state.activeConfig.mediaUrl(m.imagePath!),
                     files: _bubbleFiles(m),
+                    mediaHeaders: widget.state.activeConfig.authHeaders(),
                   );
                 }
                 return LiveTurn(
