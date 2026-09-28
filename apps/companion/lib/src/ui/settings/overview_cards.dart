@@ -314,6 +314,19 @@ class AboutCard extends StatefulWidget {
   State<AboutCard> createState() => _AboutCardState();
 }
 
+/// Commit the build came from, stamped by CI via
+/// `--dart-define=TALON_COMMIT=<sha7>`. Empty for local builds.
+const String _buildCommit = String.fromEnvironment('TALON_COMMIT');
+
+/// 'v5.20.0+520000 (e6f3cde)'. The version alone is identical for a release
+/// and for any test build cut from the same package.json, so the commit is
+/// what tells them apart.
+@visibleForTesting
+String formatAppVersion(String version, String build, String commit) {
+  final base = 'v$version+$build';
+  return commit.isEmpty ? base : '$base ($commit)';
+}
+
 class _AboutCardState extends State<AboutCard> {
   /// This app's own version, for the About card ('' until loaded).
   String _appVersion = '';
@@ -323,7 +336,8 @@ class _AboutCardState extends State<AboutCard> {
     super.initState();
     PackageInfo.fromPlatform().then((info) {
       if (mounted) {
-        setState(() => _appVersion = 'v${info.version}+${info.buildNumber}');
+        setState(() => _appVersion = formatAppVersion(
+            info.version, info.buildNumber, _buildCommit));
       }
     }).catchError((_) {});
   }
