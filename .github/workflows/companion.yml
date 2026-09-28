@@ -215,7 +215,28 @@ jobs:
           mkdir -p dist
           DEST="$GITHUB_WORKSPACE/apps/companion/dist"
           case "${{ matrix.platform }}" in
-            windows) ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows.zip" ./* ) ;;
+            windows)
+              # Portable zip of the raw Release folder…
+              ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows.zip" ./* )
+              # …plus a double-click Setup.exe (the Windows counterpart of the
+              # macOS DMG). Inno Setup isn't preinstalled on the runner; install
+              # it via choco, then compile the committed .iss. Never let a
+              # cosmetic installer failure cost the portable zip asset.
+              if choco install innosetup --no-progress -y; then
+                RELEASE_DIR="$GITHUB_WORKSPACE/apps/companion/build/windows/x64/runner/Release"
+                if ISCC.exe \
+                    "/DAppVersion=$APP_VERSION" \
+                    "/DSourceDir=$RELEASE_DIR" \
+                    "/O$DEST" \
+                    installer/windows/talon-companion.iss; then
+                  echo "Built talon-companion-windows-setup.exe"
+                else
+                  echo "::warning::ISCC failed — shipping portable zip only"
+                fi
+              else
+                echo "::warning::innosetup install failed — shipping portable zip only"
+              fi
+              ;;
             macos)
               # Ship a decorated drag-to-Applications DMG: branded background
               # with a drag arrow, pinned icon layout, volume icon, and a
