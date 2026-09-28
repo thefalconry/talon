@@ -326,7 +326,6 @@ class _QuickSwitcherState extends State<_QuickSwitcher> {
         icon: Icons.keyboard_outlined,
         keywords: 'help keys bindings chords',
         primary: true,
-        chord: '?',
         run: (host) => openShortcutsHelp(host),
       ),
     ];
