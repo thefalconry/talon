@@ -296,8 +296,9 @@ void main() {
       rebuildSession(timing: _watchdogTiming);
 
       await session.start();
-      await _advance(
-        _watchdogTiming.readyTimeout + _watchdogTiming.errorBackoff.first,
+      await _until(
+        () => engine.started.length == 2,
+        reason: 'the ready watchdog to replace the stuck recognizer',
       );
 
       expect(engine.cancelled, contains('stt0'));
@@ -314,8 +315,9 @@ void main() {
       engine.end('stt0');
       expect(session.phase, VoicePhase.finalizing);
 
-      await _advance(
-        _testTiming.finalResultTimeout + _testTiming.silenceBackoff.first,
+      await _until(
+        () => engine.started.length == 2,
+        reason: 'the silence retry to restart the recognizer',
       );
 
       expect(engine.cancelled, contains('stt0'));
@@ -460,8 +462,9 @@ void main() {
       state.deliver('Reply that never completes');
       state.endTurn();
 
-      await _advance(
-        _watchdogTiming.ttsTimeout + _watchdogTiming.audioHandoff,
+      await _until(
+        () => engine.started.length == 2,
+        reason: 'the TTS watchdog to hand the microphone back',
       );
 
       expect(engine.stopSpeakingCalls, greaterThanOrEqualTo(1));
@@ -658,6 +661,28 @@ const _watchdogTiming = VoiceTiming(
 
 Future<void> _advance(Duration duration) =>
     Future<void>.delayed(duration + const Duration(milliseconds: 4));
+
+/// Waits until [ready] holds instead of sleeping for a fixed margin.
+///
+/// The session drives itself with *chained* timers (a watchdog fires, and only
+/// then schedules the backoff timer). A `Future.delayed` in the test races
+/// that chain: both are real timers, both fire late under load, and the test's
+/// single timer has fewer chances to be late than the session's two. Waiting
+/// on the observable effect removes the race; the timeout only bounds how long
+/// we are willing to wait for a *correct* implementation.
+Future<void> _until(
+  bool Function() ready, {
+  String reason = 'condition',
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!ready()) {
+    if (!DateTime.now().isBefore(deadline)) {
+      fail('timed out after $timeout waiting for $reason');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
+}
 
 Future<void> _flush() => Future<void>.delayed(Duration.zero);
 
