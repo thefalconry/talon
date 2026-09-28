@@ -410,6 +410,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const SizedBox(height: 16),
         UpdatesCard(state: widget.state),
         const SizedBox(height: 16),
+        const HelpCard(),
+        const SizedBox(height: 16),
         ConnectionCard(state: widget.state),
         const SizedBox(height: 24),
       ],
@@ -456,7 +458,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             [
               AboutCard(state: widget.state, cfg: cfg),
               UpdatesCard(state: widget.state),
-              ConnectionCard(state: widget.state)
+              const HelpCard(),
+              ConnectionCard(state: widget.state),
             ],
           ],
         ),

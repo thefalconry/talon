@@ -15,7 +15,6 @@ import 'glass.dart';
 import 'markdown.dart';
 import 'motion.dart';
 import 'settings_screen.dart';
-import 'shortcuts_help.dart';
 import 'status_pill.dart';
 
 /// The chat list. Two presentations from one widget:
@@ -207,13 +206,6 @@ class _SidebarState extends State<Sidebar> {
               Row(
                 children: [
                   Expanded(child: StatusPill(state: widget.state)),
-                  if (!_isTouch)
-                    IconButton(
-                      tooltip: 'Keyboard shortcuts (Shift+?)',
-                      onPressed: () => openShortcutsHelp(context),
-                      icon: Icon(Icons.keyboard_outlined,
-                          size: 20, color: TalonColors.textDim),
-                    ),
                   IconButton(
                     tooltip: 'Settings',
                     onPressed: () => _openSettings(context),
