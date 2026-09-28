@@ -732,8 +732,14 @@ export class MeshService {
     query: unknown,
     localApkPath: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
-    return this.files.updateDeviceApp(query, localApkPath, remotePath);
+    return this.files.updateDeviceApp(
+      query,
+      localApkPath,
+      remotePath,
+      allowDowngrade,
+    );
   }
 
   /** `update_node`: remote self-update for a headless talon-node. */
@@ -741,8 +747,14 @@ export class MeshService {
     query: unknown,
     localBinaryPath?: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
-    return this.files.updateNodeBinary(query, localBinaryPath, remotePath);
+    return this.files.updateNodeBinary(
+      query,
+      localBinaryPath,
+      remotePath,
+      allowDowngrade,
+    );
   }
 
   // ── Provisioning + pairing (see links/bridge-links.ts) ────────────────────

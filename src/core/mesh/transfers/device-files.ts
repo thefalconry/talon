@@ -127,6 +127,14 @@ const MAX_CHUNKED_TRANSFER_BYTES = 64 * 1024 * 1024;
  * Resolved lazily (not at module load) so a test that mocks `util/paths`
  * doesn't hit its workspace binding before initialization.
  */
+/**
+ * The opt-in rollback flag for install_apk / update_node. Sent only when set,
+ * so the default command shape is exactly what older devices already accept.
+ */
+function downgradeParam(allow: unknown): { allow_downgrade?: true } {
+  return allow === true ? { allow_downgrade: true } : {};
+}
+
 function pullDir(): string {
   return resolve(dirs.workspace, "mesh-pull");
 }
@@ -450,6 +458,7 @@ export class DeviceFiles {
     query: unknown,
     localApkPath: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
     const local =
       typeof localApkPath === "string" && localApkPath.trim()
@@ -496,7 +505,7 @@ export class DeviceFiles {
     const dispatched = await this.host.dispatchCommand(
       target.id,
       "install_apk",
-      { path: remote, sha256 },
+      { path: remote, sha256, ...downgradeParam(allowDowngrade) },
       this.host.commandTimeoutMs,
     );
     if ("error" in dispatched) return { ok: false, text: dispatched.error };
@@ -535,6 +544,7 @@ export class DeviceFiles {
     query: unknown,
     localBinaryPath?: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
     await this.host.load();
     const resolved = this.host.resolveDevice(query);
@@ -604,7 +614,7 @@ export class DeviceFiles {
     const dispatched = await this.host.dispatchCommand(
       target.id,
       "update_node",
-      { path: remote, sha256 },
+      { path: remote, sha256, ...downgradeParam(allowDowngrade) },
       this.host.commandTimeoutMs,
     );
     if ("error" in dispatched) return { ok: false, text: dispatched.error };

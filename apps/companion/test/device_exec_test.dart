@@ -487,6 +487,26 @@ void main() {
       expect(install, contains('$dir/update.apk'));
     });
 
+    test('allow_downgrade opts the install into pm install -d', () async {
+      const channel = MethodChannel('talon/shizuku-install-downgrade');
+      const dir = '/data/local/tmp/talon-update.Zz98Yy76Xx';
+      final execCmds = mockShizuku(channel, {
+        'stdout': '$dir\n',
+        'stderr': '',
+        'exitCode': 0,
+      });
+      final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
+      final r = await dev.handle('install_apk', {
+        'path': '/sdcard/Download/app.apk',
+        'sha256': goodSha,
+        'allow_downgrade': true,
+      });
+      expect(r!.ok, isTrue, reason: r.message);
+      expect(r.data!['allowDowngrade'], isTrue);
+      final install = execCmds.firstWhere((c) => c.contains('pm install'));
+      expect(install, contains('pm install -r -d '));
+    });
+
     test('refuses a staging directory it did not ask for', () async {
       const channel = MethodChannel('talon/shizuku-install-oddpath');
       final execCmds = mockShizuku(channel, {
@@ -578,6 +598,16 @@ void main() {
         expect(args.readAsStringSync().trim(), 'install -r $dir2/update.apk');
         expect(File('$dir2/install.log').readAsStringSync(), contains('exit=0'));
         expect(File('$dir2/update.apk').existsSync(), isFalse);
+
+        // Opted in: the same pipeline adds -d for a deliberate rollback.
+        final third = await sh(
+          DeviceExec.stageApkScript(apk.path, apkSha, root: root.path),
+        );
+        final dir3 = (third.stdout as String).trim();
+        await sh(
+            DeviceExec.installApkWorker(dir3, apkSha, 0, allowDowngrade: true));
+        expect(
+            args.readAsStringSync().trim(), 'install -r -d $dir3/update.apk');
       });
     }, skip: !Platform.isLinux);
 

@@ -68,6 +68,7 @@ export const meshHandlers: SharedActionHandlers = {
       body.device ?? body.deviceId,
       body.apk_path,
       body.remote_path,
+      body.allow_downgrade,
     ),
   // Remote self-update for a headless talon-node: push a new binary and have
   // the node verify, swap, and restart into it. binary_path is optional —
@@ -78,6 +79,7 @@ export const meshHandlers: SharedActionHandlers = {
       body.device ?? body.deviceId,
       body.binary_path,
       body.remote_path,
+      body.allow_downgrade,
     ),
   // Node provisioning: materialize a talon-node binary for any arch, and
   // mint single-use bridge-served install links for fresh hosts.

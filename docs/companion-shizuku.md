@@ -76,8 +76,11 @@ The `update_device` tool:
    actually reads) and refuses to install on a mismatch — a truncated transfer
    can never be installed. (`pm install -r` also refuses a differently-signed
    APK, so a wrong file can't hijack the app.)
-3. The device runs `pm install -r` (keep data; no `-d`, so an older build is
-   refused) **detached** via `setsid` after a short delay, re-checking the
+3. The device runs `pm install -r` (keep data; no `-d` by default, so an
+   older build is refused; `update_device(..., allow_downgrade: true)` sends
+   `allow_downgrade` and adds `-d` for a deliberate rollback, which Android
+   may still refuse for a non-debuggable package) **detached** via `setsid`
+   after a short delay, re-checking the
    digest of the staged copy immediately before `pm` reads it, so the "staged" ack flushes
    over the mesh *before* `pm` tears the app down, and the install finishes
    even as the app process dies (its parent is the Shizuku server, not the app).

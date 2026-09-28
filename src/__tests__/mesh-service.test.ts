@@ -830,7 +830,18 @@ describe("MeshService exec + filesystem channel", () => {
     expect(installParams?.path).toBe(
       "/sdcard/Download/talon-companion-update.apk",
     );
+    // No rollback unless asked: the default shape is what old builds accept.
+    expect(installParams).not.toHaveProperty("allow_downgrade");
     expect(res.text).toContain("staged the update");
+
+    const rollback = await service.updateDeviceApp(
+      "phone",
+      apk,
+      undefined,
+      true,
+    );
+    expect(rollback.ok).toBe(true);
+    expect(installParams?.allow_downgrade).toBe(true);
   });
 
   it("update_device refuses a device without the install_apk capability", async () => {
@@ -1650,6 +1661,35 @@ describe("MeshService node provisioning", () => {
     expect(result.ok).toBe(true);
     expect(result.text).toContain("auto-resolved 3.4.0 for linux/arm64");
     expect(calls).toEqual(["linux/arm64"]);
+  });
+
+  it("always sends the digest, and allow_downgrade only when asked", async () => {
+    const { resolver } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    await registerNode(service);
+    const sent: Record<string, unknown>[] = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) => {
+        if (cmd.name === "update_node") sent.push(cmd.params);
+        queueMicrotask(() =>
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+          }),
+        );
+      },
+    });
+
+    expect((await service.updateNodeBinary("srv")).ok).toBe(true);
+    expect(
+      (await service.updateNodeBinary("srv", undefined, undefined, true)).ok,
+    ).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(sent[0]).not.toHaveProperty("allow_downgrade");
+    expect(sent[1]?.allow_downgrade).toBe(true);
   });
 
   it("asks for an explicit binary when the node never advertised arch", async () => {

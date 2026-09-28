@@ -181,6 +181,12 @@ export const meshTools: ToolDefinition[] = [
         .describe(
           "Where to stage the APK on the device (default /sdcard/Download/talon-companion-update.apk).",
         ),
+      allow_downgrade: z
+        .boolean()
+        .optional()
+        .describe(
+          "Install even when the APK has a lower versionCode (pm install -d), for a deliberate rollback.",
+        ),
     },
     execute: (params, bridge) => bridge("update_device", params),
     tag: "mesh",
@@ -202,6 +208,12 @@ export const meshTools: ToolDefinition[] = [
         .optional()
         .describe(
           "Where to stage the binary on the node (default /tmp/talon-node.update; the node re-stages next to its own executable before the atomic swap).",
+        ),
+      allow_downgrade: z
+        .boolean()
+        .optional()
+        .describe(
+          "Install even when the binary is an older version, or the exact build already running. The node refuses both without it.",
         ),
     },
     execute: (params, bridge) => bridge("update_node", params),
