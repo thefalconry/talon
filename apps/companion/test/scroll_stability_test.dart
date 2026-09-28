@@ -145,6 +145,19 @@ void main() {
       expect(full.height, kMaxDecodeDimension);
       expect(full.policy, ResizeImagePolicy.fit);
     });
+
+    test('the auth header reaches the network request', () {
+      const auth = {'Authorization': 'Bearer t'};
+      final p = boundedNetworkImage('https://x/y.png',
+          headers: auth,
+          maxWidth: 10,
+          maxHeight: 10,
+          devicePixelRatio: 1) as ResizeImage;
+      expect((p.imageProvider as NetworkImage).headers, auth);
+      final full = fullScreenNetworkImage('https://x/y.png', headers: auth)
+          as ResizeImage;
+      expect((full.imageProvider as NetworkImage).headers, auth);
+    });
   });
 
   test('switching away trims a chat to its newest page', () async {

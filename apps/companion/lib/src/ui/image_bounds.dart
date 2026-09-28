@@ -15,8 +15,12 @@ const int kMaxDecodeDimension = 4096;
 /// ~48 MB RGBA bitmap and sits in the image cache at that size. With it the
 /// decode is capped at the box's physical size (aspect ratio preserved,
 /// never upscaled) and at [kMaxDecodeDimension] on either edge.
+///
+/// [headers] go on the request — the bridge's `Authorization`, so the token
+/// never has to ride in [url].
 ImageProvider boundedNetworkImage(
   String url, {
+  Map<String, String>? headers,
   required double maxWidth,
   required double maxHeight,
   required double devicePixelRatio,
@@ -24,7 +28,7 @@ ImageProvider boundedNetworkImage(
   int px(double logical) =>
       (logical * devicePixelRatio).ceil().clamp(1, kMaxDecodeDimension);
   return ResizeImage(
-    NetworkImage(url),
+    NetworkImage(url, headers: headers),
     width: px(maxWidth),
     height: px(maxHeight),
     policy: ResizeImagePolicy.fit,
@@ -33,8 +37,12 @@ ImageProvider boundedNetworkImage(
 
 /// The full-screen viewer's image: full detail for zooming, but still within
 /// [kMaxDecodeDimension] so it can always become a texture.
-ImageProvider fullScreenNetworkImage(String url) => ResizeImage(
-      NetworkImage(url),
+ImageProvider fullScreenNetworkImage(
+  String url, {
+  Map<String, String>? headers,
+}) =>
+    ResizeImage(
+      NetworkImage(url, headers: headers),
       width: kMaxDecodeDimension,
       height: kMaxDecodeDimension,
       policy: ResizeImagePolicy.fit,

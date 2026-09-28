@@ -1,9 +1,12 @@
+import 'dart:io' show File;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:url_launcher/url_launcher.dart' show launchUrl, LaunchMode;
 
 import '../models/bridge_models.dart';
+import '../services/attachment_opener.dart';
 import '../services/haptics.dart';
 import '../theme.dart';
 import 'assistant_surface.dart';
@@ -34,14 +37,23 @@ class MessageBubble extends StatelessWidget {
   /// — so the list stays calm and nothing re-animates while scrolling.
   final bool animateIn;
 
-  /// Fully-resolved URL for the first attached image (base URL + token), or
-  /// null. Kept separate from [files] because an image-only message lays its
-  /// bubble out differently (no text padding around the picture).
+  /// Fully-resolved URL for the first attached image, or null. Kept separate
+  /// from [files] because an image-only message lays its bubble out
+  /// differently (no text padding around the picture).
   final String? imageUrl;
 
   /// The message's non-image attachments, already resolved to fetchable URLs.
   /// Rendered as a column of chips under the text.
   final List<BubbleFile> files;
+
+  /// Headers every media fetch sends — the bridge's `Authorization`, which
+  /// used to ride in the URL as `?token=`.
+  final Map<String, String> mediaHeaders;
+
+  /// The bridge base URL (e.g. `https://host:port`). A link in message text
+  /// that points at this origin is a bridge attachment and is fetched in-app
+  /// with [mediaHeaders]; every other link opens in the external browser.
+  final String mediaBaseUrl;
 
   /// False when this row is grouped under a previous assistant row from the
   /// same run — the avatar + name header is skipped.
@@ -58,6 +70,8 @@ class MessageBubble extends StatelessWidget {
     this.animateIn = false,
     this.imageUrl,
     this.files = const [],
+    this.mediaHeaders = const {},
+    this.mediaBaseUrl = '',
     this.showHeader = true,
     this.showTime = true,
   });
@@ -197,7 +211,8 @@ class MessageBubble extends StatelessWidget {
                                           ? 0
                                           : TalonSpace.sm,
                                     ),
-                                    child: _InlineImage(url: imageUrl!),
+                                    child: _InlineImage(
+                                        url: imageUrl!, headers: mediaHeaders),
                                   ),
                                 if (message.text.isNotEmpty)
                                   // One SelectionArea, plain Text inside —
@@ -213,7 +228,10 @@ class MessageBubble extends StatelessWidget {
                                     ),
                                   ),
                                 if (files.isNotEmpty)
-                                  _FileList(files: files, onAccent: true),
+                                  _FileList(
+                                      files: files,
+                                      headers: mediaHeaders,
+                                      onAccent: true),
                               ],
                             ),
                           ),
@@ -268,7 +286,7 @@ class MessageBubble extends StatelessWidget {
               Padding(
                 padding: EdgeInsets.only(
                     bottom: message.text.isEmpty ? 0 : TalonSpace.sm),
-                child: _InlineImage(url: imageUrl!),
+                child: _InlineImage(url: imageUrl!, headers: mediaHeaders),
               ),
             // Suppress the "…" placeholder for an attachment-only message.
             // A single selection system per reply: one SelectionArea over a
@@ -280,19 +298,17 @@ class MessageBubble extends StatelessWidget {
             if (!((imageUrl != null || files.isNotEmpty) &&
                 message.text.isEmpty))
               SelectionArea(
-                child: MarkdownBody(
-                  data: message.text.isEmpty ? '…' : message.text,
-                  builders: {'code': CodeElementBuilder()},
-                  onTapLink: (_, href, __) {
-                    if (href != null) {
-                      launchUrl(Uri.parse(href),
-                          mode: LaunchMode.externalApplication);
-                    }
-                  },
-                  styleSheet: talonMarkdownStyle(),
+                child: Builder(
+                  builder: (context) => MarkdownBody(
+                    data: message.text.isEmpty ? '…' : message.text,
+                    builders: {'code': CodeElementBuilder()},
+                    onTapLink: (_, href, __) => _onTapLink(context, href),
+                    styleSheet: talonMarkdownStyle(),
+                  ),
                 ),
               ),
-            if (files.isNotEmpty) _FileList(files: files, onAccent: false),
+            if (files.isNotEmpty)
+              _FileList(files: files, headers: mediaHeaders, onAccent: false),
           ],
         ),
         belowBubble: Column(
@@ -305,6 +321,54 @@ class MessageBubble extends StatelessWidget {
           ],
         ),
       );
+
+  /// A tapped link in message text. A bridge attachment link (`/media?id=…`)
+  /// is fetched in-app through the authenticated media stack, so the bearer
+  /// token never rides in a browser-visible URL and mTLS still applies, then
+  /// opened locally. Everything else opens in the browser.
+  void _onTapLink(BuildContext context, String? href) {
+    if (href == null) return;
+    final media = bridgeMediaUrl(href, mediaBaseUrl);
+    if (media != null) {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      AttachmentOpener.instance
+          .openLink(url: media, headers: mediaHeaders)
+          .catchError((Object e) {
+        messenger?.showSnackBar(
+          SnackBar(content: Text("Couldn't open link: $e")),
+        );
+        return File('');
+      });
+      return;
+    }
+    launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
+  }
+
+  /// The URL to fetch in-app for a `/media?id=…` link, or null when [href]
+  /// isn't one (or no bridge is connected).
+  ///
+  /// The daemon writes these links with whatever address *it* thinks it has
+  /// (often a public hostname behind a reverse proxy), which needn't match
+  /// the address this client connected with (a LAN or tailnet IP). A media id
+  /// only means something to the bridge that minted it, so the link is always
+  /// re-pointed at the connected bridge: [baseUrl] + `/media?id=<id>`. That
+  /// keeps the auth header on our own origin (a look-alike host in message
+  /// text never receives it) and drops anything else in the query, such as a
+  /// legacy `token=`.
+  @visibleForTesting
+  static String? bridgeMediaUrl(String href, String baseUrl) {
+    if (baseUrl.isEmpty) return null;
+    final link = Uri.tryParse(href);
+    if (link == null) return null;
+    if (link.scheme != 'http' && link.scheme != 'https') return null;
+    if (link.path != '/media') return null;
+    final id = link.queryParameters['id'];
+    if (id == null || id.isEmpty) return null;
+    final base = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+    return '$base/media?id=${Uri.encodeQueryComponent(id)}';
+  }
 
   Widget _buttons() => Padding(
         padding: const EdgeInsets.only(top: TalonSpace.sm),
@@ -358,7 +422,8 @@ class MessageBubble extends StatelessWidget {
 /// the row layout.
 class _InlineImage extends StatelessWidget {
   final String url;
-  const _InlineImage({required this.url});
+  final Map<String, String> headers;
+  const _InlineImage({required this.url, required this.headers});
 
   static const double _maxWidth = 340;
   static const double _maxHeight = 420;
@@ -381,6 +446,7 @@ class _InlineImage extends StatelessWidget {
               // screenshot can exceed the GL texture limit outright (#1062).
               image: boundedNetworkImage(
                 url,
+                headers: headers,
                 maxWidth: _maxWidth,
                 maxHeight: _maxHeight,
                 devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
@@ -446,7 +512,7 @@ class _InlineImage extends StatelessWidget {
                 child: InteractiveViewer(
                   maxScale: 5,
                   child: Image(
-                    image: fullScreenNetworkImage(url),
+                    image: fullScreenNetworkImage(url, headers: headers),
                     fit: BoxFit.contain,
                   ),
                 ),
@@ -573,7 +639,8 @@ class BubbleFile {
   final String sizeLabel;
   final String mimeType;
 
-  /// Fully-resolved URL (base URL + token) the bytes are served from.
+  /// Fully-resolved URL the bytes are served from. Carries no token: the
+  /// chip fetches it with the bubble's [MessageBubble.mediaHeaders].
   final String url;
 
   const BubbleFile({
@@ -589,8 +656,13 @@ class BubbleFile {
 /// bubble rather than the neutral assistant one.
 class _FileList extends StatelessWidget {
   final List<BubbleFile> files;
+  final Map<String, String> headers;
   final bool onAccent;
-  const _FileList({required this.files, required this.onAccent});
+  const _FileList({
+    required this.files,
+    required this.headers,
+    required this.onAccent,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -604,7 +676,8 @@ class _FileList extends StatelessWidget {
           for (final file in files)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: _FileChip(file: file, onAccent: onAccent),
+              child:
+                  _FileChip(file: file, headers: headers, onAccent: onAccent),
             ),
         ],
       ),
@@ -612,27 +685,61 @@ class _FileList extends StatelessWidget {
   }
 }
 
-class _FileChip extends StatelessWidget {
+class _FileChip extends StatefulWidget {
   final BubbleFile file;
+  final Map<String, String> headers;
   final bool onAccent;
-  const _FileChip({required this.file, required this.onAccent});
+  const _FileChip({
+    required this.file,
+    required this.headers,
+    required this.onAccent,
+  });
+
+  @override
+  State<_FileChip> createState() => _FileChipState();
+}
+
+/// Tapping downloads the file with the auth header and opens the local copy
+/// (see [AttachmentOpener]); the trailing icon turns into a spinner while
+/// the download runs, and a failure says so in a snackbar.
+class _FileChipState extends State<_FileChip> {
+  bool _busy = false;
+
+  Future<void> _open() async {
+    if (_busy) return;
+    final file = widget.file;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _busy = true);
+    try {
+      await AttachmentOpener.instance.open(
+        url: file.url,
+        name: file.name,
+        mimeType: file.mimeType,
+        headers: widget.headers,
+      );
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Couldn't open ${file.name}: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final file = widget.file;
+    final onAccent = widget.onAccent;
     final foreground = onAccent ? Colors.white : TalonColors.text;
-    final faint = onAccent
-        ? Colors.white.withValues(alpha: 0.75)
-        : TalonColors.textFaint;
+    final faint =
+        onAccent ? Colors.white.withValues(alpha: 0.75) : TalonColors.textFaint;
     return Semantics(
       button: true,
       label: 'Attached file ${file.name}, ${file.sizeLabel}. Open',
       child: Tooltip(
         message: 'Open ${file.name}',
         child: GestureDetector(
-          onTap: () => launchUrl(
-            Uri.parse(file.url),
-            mode: LaunchMode.externalApplication,
-          ),
+          onTap: _open,
           child: Container(
             constraints: const BoxConstraints(maxWidth: 280),
             padding: const EdgeInsets.symmetric(
@@ -677,7 +784,15 @@ class _FileChip extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 4),
-                Icon(Icons.open_in_new_rounded, size: 14, color: faint),
+                if (_busy)
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.6, color: faint),
+                  )
+                else
+                  Icon(Icons.open_in_new_rounded, size: 14, color: faint),
               ],
             ),
           ),
