@@ -98,32 +98,35 @@ _ToolKind _toolKind(String raw) {
           : raw)
       .toLowerCase()
       .replaceAll('_', '');
-  switch (tool) {
-    case 'bash':
-    case 'shell':
-    case 'executecommand':
-    case 'deviceexec':
-      return _ToolKind.command;
-    case 'read':
-    case 'notebookread':
-      return _ToolKind.read;
-    case 'write':
-    case 'edit':
-    case 'multiedit':
-    case 'notebookedit':
-      return _ToolKind.edit;
-    case 'glob':
-    case 'grep':
-    case 'search':
-      return _ToolKind.search;
-    case 'websearch':
-    case 'webfetch':
-    case 'fetchurl':
-      return _ToolKind.web;
-    case 'task':
-    case 'agent':
-    case 'spawnagent':
-      return _ToolKind.agent;
+  // Names differ per backend (Claude Code, Codex, opencode, agy/Gemini), so
+  // each bucket lists every spelling seen, normalised to lowercase with the
+  // underscores dropped.
+  const kinds = <_ToolKind, Set<String>>{
+    _ToolKind.command: {
+      'bash', 'shell', 'executecommand', 'deviceexec', 'runcommand',
+      'execcommand', 'exec', 'localshell', 'commandexecution', 'runterminalcmd',
+    },
+    _ToolKind.read: {
+      'read', 'notebookread', 'viewfile', 'readfile', 'openfile',
+      'viewcodeitem', 'readmanyfiles',
+    },
+    _ToolKind.edit: {
+      'write', 'edit', 'multiedit', 'notebookedit', 'writefile', 'editfile',
+      'writetofile', 'createfile', 'applypatch', 'replacefilecontent',
+      'multireplacefilecontent', 'replace', 'patch',
+    },
+    _ToolKind.search: {
+      'glob', 'grep', 'search', 'grepsearch', 'findbyname', 'codebasesearch',
+      'filesearch', 'listdir', 'listdirectory', 'ls', 'searchfiles',
+    },
+    _ToolKind.web: {
+      'websearch', 'webfetch', 'fetchurl', 'searchweb', 'readurlcontent',
+      'fetch', 'googlesearch',
+    },
+    _ToolKind.agent: {'task', 'agent', 'spawnagent'},
+  };
+  for (final e in kinds.entries) {
+    if (e.value.contains(tool)) return e.key;
   }
   return _ToolKind.other;
 }

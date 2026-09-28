@@ -45,6 +45,19 @@ void main() {
       );
     });
 
+    test('buckets other backends\' tool names (agy, Codex)', () {
+      expect(
+        toolGroupSummary([
+          'run_command', 'run_command', 'view_file', 'search_web',
+          'replace_file_content', 'grep_search',
+        ]),
+        'Ran 2 commands, read a file, checked the web, edited a file, '
+        'searched files',
+      );
+      expect(toolGroupSummary(['exec_command', 'apply_patch']),
+          'Ran a command, edited a file');
+    });
+
     test('an empty list is empty', () {
       expect(toolGroupSummary(const []), '');
     });
