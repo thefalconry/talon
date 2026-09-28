@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -457,19 +459,29 @@ func cmdUploadFile(ctx context.Context, n *Node, params map[string]any) commandR
 	if err != nil {
 		return fail("upload_file failed: %v", err)
 	}
-	sent, err := n.uploadStream(ctx, token, f, info.Size())
+	// Hashed as it streams (no second read), so the daemon can check what
+	// arrived against what was sent.
+	hasher := sha256.New()
+	sent, err := n.uploadStream(ctx, token, io.TeeReader(f, hasher), info.Size())
 	if err != nil {
 		return fail("upload_file failed: %v", err)
 	}
-	return okData(map[string]any{"bytes": sent})
+	return okData(map[string]any{
+		"bytes":  sent,
+		"sha256": hex.EncodeToString(hasher.Sum(nil)),
+	})
 }
 
 // cmdDownloadFile is the device half of device_push_file: stream the
 // daemon's bytes to disk from ONE raw HTTP GET. Writes to a .part sibling
 // and renames, so a dropped connection can't leave a half-written file.
+// The bytes are hashed as they are written; when the daemon sent the
+// payload's `sha256` (older daemons don't), a mismatch deletes the .part
+// file instead of renaming it into place.
 func cmdDownloadFile(ctx context.Context, n *Node, params map[string]any) commandResult {
 	token, _ := params["token"].(string)
 	path, _ := params["path"].(string)
+	wantSha, _ := params["sha256"].(string)
 	if token == "" || path == "" {
 		return fail("download_file needs token and path.")
 	}
@@ -485,9 +497,14 @@ func cmdDownloadFile(ctx context.Context, n *Node, params map[string]any) comman
 	if n.cfg != nil {
 		out = &limitWriter{w: dst, max: n.cfg.Policy.maxWriteBytes()}
 	}
-	written, err := n.downloadStream(ctx, token, out)
+	hasher := sha256.New()
+	written, err := n.downloadStream(ctx, token, io.MultiWriter(out, hasher))
 	if closeErr := dst.Close(); err == nil {
 		err = closeErr
+	}
+	got := hex.EncodeToString(hasher.Sum(nil))
+	if err == nil {
+		err = checkDigest(wantSha, got)
 	}
 	if err != nil {
 		os.Remove(part)
@@ -497,7 +514,20 @@ func cmdDownloadFile(ctx context.Context, n *Node, params map[string]any) comman
 		os.Remove(part)
 		return fail("download_file failed: %v", err)
 	}
-	return okData(map[string]any{"bytesWritten": written})
+	return okData(map[string]any{"bytesWritten": written, "sha256": got})
+}
+
+// checkDigest compares a pushed payload's hex SHA-256 with the expected one;
+// an empty expectation (a daemon that predates transfer digests) passes.
+func checkDigest(want, got string) error {
+	want = strings.TrimSpace(want)
+	if want == "" || strings.EqualFold(want, got) {
+		return nil
+	}
+	return fmt.Errorf(
+		"integrity check failed (expected sha256 %s, got %s) — the download was discarded",
+		want, got,
+	)
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────

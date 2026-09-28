@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:talon_companion/src/models/connection.dart';
@@ -245,6 +246,89 @@ void main() {
       }
       expect(covered, greaterThanOrEqualTo(8),
           reason: 'fixture should exercise the full exec/fs surface');
+    });
+
+    test('streamed transfers (transfer: true) answer with contract keys',
+        () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await Prefs.load();
+      final config = ConnectionConfig(
+        host: bridge.host,
+        port: bridge.port,
+        manageLocalDaemon: false,
+        localAutoDiscover: false,
+      );
+      await prefs.setConnection(config);
+      await prefs.setMeshDeviceControl(true);
+      final client = BridgeClient(config);
+      addTearDown(client.dispose);
+      await client.connect();
+      final service = MeshService(
+        prefs,
+        client,
+        batteryProvider: () async => const MeshBattery(),
+        nameProvider: () async => 'rack-01',
+        versionProvider: () async => '1.0.0+1',
+        foregroundStarter: () async {},
+      );
+      addTearDown(service.stop);
+      await service.start();
+      await _waitFor(() => bridge.devices.length == 1);
+      final id = bridge.devices.single['id'] as String;
+
+      final body = utf8.encode(meshFixture['transferBody'] as String);
+      final bodySha = sha256.convert(body).toString();
+      final sandbox = await Directory.systemTemp.createTemp('talon-conf-');
+      addTearDown(() => sandbox.delete(recursive: true));
+      for (final file in (meshFixture['sandboxFiles'] as Map)
+          .cast<String, String>()
+          .entries) {
+        await File('${sandbox.path}/${file.key}').writeAsString(file.value);
+      }
+
+      var covered = 0;
+      for (final entry in mapList(meshFixture['commands'])) {
+        if (entry['transfer'] != true) continue;
+        covered++;
+        final command = (entry['command'] as Map).cast<String, dynamic>();
+        final params = <String, dynamic>{
+          for (final p
+              in (command['params'] as Map).cast<String, dynamic>().entries)
+            p.key: p.value is String
+                ? (p.value as String).replaceAll('{{TMP}}', sandbox.path)
+                : p.value,
+        };
+        final token = params['token'] as String;
+        bridge.uploadTokens.add(token);
+        bridge.downloadFiles[token] = body;
+
+        final before = bridge.commandResults.length;
+        await bridge.emit({
+          'kind': 'device_command',
+          ...command,
+          'deviceId': id,
+          'params': params,
+        });
+        await _waitFor(() => bridge.commandResults.length == before + 1);
+        final result = bridge.commandResults.last;
+        final name = command['name'];
+        expect(result['ok'], entry['expectOk'], reason: '$name: $result');
+        final data = (result['data'] as Map).cast<String, dynamic>();
+        for (final key in stringList(entry['dataKeys'])) {
+          expect(data.containsKey(key), isTrue,
+              reason: '$name result data is missing contract key "$key"');
+        }
+        if (name == 'download_file') {
+          expect(params['sha256'], bodySha);
+          expect(data['sha256'], bodySha);
+        } else {
+          final sent = bridge.uploadedFiles[token]!;
+          expect(data['sha256'], sha256.convert(sent).toString());
+        }
+      }
+      expect(covered, 2, reason: 'upload_file and download_file samples');
     });
   });
 

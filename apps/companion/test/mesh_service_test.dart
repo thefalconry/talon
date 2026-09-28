@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:talon_companion/src/models/connection.dart';
@@ -140,6 +141,91 @@ void main() {
     });
     await _waitFor(() => bridge.commandResults.length == 3);
     expect(bridge.commandResults.last, containsPair('ok', false));
+  });
+
+  test('streamed transfers carry sha256 and refuse a mismatched push',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await Prefs.load();
+    final bridge = await MockBridge.start();
+    addTearDown(bridge.close);
+    await prefs.setConnection(configFor(bridge));
+    await prefs.setMeshDeviceControl(true);
+    final client = BridgeClient(configFor(bridge));
+    addTearDown(client.dispose);
+    await client.connect();
+    final service = MeshService(
+      prefs,
+      client,
+      batteryProvider: () async => const MeshBattery(),
+      nameProvider: () async => 'Test phone',
+      versionProvider: () async => '1.0.0+1',
+      foregroundStarter: () async {},
+    );
+    addTearDown(service.stop);
+    await service.start();
+    await _waitFor(() => bridge.devices.length == 1);
+    final id = bridge.devices.single['id'] as String;
+    final dir = await Directory.systemTemp.createTemp('talon-mesh-digest-');
+    addTearDown(() => dir.delete(recursive: true));
+    final payload = List<int>.generate(300 * 1024, (i) => (i * 7) % 256);
+    final digest = sha256.convert(payload).toString();
+
+    Future<Map<String, dynamic>> run(
+      String name,
+      Map<String, dynamic> params,
+    ) async {
+      final before = bridge.commandResults.length;
+      await bridge.emit({
+        'kind': 'device_command',
+        'id': 'cmd-${before + 1}',
+        'deviceId': id,
+        'name': name,
+        'params': params,
+      });
+      await _waitFor(() => bridge.commandResults.length == before + 1);
+      return bridge.commandResults.last;
+    }
+
+    // Pull: the device reports the digest of what it streamed.
+    final src = File('${dir.path}/src.bin')..writeAsBytesSync(payload);
+    bridge.uploadTokens.add('up');
+    final up = await run('upload_file', {'token': 'up', 'path': src.path});
+    expect(up['ok'], isTrue);
+    expect(up['data'], containsPair('sha256', digest));
+
+    // Push with the right digest (any case): written, digest reported.
+    bridge.downloadFiles['ok'] = payload;
+    final good = '${dir.path}/good.bin';
+    final down = await run('download_file', {
+      'token': 'ok',
+      'path': good,
+      'sha256': digest.toUpperCase(),
+    });
+    expect(down['ok'], isTrue);
+    expect(down['data'], containsPair('sha256', digest));
+    expect(File(good).readAsBytesSync(), payload);
+
+    // Push whose bytes don't match: nothing lands, the temp file is gone.
+    bridge.downloadFiles['bad'] = [...payload.take(1000), 0, 1, 2];
+    final bad = '${dir.path}/bad.bin';
+    final refused = await run('download_file', {
+      'token': 'bad',
+      'path': bad,
+      'sha256': digest,
+    });
+    expect(refused['ok'], isFalse);
+    expect('${refused['message']}', contains('integrity check failed'));
+    expect(File(bad).existsSync(), isFalse);
+    expect(File('$bad.part').existsSync(), isFalse);
+
+    // An older daemon sends no digest: the push works as before.
+    bridge.downloadFiles['legacy'] = payload;
+    final legacy = await run('download_file', {
+      'token': 'legacy',
+      'path': '${dir.path}/legacy.bin',
+    });
+    expect(legacy['ok'], isTrue);
   });
 
   test('advertises capabilities and answers device commands', () async {

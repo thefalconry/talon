@@ -4,6 +4,7 @@ import 'dart:io' show Directory, File, Platform;
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -410,13 +411,21 @@ class MeshService {
             message = 'No such file: $upPath';
             break;
           }
+          // Hashed as it streams (no second read), so the daemon can check
+          // what arrived against what was sent.
+          final upDigest = _DigestSink();
+          final upHash = sha256.startChunkedConversion(upDigest);
           final sent = await client.uploadFile(
             upToken,
-            src.openRead(),
+            src.openRead().map((chunk) {
+              upHash.add(chunk);
+              return chunk;
+            }),
             await src.length(),
           );
+          upHash.close();
           ok = true;
-          data = {'bytes': sent};
+          data = {'bytes': sent, 'sha256': upDigest.hex};
           break;
         case 'download_file': // streamed push: daemon → device, one HTTP GET
           if (!_deviceControl) {
@@ -434,9 +443,16 @@ class MeshService {
           final dest = File(downPath);
           await Directory(dest.parent.path).create(recursive: true);
           // Stream to a temp file and rename, so a dropped connection can't
-          // leave a half-written destination.
+          // leave a half-written destination. The bytes are hashed as they
+          // are written; when the daemon sent the payload's sha256 (older
+          // daemons don't), a mismatch deletes the temp file instead.
+          final wantSha = params['sha256'] is String
+              ? (params['sha256'] as String).trim().toLowerCase()
+              : '';
           final part = File('$downPath.part');
           final sink = part.openWrite();
+          final downDigest = _DigestSink();
+          final downHash = sha256.startChunkedConversion(downDigest);
           var received = 0;
           int written;
           try {
@@ -448,10 +464,18 @@ class MeshService {
                   'write cap',
                 );
               }
+              downHash.add(chunk);
               sink.add(chunk);
             });
             await sink.flush();
             await sink.close();
+            downHash.close();
+            if (wantSha.isNotEmpty && wantSha != downDigest.hex) {
+              throw StateError(
+                'integrity check failed (expected sha256 $wantSha, got '
+                '${downDigest.hex}) — the download was discarded',
+              );
+            }
             await part.rename(downPath);
           } catch (e) {
             await sink.close().catchError((_) {});
@@ -459,7 +483,7 @@ class MeshService {
             rethrow;
           }
           ok = true;
-          data = {'bytesWritten': written};
+          data = {'bytesWritten': written, 'sha256': downDigest.hex};
           break;
         default:
           // Exec/filesystem commands (the teleport substrate) — only when the
@@ -729,4 +753,19 @@ class MeshService {
 class _CommandDenied implements Exception {
   final String message;
   const _CommandDenied(this.message);
+}
+
+/// Receives the digest of a chunked SHA-256 conversion, so a transfer can
+/// hash its bytes as they stream past instead of re-reading the file.
+class _DigestSink implements Sink<Digest> {
+  Digest? _value;
+
+  /// Lowercase hex, once the conversion has been closed.
+  String get hex => _value.toString();
+
+  @override
+  void add(Digest data) => _value = data;
+
+  @override
+  void close() {}
 }
