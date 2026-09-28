@@ -63,6 +63,12 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # id-token + attestations: build-provenance attestations for the release
+    # assets (GitHub-issued Sigstore identity; no key of ours involved).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     defaults:
       run:
         working-directory: apps/companion
@@ -183,17 +189,27 @@ jobs:
 
       # Stable release signing (see android/app/build.gradle.kts): decode
       # the keystore secret so every release APK carries the same signature
-      # and installs over the previous one. Skipped (falls back to debug
-      # signing) when the secret isn't configured, e.g. on forks.
+      # and installs over the previous one. On PRs, manual runs and forks a
+      # missing secret falls back to debug signing; on a published release it
+      # is fatal, and TALON_ANDROID_REQUIRE_RELEASE_SIGNING makes Gradle
+      # refuse a debug-signed release build as a second line of defence.
       - name: Set up Android release keystore
         if: matrix.platform == 'android'
         shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          IS_RELEASE: ${{ github.event_name == 'release' }}
         run: |
           set -euo pipefail
+          if [ "$IS_RELEASE" = "true" ]; then
+            echo "TALON_ANDROID_REQUIRE_RELEASE_SIGNING=1" >> "$GITHUB_ENV"
+          fi
           if [ -z "$KEYSTORE_BASE64" ]; then
+            if [ "$IS_RELEASE" = "true" ]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 is not set — refusing to publish a debug-signed release APK."
+              exit 1
+            fi
             echo "No ANDROID_KEYSTORE_BASE64 secret — falling back to debug signing."
             exit 0
           fi
@@ -207,6 +223,32 @@ jobs:
       - name: Build
         shell: bash
         run: ${{ matrix.build }} --build-name="$APP_VERSION" --build-number="$APP_BUILD_NUMBER" --dart-define=TALON_COMMIT="${GITHUB_SHA:0:7}"
+
+      # ASLR (DYNAMICBASE) and DEP (NXCOMPAT) must be on the shipped exe;
+      # Control Flow Guard is reported but not enforced (the Flutter runner
+      # is not built with /guard:cf).
+      - name: Check Windows PE hardening
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: node ../../scripts/check-pe-hardening.mjs build/windows/x64/runner/Release/*.exe
+
+      # Belt and braces for the keystore guard above: read the signer back
+      # out of the built APK. PR/fork builds are debug-signed by design and
+      # only print it; a release APK signed with the debug key fails here.
+      - name: Verify Android APK signer
+        if: matrix.platform == 'android'
+        shell: bash
+        env:
+          IS_RELEASE: ${{ github.event_name == 'release' }}
+        run: |
+          set -euo pipefail
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          CERTS=$("$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk)
+          echo "$CERTS"
+          if [ "$IS_RELEASE" = "true" ] && grep -q "CN=Android Debug" <<< "$CERTS"; then
+            echo "::error::release APK is signed with the Android debug key"
+            exit 1
+          fi
 
       - name: Package
         shell: bash
@@ -339,6 +381,15 @@ jobs:
         with:
           name: talon-companion-${{ matrix.platform }}
           path: apps/companion/dist/*
+
+      # SLSA build provenance for the shipped assets, verifiable with
+      # `gh attestation verify <file> --repo thefalconry/talon` (SECURITY.md).
+      # Release and manual runs only: fork PRs get no OIDC token.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: apps/companion/dist/*
 
       - name: Attach to Release
         if: github.event_name == 'release'

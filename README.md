@@ -88,7 +88,9 @@ xattr -d com.apple.quarantine ./talon-darwin-arm64
 ```
 
 Verify a direct download against the release `SHA256SUMS`:
-`sha256sum -c SHA256SUMS --ignore-missing`.
+`sha256sum -c SHA256SUMS --ignore-missing`, and its build provenance with
+`gh attestation verify talon-linux-x64 --repo thefalconry/talon` (see
+[SECURITY.md](SECURITY.md#verifying-a-release)).
 
 **Server only, no Telegram?** Run the daemon with just the client bridge,
 reached by the companion app and talon-node: see
