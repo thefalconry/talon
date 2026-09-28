@@ -72,6 +72,32 @@ successful authenticated connect (TOFU) and enforced afterwards; pre-seed it
 via `--fingerprint` for a fully pinned first contact (`/health` on the
 bridge reports it).
 
+When the node pins a certificate on first use it logs a banner with the
+fingerprint. Compare it with the `Bridge TLS` line of `talon status` on the
+daemon host. If they differ, stop the node, delete `fingerprint` from the
+config and reconnect with `--fingerprint <the daemon's value>`.
+
+### Strict TLS (opt-in)
+
+Trust-on-first-use stays the default. To refuse any bridge whose
+fingerprint was not configured up front, pass `--strict-tls` to `run` or
+`install` (saved as `"strictTls": true` in the config):
+
+```sh
+./talon-node install --bridge https://<daemon-host>:19880 --token <token> \
+  --fingerprint <sha256 from talon status> --strict-tls
+```
+
+With strict TLS on, the node:
+
+- refuses to start (and `install` refuses) without a `fingerprint`, or with
+  a plain `http://` bridge URL;
+- rejects the TLS handshake with an unpinned bridge instead of adopting the
+  certificate it sees.
+
+`talon-node status` shows the mode on its `tls mode:` line.
+`--strict-tls=false` turns it back off.
+
 ### Local command policy
 
 The optional `policy` block controls what the mesh may do on this host. Only
