@@ -215,7 +215,44 @@ jobs:
           mkdir -p dist
           DEST="$GITHUB_WORKSPACE/apps/companion/dist"
           case "${{ matrix.platform }}" in
-            windows) ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows.zip" ./* ) ;;
+            windows)
+              # Portable zip of the raw Release folder…
+              ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows.zip" ./* )
+              # …plus a double-click Setup.exe (the Windows counterpart of the
+              # macOS DMG), compiled from the committed .iss with Inno Setup
+              # (preinstalled on windows-latest; choco is a fallback).
+              #
+              # Switches use `-`, not `/`: Git Bash rewrites any argument that
+              # starts with `/` into a Windows path, which turned `/DAppVersion=…`
+              # into a second "script filename" and failed the compile.
+              #
+              # On a release a failure degrades to the portable zip so the asset
+              # is never lost; on a PR / manual run it fails the job, so a broken
+              # installer can't hide behind a green check.
+              installer_failed() {
+                if [ "${{ github.event_name }}" = "release" ]; then
+                  echo "::warning::$1 — shipping portable zip only"
+                else
+                  echo "::error::$1"
+                  exit 1
+                fi
+              }
+              command -v ISCC.exe >/dev/null 2>&1 || choco install innosetup --no-progress -y || true
+              RELEASE_DIR="$GITHUB_WORKSPACE/apps/companion/build/windows/x64/runner/Release"
+              if ISCC.exe \
+                  "-DAppVersion=$APP_VERSION" \
+                  "-DSourceDir=$RELEASE_DIR" \
+                  "-O$DEST" \
+                  installer/windows/talon-companion.iss; then
+                if [ -f "$DEST/talon-companion-windows-setup.exe" ]; then
+                  echo "Built talon-companion-windows-setup.exe"
+                else
+                  installer_failed "ISCC reported success but no setup.exe was written"
+                fi
+              else
+                installer_failed "ISCC failed"
+              fi
+              ;;
             macos)
               # Ship a decorated drag-to-Applications DMG: branded background
               # with a drag arrow, pinned icon layout, volume icon, and a
