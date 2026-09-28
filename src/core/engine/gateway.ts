@@ -309,8 +309,14 @@ export class Gateway {
     const where = agentContext ? rawChatId : "chat-free";
     const t0 = Date.now();
     try {
+      // An agent context first tries the agent-only actions; if the action
+      // isn't one of those it may still be a chat-free action (mesh, send_via,
+      // backup, whatsapp_account), which a sub-agent is offered and must be
+      // able to reach. Without this fall-through those calls returned null and
+      // dropped into chat routing, failing with "No active chat context".
       const result = agentContext
-        ? await handleAgentContextAction(body, rawChatId)
+        ? ((await handleAgentContextAction(body, rawChatId)) ??
+          (isChatFreeAction(action) ? await handleChatFreeAction(body) : null))
         : await handleChatFreeAction(body);
       if (result) {
         logDebug("gateway", `${action} ${where} ${Date.now() - t0}ms`);
