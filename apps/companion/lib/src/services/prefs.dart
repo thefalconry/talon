@@ -3,12 +3,13 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform;
+    show TargetPlatform, defaultTargetPlatform, visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/connection.dart';
+import 'connection_vault.dart';
 import 'log.dart';
 import 'private_store.dart';
 
@@ -54,6 +55,7 @@ class Prefs {
       await SharedPreferences.getInstance(),
       snapshotFile: fileSnapshot ? await _resolveSnapshotFile() : null,
     );
+    await prefs._loadSecrets();
     await prefs._migrateMeshGrants();
     if (prefs.meshDeviceId == null || prefs.meshDeviceId!.isEmpty) {
       await prefs.setMeshDeviceId(const Uuid().v4());
@@ -94,25 +96,134 @@ class Prefs {
   /// Re-read the backing store from disk. SharedPreferences caches per
   /// isolate, so the background mesh isolate must reload after the UI isolate
   /// writes (mesh toggles, a new connection profile) to observe the change.
-  Future<void> reload() => _sp.reload();
+  /// The profile's secrets are re-read from the keystore with it.
+  Future<void> reload() async {
+    await _sp.reload();
+    await _loadSecrets();
+  }
 
   ConnectionConfig get connection {
-    final raw = _sp.getString(_kConnection);
-    if (raw == null) return ConnectionConfig.defaults();
+    final json = _connectionJson();
+    if (json == null) return ConnectionConfig.defaults();
     try {
-      return ConnectionConfig.fromJson(
-        (jsonDecode(raw) as Map).cast<String, dynamic>(),
-      );
+      // A secret still in the settings file (not migrated yet, or written
+      // while the keystore was unavailable) is the newer copy and wins.
+      return ConnectionConfig.fromJson({...?_vaulted, ...json});
     } catch (_) {
       return ConnectionConfig.defaults();
     }
   }
 
   Future<void> setConnection(ConnectionConfig c) async {
-    await _sp.setString(_kConnection, jsonEncode(c.toJson()));
-    // The profile carries the bridge token: make sure the file it lands in
-    // is this user's alone (a first write may have just created it).
+    final json = c.toJson();
+    if (vault != null) {
+      final secrets = _takeSecrets(json);
+      // No keystore after all: keep them in the settings file, as before.
+      if (!await _storeSecrets(secrets)) json.addAll(secrets);
+    }
+    await _sp.setString(_kConnection, jsonEncode(json));
+    // The profile may carry the bridge token (no keystore): make sure the
+    // file it lands in is this user's alone (a first write may have just
+    // created it).
     await privateStore?.harden();
+  }
+
+  // ── Connection secrets (#1056) ────────────────────────────────────────────
+
+  /// The OS keystore that holds the profile's secrets
+  /// ([ConnectionConfig.secretKeys]) apart from the settings file. Set at
+  /// startup by every isolate that loads the profile (the UI and the mesh
+  /// foreground service); null keeps them in the settings file (tests, and
+  /// anything that never set it).
+  static ConnectionVault? vault;
+
+  /// The secrets read from [vault] at the last load/reload; null when the
+  /// vault is unset or failed.
+  Map<String, String>? _vaulted;
+
+  static bool _vaultWarned = false;
+
+  @visibleForTesting
+  static void resetVaultWarning() => _vaultWarned = false;
+
+  Map<String, dynamic>? _connectionJson() {
+    final raw = _sp.getString(_kConnection);
+    if (raw == null) return null;
+    try {
+      return (jsonDecode(raw) as Map).cast<String, dynamic>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Remove the secret fields from [json] and return them (null values
+  /// included: a present-but-null token still means "no token").
+  static Map<String, dynamic> _takeSecrets(Map<String, dynamic> json) => {
+        for (final k in ConnectionConfig.secretKeys)
+          if (json.containsKey(k)) k: json.remove(k),
+      };
+
+  /// Read the secrets from the keystore, then move any that still sit in
+  /// the settings file into it — once, on the first run after an update,
+  /// or after a run where the keystore was unavailable.
+  Future<void> _loadSecrets() async {
+    final v = vault;
+    if (v == null) return;
+    try {
+      final raw = await v.read();
+      _vaulted = raw == null
+          ? {}
+          : (jsonDecode(raw) as Map).map((k, e) => MapEntry('$k', '$e'));
+    } catch (e) {
+      _vaultUnavailable('read', e);
+      _vaulted = null;
+      return;
+    }
+    final json = _connectionJson();
+    if (json == null) return;
+    final legacy = _takeSecrets(json);
+    if (legacy.isEmpty || !await _storeSecrets(legacy)) return;
+    // Keystore first, settings file second: a crash in between leaves a
+    // copy in both, and the next load simply repeats this.
+    await _sp.setString(_kConnection, jsonEncode(json));
+    AppLog.info('prefs', 'moved the bridge credentials into the OS keystore');
+  }
+
+  /// Replace the keystore entry with [secrets]' non-null values. False when
+  /// the keystore refused, so the caller keeps them in the settings file.
+  Future<bool> _storeSecrets(Map<String, dynamic> secrets) async {
+    final v = vault;
+    if (v == null) return false;
+    final kept = <String, String>{
+      for (final e in secrets.entries)
+        if (e.value is String) e.key: e.value as String,
+    };
+    try {
+      if (kept.isEmpty) {
+        await v.delete();
+      } else {
+        await v.write(jsonEncode(kept));
+      }
+    } catch (e) {
+      _vaultUnavailable('write', e);
+      return false;
+    }
+    _vaulted = kept;
+    return true;
+  }
+
+  static void _vaultUnavailable(String op, Object error) {
+    if (_vaultWarned) {
+      AppLog.debug('prefs', 'OS keystore $op failed', error);
+      return;
+    }
+    _vaultWarned = true;
+    AppLog.warn(
+      'prefs',
+      'OS keystore unavailable ($op); keeping the bridge credentials in the '
+          'settings file',
+      error,
+    );
   }
 
   /// Restricts the on-disk settings store to the current OS user (Linux).

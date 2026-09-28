@@ -7,6 +7,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'src/security/app_lock/app_lock_controller.dart';
 import 'src/services/bridge_trust.dart';
+import 'src/services/connection_vault.dart';
 import 'src/services/dynamic_accent.dart';
 import 'src/services/haptics.dart';
 import 'src/services/linux_theme.dart';
@@ -47,8 +48,12 @@ Future<void> main() async {
   // Windows: tray residency — close hides to the system tray, mesh keeps
   // running (macOS gets the same from native code in macos/Runner).
   await WindowsTray.instance.init();
+  // The bridge token and client certificate live in the OS keystore; the
+  // first load after an update moves them out of the settings file.
+  Prefs.vault = PlatformConnectionVault();
   final prefs = await Prefs.load(fileSnapshot: true);
-  // Linux: the settings file holds the bridge token, and the chat snapshot
+  // Linux: the settings file holds the bridge token when no Secret Service
+  // is running (the keystore fallback), and the chat snapshot
   // file recent chats; keep them (and their directory) readable by this
   // user only.
   final privateStore = PrivateStore();

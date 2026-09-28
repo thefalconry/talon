@@ -6,6 +6,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import '../security/app_lock/approval_relay.dart';
 import 'bridge_client.dart';
+import 'connection_vault.dart';
 import 'endpoint.dart';
 import 'log.dart';
 import 'mesh_liveness.dart';
@@ -51,6 +52,9 @@ class MeshTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     AppLog.info('mesh_bg', 'foreground mesh starting (${starter.name})');
+    // Statics are per isolate: this one reads the bridge token from the
+    // same keystore the UI isolate wrote it to (see Prefs.vault).
+    Prefs.vault ??= PlatformConnectionVault();
     final runner = MeshBackgroundRunner();
     _runner = runner;
     await runner.start();
