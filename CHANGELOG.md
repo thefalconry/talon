@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.20.0](https://github.com/thefalconry/talon/compare/v5.19.1...v5.20.0) (2026-09-28)
+
+
+### Features
+
+* **docker:** ship zip and unzip in the runtime image ([#1116](https://github.com/thefalconry/talon/issues/1116)) ([f149445](https://github.com/thefalconry/talon/commit/f149445ef6bdcf123cccc1d17065b0c54b516b71))
+
 ## [5.19.1](https://github.com/thefalconry/talon/compare/v5.19.0...v5.19.1) (2026-09-27)
 
 
