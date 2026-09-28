@@ -211,8 +211,10 @@ class _ConnectScreenState extends State<ConnectScreen> {
     final seen = probe.fingerprint;
     if (seen == null && probe.reached) return config;
     final previous = _savedPinFor(target);
-    if (seen != null && seen == previous) {
-      return config.copyWith(fingerprint: seen);
+    // The pin already held for this address stands: the certificate matches
+    // it, or nothing answered (the pin is then enforced on connect).
+    if (previous != null && (seen == previous || seen == null)) {
+      return config.copyWith(fingerprint: previous);
     }
     final ok = await CertificateConfirmDialog.ask(
       context,

@@ -265,6 +265,29 @@ void _certificateConfirmationTests(_Pump pumpConnect) {
       expect(state.applied.single.fingerprint, _fp);
     });
 
+    testWidgets('an unreachable bridge keeps the pin it already has', (
+      tester,
+    ) async {
+      final state = await pumpConnect(
+        tester,
+        saved: const ConnectionConfig(
+          host: '10.0.0.5',
+          port: 19880,
+          tls: true,
+          fingerprint: _fp,
+          manageLocalDaemon: false,
+          localAutoDiscover: false,
+        ),
+      );
+      state.probeResult = const CertificateProbe(reached: false);
+
+      await _enterRemote(tester, 'https://10.0.0.5:19880');
+
+      expect(find.byKey(const ValueKey('cert-confirm-unreachable')),
+          findsNothing);
+      expect(state.applied.single.fingerprint, _fp);
+    });
+
     testWidgets('an unreachable bridge can still be connected to', (
       tester,
     ) async {
