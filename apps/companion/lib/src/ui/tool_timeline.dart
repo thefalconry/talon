@@ -425,9 +425,14 @@ class _CodeBlock extends StatelessWidget {
   }
 }
 
-/// A collapsible summary of a finished turn's tool calls, for message history.
-/// Reads "Worked for 4.2s · 3 steps"; expands to the full [ToolTimeline].
-/// Opens itself when a step failed so problems aren't buried.
+/// A collapsed tool group: one quiet row that stands in for a run of tool
+/// calls — "Ran 3 commands, read 2 files · 4.2s" — and expands to the full
+/// [ToolTimeline] on tap, the way the Claude desktop app folds its tool use.
+///
+/// Used for both the live turn and message history, so a reply doesn't change
+/// shape when it finalizes. While a call is in flight the row shows a spinner
+/// and what's running now. A failed step opens the group by itself (unless the
+/// user has closed it) so an error is never buried behind a tap.
 class ToolTrace extends StatefulWidget {
   final List<ToolActivity> tools;
   const ToolTrace({super.key, required this.tools});
@@ -437,15 +442,72 @@ class ToolTrace extends StatefulWidget {
 }
 
 class _ToolTraceState extends State<ToolTrace> {
-  late bool _open = widget.tools.any((t) => t.error != null);
+  late bool _open = _anyFailed;
+  bool _userToggled = false;
+  Timer? _ticker;
+
+  bool get _anyFailed => widget.tools.any((t) => t.error != null);
+
+  ToolActivity? get _running {
+    for (final t in widget.tools.reversed) {
+      if (!t.done && t.error == null) return t;
+    }
+    return null;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncTicker();
+  }
+
+  @override
+  void didUpdateWidget(covariant ToolTrace old) {
+    super.didUpdateWidget(old);
+    if (_anyFailed && !_open && !_userToggled) _open = true;
+    _syncTicker();
+  }
+
+  // The live list is mutated in place and the row only rebuilds when the
+  // turn notifies, so tick while something runs to keep the label current.
+  void _syncTicker() {
+    if (_running != null) {
+      _ticker ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
+        if (mounted) setState(() {});
+      });
+    } else {
+      _ticker?.cancel();
+      _ticker = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final tools = widget.tools;
+    if (tools.isEmpty) return const SizedBox.shrink();
     final failed = tools.where((t) => t.error != null).length;
-    final total = Duration(
-      milliseconds: tools.fold<int>(0, (a, t) => a + t.elapsed.inMilliseconds),
-    );
+    final running = _running;
+
+    final Widget leading = running != null
+        ? SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 1.6,
+              color: TalonColors.accent2,
+            ),
+          )
+        : Icon(
+            failed > 0 ? Icons.error_outline : Icons.terminal_rounded,
+            size: 13,
+            color: failed > 0 ? TalonColors.bad : TalonColors.textFaint,
+          );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -454,41 +516,38 @@ class _ToolTraceState extends State<ToolTrace> {
           button: true,
           expanded: _open,
           child: InkWell(
-            onTap: () => setState(() => _open = !_open),
+            key: const Key('tool-group-toggle'),
+            onTap: () => setState(() {
+              _open = !_open;
+              _userToggled = true;
+            }),
             borderRadius: TalonRadius.rSm,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  leading,
+                  const SizedBox(width: 7),
+                  // Flexible + ellipsis: on a phone-width bubble the label
+                  // can exceed the row and an unconstrained Text overflows.
+                  Flexible(
+                    child: Text(
+                      toolTraceLabel(tools),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: TalonColors.textDim,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 2),
                   AnimatedRotation(
                     duration: TalonMotion.fast,
                     turns: _open ? 0.25 : 0,
                     child: Icon(Icons.chevron_right,
                         size: 16, color: TalonColors.textFaint),
-                  ),
-                  const SizedBox(width: TalonSpace.xs),
-                  Icon(
-                    failed > 0
-                        ? Icons.error_outline
-                        : Icons.auto_awesome_outlined,
-                    size: 13,
-                    color: failed > 0 ? TalonColors.bad : TalonColors.textFaint,
-                  ),
-                  const SizedBox(width: 6),
-                  // Flexible + ellipsis: on a phone-width bubble the summary
-                  // ("Worked for 4.2s · 3 steps") can exceed the row and an
-                  // unconstrained Text overflows the RenderFlex.
-                  Flexible(
-                    child: Text(
-                      _summary(tools.length, failed, total),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: TalonColors.textFaint,
-                        fontSize: 12,
-                      ),
-                    ),
                   ),
                 ],
               ),
@@ -509,12 +568,31 @@ class _ToolTraceState extends State<ToolTrace> {
       ],
     );
   }
+}
 
-  String _summary(int n, int failed, Duration total) {
-    final base = 'Worked for ${fmtToolDuration(total)} · $n '
-        '${n == 1 ? 'step' : 'steps'}';
-    return failed == 0 ? base : '$base · $failed failed';
+/// The collapsed group's label. Finished: `Ran 3 commands, read 2 files · 4.2s`
+/// (plus `· 1 failed`). In flight: what's running now, e.g. `Run a command…`,
+/// with a count of the steps already done.
+String toolTraceLabel(List<ToolActivity> tools) {
+  ToolActivity? running;
+  for (final t in tools.reversed) {
+    if (!t.done && t.error == null) {
+      running = t;
+      break;
+    }
   }
+  final failed = tools.where((t) => t.error != null).length;
+  if (running != null) {
+    final done = tools.where((t) => t.done || t.error != null).length;
+    final now = '${toolPhrase(running.name)}…';
+    return done == 0 ? now : '$now · $done done';
+  }
+  final total = Duration(
+    milliseconds: tools.fold<int>(0, (a, t) => a + t.elapsed.inMilliseconds),
+  );
+  final base = '${toolGroupSummary([for (final t in tools) t.name])}'
+      ' · ${fmtToolDuration(total)}';
+  return failed == 0 ? base : '$base · $failed failed';
 }
 
 // ── Shared formatting helpers ────────────────────────────────────────────────
