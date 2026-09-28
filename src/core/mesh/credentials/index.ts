@@ -4,7 +4,7 @@
  */
 
 export { DeviceCredentialStore } from "./store.js";
-export { isDeviceCredentialToken } from "./token.js";
+export { credentialIdOf, isDeviceCredentialToken } from "./token.js";
 export {
   DEFAULT_COMPANION_SCOPES,
   FORMER_COMPANION_SCOPES,

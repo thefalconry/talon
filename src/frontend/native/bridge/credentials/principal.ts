@@ -17,7 +17,10 @@
  */
 
 import type { IncomingMessage } from "node:http";
-import { isDeviceCredentialToken } from "../../../../core/mesh/credentials/index.js";
+import {
+  credentialIdOf,
+  isDeviceCredentialToken,
+} from "../../../../core/mesh/credentials/index.js";
 import { logWarn } from "../../../../util/log.js";
 
 /**
@@ -135,6 +138,15 @@ function isLocalRequest(req: IncomingMessage): boolean {
     h["x-real-ip"] ||
     h["x-forwarded-host"]
   );
+}
+
+/**
+ * The per-device credential id a presented bearer names (`tdc1.<id>.…`), so
+ * a refusal can count against that id as well as the address. Null for the
+ * shared token or anything malformed. Ids are identifiers, safe to log.
+ */
+export function presentedCredentialId(candidate: string): string | null {
+  return credentialIdOf(candidate);
 }
 
 /** Addresses already warned about a refused legacy token (bounded). */

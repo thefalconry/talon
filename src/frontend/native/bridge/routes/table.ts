@@ -105,6 +105,19 @@ export const BRIDGE_ROUTE_AUTH = {
 
 export type BridgeRouteKey = keyof typeof BRIDGE_ROUTE_AUTH;
 
+/**
+ * The only routes that take the credential as a `?token=` query parameter.
+ * Everywhere else it must come as `Authorization: Bearer`. A token in a URL
+ * ends up in proxy logs, browser history and screenshots, so it is accepted
+ * only where a client can't set a header: an EventSource stream, and media
+ * handed to an image widget or an external viewer. Those are the only two
+ * places shipped companions put it; talon-node never does.
+ */
+export const QUERY_TOKEN_ROUTES: ReadonlySet<BridgeRouteKey> = new Set([
+  "GET /events",
+  "GET /media",
+]);
+
 /** What a route handler receives; `auth` is already evaluated. */
 export type RouteContext = {
   req: IncomingMessage;

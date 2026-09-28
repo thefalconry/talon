@@ -209,4 +209,5 @@ and is mirrored in Dart under [`lib/src/models/`](lib/src/models). Endpoints:
 | POST | `/control` | Daemon-level actions (`restart`, `dream`) |
 
 All non-`/health` routes accept a bearer token (`Authorization: Bearer …`, or
-`?token=` for the SSE stream) when the daemon is configured with one.
+`?token=` on `GET /events` and `GET /media` only, where a client can't set a
+header) when the daemon is configured with one.

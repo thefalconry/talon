@@ -45,6 +45,7 @@ import { buildRoutes } from "./routes/index.js";
 import type { BridgeServerHandlers, RouteHost } from "./routes/host.js";
 import {
   BRIDGE_ROUTE_AUTH,
+  QUERY_TOKEN_ROUTES,
   type AuthState,
   type BridgeRouteKey,
   type RouteContext,
@@ -53,6 +54,7 @@ import {
 import {
   describeTier,
   hasScope,
+  presentedCredentialId,
   resolvePrincipal,
   routeAllows,
   type BridgeCredentials,
@@ -519,10 +521,14 @@ export class BridgeServer {
     }
 
     const remote = req.socket.remoteAddress ?? "unknown";
-    const { state: auth, principal } = this.authState(req, url);
-    if (!(await this.admit(res, remote, auth))) return;
-
     const key = `${method} ${path}` as BridgeRouteKey;
+    const {
+      state: auth,
+      principal,
+      credentialId,
+    } = this.authState(req, url, QUERY_TOKEN_ROUTES.has(key));
+    if (!(await this.admit(res, remote, auth, credentialId))) return;
+
     const route = this.routes.get(key);
     const ctx: RouteContext = { req, res, url, auth, principal };
     const tier = route ? BRIDGE_ROUTE_AUTH[key] : undefined;
@@ -706,19 +712,34 @@ export class BridgeServer {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
+  /**
+   * Evaluate the presented credential. `queryToken` says whether this route
+   * also takes it as `?token=` (QUERY_TOKEN_ROUTES); elsewhere a query
+   * token is ignored, so the request reads as tokenless. A refused
+   * per-device credential reports the id it named, for the auth guard.
+   */
   private authState(
     req: IncomingMessage,
     url: URL,
-  ): { state: AuthState; principal: BridgePrincipal | null } {
-    if (!this.opts.token) return { state: "ok", principal: { kind: "open" } };
+    queryToken: boolean,
+  ): {
+    state: AuthState;
+    principal: BridgePrincipal | null;
+    credentialId: string | null;
+  } {
+    if (!this.opts.token) {
+      return { state: "ok", principal: { kind: "open" }, credentialId: null };
+    }
     const header = req.headers["authorization"];
     const fromHeader =
       typeof header === "string" && header.startsWith("Bearer ")
         ? header.slice("Bearer ".length)
         : null;
-    // EventSource can't set headers, so SSE clients pass ?token=… instead.
-    const candidate = fromHeader ?? url.searchParams.get("token");
-    if (candidate === null) return { state: "anonymous", principal: null };
+    const candidate =
+      fromHeader ?? (queryToken ? url.searchParams.get("token") : null);
+    if (candidate === null) {
+      return { state: "anonymous", principal: null, credentialId: null };
+    }
     // The shared token or a per-device credential (credentials/principal.ts).
     const principal = resolvePrincipal(
       candidate,
@@ -727,8 +748,12 @@ export class BridgeServer {
       this.opts.credentials,
     );
     return principal
-      ? { state: "ok", principal }
-      : { state: "bad", principal: null };
+      ? { state: "ok", principal, credentialId: null }
+      : {
+          state: "bad",
+          principal: null,
+          credentialId: presentedCredentialId(candidate),
+        };
   }
 
   /**
@@ -740,8 +765,9 @@ export class BridgeServer {
     res: ServerResponse,
     remote: string,
     auth: AuthState,
+    credentialId: string | null,
   ): Promise<boolean> {
-    const verdict = this.authGuard.check(remote, auth);
+    const verdict = this.authGuard.check(remote, auth, credentialId);
     if (verdict.kind === "reject") {
       this.refuse(
         res,

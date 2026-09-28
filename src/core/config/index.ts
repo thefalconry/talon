@@ -154,7 +154,8 @@ const frontendEnum = z.enum([
  *
  * Defaults are loopback-only and unauthenticated (single-machine use). To
  * reach Talon remotely, set `host: "0.0.0.0"` and a `token` — the bridge
- * then requires `Authorization: Bearer <token>` (or `?token=` for SSE).
+ * then requires `Authorization: Bearer <token>` (or `?token=` on `GET /events`
+ * and `GET /media` only, where clients can't set a header).
  * A non-loopback bind with no token auto-mints a persistent one
  * (~/.talon/keys/bridge-token) rather than serving the LAN open.
  */
@@ -170,9 +171,10 @@ const nativeConfigSchema = z
     host: z.string().default("127.0.0.1"),
     /**
      * Optional shared secret. When set, every request must present it as a
-     * bearer token (header) or `?token=` query param (SSE). When unset on a
-     * non-loopback `host`, the bridge mints and persists one automatically
-     * (~/.talon/keys/bridge-token) — the network never gets an open bridge.
+     * bearer token (header), or a `?token=` query param on `GET /events` and
+     * `GET /media` only. When unset on a non-loopback `host`, the bridge
+     * mints and persists one automatically (~/.talon/keys/bridge-token) —
+     * the network never gets an open bridge.
      */
     token: z.string().optional(),
     /**
