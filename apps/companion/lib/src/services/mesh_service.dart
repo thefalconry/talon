@@ -627,6 +627,10 @@ class MeshService {
       }
       if (!kIsWeb && Platform.isLinux) {
         final d = await info.linuxInfo;
+        final host = Platform.localHostname.trim();
+        if (host.isNotEmpty && host != 'localhost') {
+          return '${d.prettyName} ($host)';
+        }
         return d.prettyName;
       }
     } catch (_) {

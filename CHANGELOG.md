@@ -1,5 +1,21 @@
 # Changelog
 
+## [5.19.1](https://github.com/thefalconry/talon/compare/v5.19.0...v5.19.1) (2026-09-27)
+
+
+### Bug Fixes
+
+* **agents:** honour a kill requested while a sub-agent is still queued ([#1107](https://github.com/thefalconry/talon/issues/1107)) ([a9be2ca](https://github.com/thefalconry/talon/commit/a9be2cad6605e37b5e8cf7e45bba952a63b2c3d4))
+* **backup:** include mesh-credentials.json in snapshots ([#1111](https://github.com/thefalconry/talon/issues/1111)) ([ae5446c](https://github.com/thefalconry/talon/commit/ae5446c1289d8fb3adbcf6a1eac3d297710eb130))
+* **companion:** stop offering start-at-login inside Flatpak ([#1110](https://github.com/thefalconry/talon/issues/1110)) ([0553078](https://github.com/thefalconry/talon/commit/0553078487cc1af054a93a4a85518d434203c068))
+* **mesh,companion:** correct companion version string and stop same-name device eviction ([#1112](https://github.com/thefalconry/talon/issues/1112)) ([d24dd14](https://github.com/thefalconry/talon/commit/d24dd14ef66920ca9ab4173c31a268983a3b9edb))
+* **triggers:** stop the orphan sweep from killing the chat's triggers ([#1114](https://github.com/thefalconry/talon/issues/1114)) ([02eaa2f](https://github.com/thefalconry/talon/commit/02eaa2f0b3e36f0a485557973b77f399a7887ce0))
+
+
+### Miscellaneous Chores
+
+* **deps:** bump @anthropic-ai/claude-agent-sdk to ^0.3.283 ([#1113](https://github.com/thefalconry/talon/issues/1113)) ([41896d7](https://github.com/thefalconry/talon/commit/41896d7d60f888d247c3dc1900b544e3d00e363f))
+
 ## [5.19.0](https://github.com/thefalconry/talon/compare/v5.18.2...v5.19.0) (2026-09-25)
 
 

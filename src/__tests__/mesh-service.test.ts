@@ -1221,6 +1221,51 @@ describe("MeshService hardening", () => {
     expect("target" in exact && exact.target.id).toBe("a");
   });
 
+  it("resolves devices by id prefix when 6 or more characters match uniquely", async () => {
+    const service = await tempService();
+    await service.register({
+      id: "d011287b-0a24-4a51-bffd-129855b85f39",
+      name: "Fedora Linux",
+      platform: "linux",
+      appVersion: "5.12.0",
+    });
+    await service.register({
+      id: "e98a1234-5678-9abc-def0-123456789abc",
+      name: "Fedora Linux",
+      platform: "linux",
+      appVersion: "5.12.0",
+    });
+
+    const res = service.resolveDevice("d01128");
+    expect("target" in res && res.target.id).toBe(
+      "d011287b-0a24-4a51-bffd-129855b85f39",
+    );
+
+    const bothRes = service.resolveDevice("Fedora Linux");
+    expect("error" in bothRes && bothRes.error).toContain("matches 2 devices");
+    expect("error" in bothRes && bothRes.error).toContain("Use the device id.");
+  });
+
+  it("gateway meshHandlers accept deviceId as an alternative to device", async () => {
+    const service = await tempService();
+    setMeshService(service);
+    await service.register({
+      id: "device-uuid-123456",
+      name: "Workstation",
+      platform: "linux",
+      appVersion: "5.12.0",
+    });
+
+    const res = await meshHandlers.get_device_status(
+      { action: "get_device_status", deviceId: "device-uuid-123456" } as any,
+      1,
+      undefined,
+      "1",
+    );
+    expect(res.ok).toBe(false);
+    expect(res.text).toContain("Workstation");
+  });
+
   it("clamps oversized exec output with an explicit truncation marker", async () => {
     const service = await tempService({ commandTimeoutMs: 2_000 });
     await service.register({
@@ -1265,7 +1310,7 @@ describe("MeshService registry hygiene", () => {
     appVersion: "1.0.0",
   });
 
-  it("evicts an offline same-name duplicate when a fresh install registers", async () => {
+  it("preserves offline same-name devices when another device registers", async () => {
     const service = await tempService();
     await service.storeLocation({
       deviceId: "mac-old",
@@ -1273,16 +1318,14 @@ describe("MeshService registry hygiene", () => {
       lon: -6.2,
       ts: Date.now() - 10 * 60_000,
     });
-    // Old install last beat 10 minutes ago — well past the presence timeout.
-    // (Registered after the location: storeLocation counts as a heartbeat
-    // and would otherwise refresh lastSeen to now.)
     await service.register(mac("mac-old"), Date.now() - 10 * 60_000);
     await service.register(mac("mac-new"));
 
     const { devices } = await service.list();
-    expect(devices.map((d) => d.id)).toEqual(["mac-new"]);
-    // The ghost's location went with it.
-    expect(await service.getLocation("mac-old")).toBeUndefined();
+    expect(devices.map((d) => d.id).sort()).toEqual(["mac-new", "mac-old"]);
+    // Both devices exist independently; offline device's location is preserved.
+    expect(await service.getLocation("mac-old")).toBeDefined();
+    expect((await service.getLocation("mac-old"))?.lat).toBe(53.1);
   });
 
   it("keeps an ONLINE same-name doppelganger (two live devices may share a name)", async () => {
