@@ -203,12 +203,21 @@ class MessageBubble extends StatelessWidget {
                                   // One SelectionArea, plain Text inside —
                                   // not a SelectableText, which drags in an
                                   // EditableText + focus node per row.
-                                  SelectionArea(
-                                    child: Text(
-                                      message.text,
-                                      style: TalonType.body.copyWith(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w500,
+                                  //
+                                  // The theme's selection colour is the
+                                  // accent at 40%, which vanishes on this
+                                  // accent-gradient bubble, so the user's
+                                  // own text gets a white highlight instead.
+                                  DefaultSelectionStyle(
+                                    selectionColor: userSelectionColor,
+                                    cursorColor: Colors.white,
+                                    child: SelectionArea(
+                                      child: Text(
+                                        message.text,
+                                        style: TalonType.body.copyWith(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.w500,
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -305,6 +314,11 @@ class MessageBubble extends StatelessWidget {
           ],
         ),
       );
+
+  /// Selection highlight for text inside the user's own bubble. White, so
+  /// it reads against the accent gradient in both light and dark themes.
+  @visibleForTesting
+  static const Color userSelectionColor = Color(0x59FFFFFF);
 
   Widget _buttons() => Padding(
         padding: const EdgeInsets.only(top: TalonSpace.sm),
