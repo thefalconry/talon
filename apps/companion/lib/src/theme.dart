@@ -603,20 +603,35 @@ ThemeData buildTalonTheme() {
     // _switchRow), reading as a solid undifferentiated pill against this
     // theme's glass surfaces. Give both states an explicit border and
     // a thumb that always contrasts against its track.
+    // Every colour resolves the disabled state too. Without it a switch with
+    // onChanged: null rendered exactly like a live one — it swallowed taps
+    // while still looking on, which reads as a stuck control.
     switchTheme: SwitchThemeData(
-      trackColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected)
-              ? TalonColors.accent
-              : TalonColors.surfaceHi),
-      trackOutlineColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected)
-              ? TalonColors.accentDeep
-              : TalonColors.glassStroke),
+      trackColor: WidgetStateProperty.resolveWith((states) {
+        final c = states.contains(WidgetState.selected)
+            ? TalonColors.accent
+            : TalonColors.surfaceHi;
+        return states.contains(WidgetState.disabled)
+            ? c.withValues(alpha: 0.30)
+            : c;
+      }),
+      trackOutlineColor: WidgetStateProperty.resolveWith((states) {
+        final c = states.contains(WidgetState.selected)
+            ? TalonColors.accentDeep
+            : TalonColors.glassStroke;
+        return states.contains(WidgetState.disabled)
+            ? c.withValues(alpha: 0.30)
+            : c;
+      }),
       trackOutlineWidth: const WidgetStatePropertyAll(1.4),
-      thumbColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected)
-              ? Colors.white
-              : TalonColors.textDim),
+      thumbColor: WidgetStateProperty.resolveWith((states) {
+        final c = states.contains(WidgetState.selected)
+            ? Colors.white
+            : TalonColors.textDim;
+        return states.contains(WidgetState.disabled)
+            ? c.withValues(alpha: 0.45)
+            : c;
+      }),
     ),
   );
 }
