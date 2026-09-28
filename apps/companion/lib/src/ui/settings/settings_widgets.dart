@@ -36,10 +36,7 @@ Widget healthRow(SettingsHealth h, String label, String detail) {
           width: 118,
           child: Text(
             label,
-            style: const TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
           ),
         ),
         Expanded(
@@ -54,31 +51,35 @@ Widget healthRow(SettingsHealth h, String label, String detail) {
 }
 
 Widget infoRow(String label, String value) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 128,
-            child: Text(
-              label,
-              style: TextStyle(fontSize: 13, color: TalonColors.textDim),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value.isEmpty ? '—' : value,
-              style: const TextStyle(fontSize: 13.5),
-            ),
-          ),
-        ],
+  padding: const EdgeInsets.symmetric(vertical: 5),
+  child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 128,
+        child: Text(
+          label,
+          style: TextStyle(fontSize: 13, color: TalonColors.textDim),
+        ),
       ),
-    );
+      Expanded(
+        child: SelectableText(
+          value.isEmpty ? '—' : value,
+          style: const TextStyle(fontSize: 13.5),
+        ),
+      ),
+    ],
+  ),
+);
 
 /// A compact stat tile: an indigo icon square, a small uppercase label, and a
 /// bold value (or a green "Good" pill for the health readout).
-Widget statTile(IconData icon, String label, String value,
-    {bool pill = false}) {
+Widget statTile(
+  IconData icon,
+  String label,
+  String value, {
+  bool pill = false,
+}) {
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
     decoration: BoxDecoration(
@@ -118,8 +119,10 @@ Widget statTile(IconData icon, String label, String value,
               const SizedBox(height: 1),
               if (pill)
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: TalonColors.ok.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(999),
@@ -192,31 +195,37 @@ Widget settingsSwitchRow(
   bool value,
   ValueChanged<bool>? onChanged,
 ) {
+  // A disabled row dims as a whole — title and subtitle too, not just the
+  // switch — so it's obvious at a glance that it can't be changed right now.
   return Padding(
     padding: const EdgeInsets.symmetric(vertical: 7),
     child: Row(
       children: [
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
+          child: AnimatedOpacity(
+            opacity: onChanged == null ? 0.5 : 1,
+            duration: const Duration(milliseconds: 150),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.35,
-                  color: TalonColors.textFaint,
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: TalonColors.textFaint,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -314,20 +323,20 @@ class SettingsSkeleton extends StatelessWidget {
     }
 
     Widget card(int rows) => Glass(
-          radius: TalonRadius.md,
-          padding: const EdgeInsets.all(TalonSpace.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              bar(120, 12),
-              const SizedBox(height: TalonSpace.lg),
-              for (var i = 0; i < rows; i++) ...[
-                if (i > 0) const SizedBox(height: TalonSpace.md),
-                bar(double.infinity, 16),
-              ],
-            ],
-          ),
-        );
+      radius: TalonRadius.md,
+      padding: const EdgeInsets.all(TalonSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          bar(120, 12),
+          const SizedBox(height: TalonSpace.lg),
+          for (var i = 0; i < rows; i++) ...[
+            if (i > 0) const SizedBox(height: TalonSpace.md),
+            bar(double.infinity, 16),
+          ],
+        ],
+      ),
+    );
 
     return Column(
       children: [
@@ -408,8 +417,8 @@ class _RailTileState extends State<RailTile> {
     final border = selected
         ? TalonColors.accent.withValues(alpha: 0.35)
         : (_focused
-            ? TalonColors.accent.withValues(alpha: 0.55)
-            : Colors.transparent);
+              ? TalonColors.accent.withValues(alpha: 0.55)
+              : Colors.transparent);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: TalonSpace.xxs),
       child: Semantics(
@@ -458,8 +467,9 @@ class _RailTileState extends State<RailTile> {
                     child: Icon(
                       widget.icon,
                       size: 18,
-                      color:
-                          selected ? TalonColors.accent : TalonColors.textDim,
+                      color: selected
+                          ? TalonColors.accent
+                          : TalonColors.textDim,
                     ),
                   ),
                   const SizedBox(width: TalonSpace.md - 2),
@@ -473,8 +483,9 @@ class _RailTileState extends State<RailTile> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 13.5,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w600,
+                            fontWeight: selected
+                                ? FontWeight.w700
+                                : FontWeight.w600,
                             color: selected
                                 ? TalonColors.text
                                 : TalonColors.textDim,
@@ -598,8 +609,11 @@ class ControlButton extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               else
-                Icon(Icons.chevron_right,
-                    size: 18, color: TalonColors.textFaint),
+                Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: TalonColors.textFaint,
+                ),
             ],
           ),
         ),

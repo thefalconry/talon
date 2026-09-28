@@ -200,8 +200,12 @@ class _MeshCardState extends State<MeshCard> {
           const Divider(height: 22),
           settingsSwitchRow(
             'Periodic reporting',
-            'Send a live location fix on an interval',
-            prefs.meshPeriodic,
+            prefs.meshSharing
+                ? 'Send a live location fix on an interval'
+                : 'Needs Location sharing on.',
+            // Shown off while sharing is off: the saved preference only
+            // applies once sharing is back on.
+            prefs.meshPeriodic && prefs.meshSharing,
             // null = properly disabled (greyed out) while sharing is off —
             // an enabled-looking switch that swallows taps reads as stuck.
             prefs.meshSharing ? (v) => widget.state.setMeshPeriodic(v) : null,
@@ -222,15 +226,23 @@ class _MeshCardState extends State<MeshCard> {
             isFlatpak
                 ? 'Not available in the Flatpak build — the sandbox cannot '
                     'run commands on this computer.'
-                : 'Let the connected Talon run shell + file commands on '
-                    'this device (teleport). Granted to this bridge only — '
-                    'pairing with another one turns it off again.',
-            prefs.meshDeviceControl && !isFlatpak,
+                : !prefs.meshSharing
+                    ? 'Needs Location sharing on — that is what registers '
+                        'this device with the mesh.'
+                    : 'Let the connected Talon run shell + file commands on '
+                        'this device (teleport). Granted to this bridge only — '
+                        'pairing with another one turns it off again.',
+            // Shown off (not just greyed) while sharing is off: device
+            // control can't work then, so a lit switch would be a lie.
+            prefs.meshDeviceControl && prefs.meshSharing && !isFlatpak,
             prefs.meshSharing && !isFlatpak
                 ? (v) => widget.state.setMeshDeviceControl(v)
                 : null,
           ),
-          if (_showsPrivilege && prefs.meshDeviceControl && !isFlatpak) ...[
+          if (_showsPrivilege &&
+              prefs.meshDeviceControl &&
+              prefs.meshSharing &&
+              !isFlatpak) ...[
             settingsSwitchRow(
               'Elevated access',
               'Allow those commands to run as root or through Shizuku when '
