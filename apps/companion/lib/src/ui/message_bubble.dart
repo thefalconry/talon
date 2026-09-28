@@ -322,16 +322,17 @@ class MessageBubble extends StatelessWidget {
         ),
       );
 
-  /// A tapped link in message text. A bridge attachment (same origin as
-  /// [mediaBaseUrl]) is fetched in-app through the authenticated media stack —
-  /// so the bearer token never rides in a browser-visible URL and mTLS still
-  /// applies — then opened locally. Everything else opens in the browser.
+  /// A tapped link in message text. A bridge attachment link (`/media?id=…`)
+  /// is fetched in-app through the authenticated media stack, so the bearer
+  /// token never rides in a browser-visible URL and mTLS still applies, then
+  /// opened locally. Everything else opens in the browser.
   void _onTapLink(BuildContext context, String? href) {
     if (href == null) return;
-    if (mediaBaseUrl.isNotEmpty && _isBridgeMedia(href)) {
+    final media = bridgeMediaUrl(href, mediaBaseUrl);
+    if (media != null) {
       final messenger = ScaffoldMessenger.maybeOf(context);
       AttachmentOpener.instance
-          .openLink(url: href, headers: mediaHeaders)
+          .openLink(url: media, headers: mediaHeaders)
           .catchError((Object e) {
         messenger?.showSnackBar(
           SnackBar(content: Text("Couldn't open link: $e")),
@@ -343,21 +344,30 @@ class MessageBubble extends StatelessWidget {
     launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
   }
 
-  bool _isBridgeMedia(String href) => isBridgeMediaLink(href, mediaBaseUrl);
-
-  /// True when [href] targets the connected bridge's `/media` endpoint. Scheme,
-  /// host and port must all match [baseUrl] so a look-alike host in message
-  /// text never receives the bridge's auth header.
+  /// The URL to fetch in-app for a `/media?id=…` link, or null when [href]
+  /// isn't one (or no bridge is connected).
+  ///
+  /// The daemon writes these links with whatever address *it* thinks it has
+  /// (often a public hostname behind a reverse proxy), which needn't match
+  /// the address this client connected with (a LAN or tailnet IP). A media id
+  /// only means something to the bridge that minted it, so the link is always
+  /// re-pointed at the connected bridge: [baseUrl] + `/media?id=<id>`. That
+  /// keeps the auth header on our own origin (a look-alike host in message
+  /// text never receives it) and drops anything else in the query, such as a
+  /// legacy `token=`.
   @visibleForTesting
-  static bool isBridgeMediaLink(String href, String baseUrl) {
-    if (baseUrl.isEmpty) return false;
+  static String? bridgeMediaUrl(String href, String baseUrl) {
+    if (baseUrl.isEmpty) return null;
     final link = Uri.tryParse(href);
-    final base = Uri.tryParse(baseUrl);
-    if (link == null || base == null) return false;
-    return link.scheme == base.scheme &&
-        link.host == base.host &&
-        link.port == base.port &&
-        link.path == '/media';
+    if (link == null) return null;
+    if (link.scheme != 'http' && link.scheme != 'https') return null;
+    if (link.path != '/media') return null;
+    final id = link.queryParameters['id'];
+    if (id == null || id.isEmpty) return null;
+    final base = baseUrl.endsWith('/')
+        ? baseUrl.substring(0, baseUrl.length - 1)
+        : baseUrl;
+    return '$base/media?id=${Uri.encodeQueryComponent(id)}';
   }
 
   Widget _buttons() => Padding(

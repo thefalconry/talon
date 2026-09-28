@@ -507,33 +507,39 @@ void main() {
       expect(snap.attachments.map((a) => a.name), ['a.png', 'b.zip']);
     });
 
-    test('only a same-origin /media link counts as a bridge attachment', () {
+    test('a /media link is always fetched from the connected bridge', () {
       const base = 'http://host:8080';
-      // The connected bridge's own media endpoint — fetched in-app.
+      // The connected bridge's own media endpoint.
       expect(
-          MessageBubble.isBridgeMediaLink(
+          MessageBubble.bridgeMediaUrl(
               'http://host:8080/media?id=mmuk3t31w', base),
-          isTrue);
-      // A foreign host, even at /media — must stay in the browser so the auth
-      // header is never sent off-origin.
+          'http://host:8080/media?id=mmuk3t31w');
+      // The daemon's public hostname while we're connected over LAN: the id
+      // is re-pointed at our bridge, so the header never leaves our origin.
       expect(
-          MessageBubble.isBridgeMediaLink(
-              'https://example.com/media?id=x', base),
-          isFalse);
-      // Right host, wrong port / scheme / path — not the bridge media route.
+          MessageBubble.bridgeMediaUrl(
+              'https://talon.example.in/media?id=mmuk3t337', base),
+          'http://host:8080/media?id=mmuk3t337');
+      // A legacy token in the link is dropped, not forwarded.
       expect(
-          MessageBubble.isBridgeMediaLink('http://host:9090/media', base),
-          isFalse);
+          MessageBubble.bridgeMediaUrl(
+              'https://other/media?id=a%2Fb&token=secret', base),
+          'http://host:8080/media?id=a%2Fb');
+      // A trailing slash on the base doesn't double up.
       expect(
-          MessageBubble.isBridgeMediaLink('https://host:8080/media', base),
-          isFalse);
+          MessageBubble.bridgeMediaUrl('http://x/media?id=q', '$base/'),
+          'http://host:8080/media?id=q');
+      // Not a media link: other path, no id, non-http scheme.
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/other', base),
+          isNull);
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/media', base),
+          isNull);
+      expect(MessageBubble.bridgeMediaUrl('ftp://host/media?id=q', base),
+          isNull);
+      // No configured bridge base: nothing is ever treated as in-app.
       expect(
-          MessageBubble.isBridgeMediaLink('http://host:8080/other', base),
-          isFalse);
-      // No configured bridge base — nothing is ever treated as in-app.
-      expect(
-          MessageBubble.isBridgeMediaLink('http://host:8080/media', ''),
-          isFalse);
+          MessageBubble.bridgeMediaUrl('http://host:8080/media?id=q', ''),
+          isNull);
     });
 
     testWidgets('a text-only message renders no chips', (tester) async {
