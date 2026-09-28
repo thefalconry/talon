@@ -149,6 +149,32 @@ describe("resolveSource", () => {
     });
   });
 
+  it("reads a #<commit> suffix as a pin on git sources only", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(resolveSource(`https://github.com/o/r.git#${sha}`)).toEqual({
+      kind: "git",
+      url: "https://github.com/o/r.git",
+      commit: sha,
+    });
+    expect(
+      resolveSource("anthropics/skills/document-skills/pdf#ABC1234"),
+    ).toEqual({
+      kind: "git",
+      url: "https://github.com/anthropics/skills.git",
+      subpath: "document-skills/pdf",
+      commit: "abc1234",
+    });
+    // A non-hex fragment is not a pin; an npm spec keeps its own grammar.
+    expect(resolveSource("o/r#semver:^1.0")).toEqual({
+      kind: "other",
+      raw: "o/r#semver:^1.0",
+    });
+    expect(resolveSource("@scope/pkg#abc1234")).toEqual({
+      kind: "other",
+      raw: "@scope/pkg#abc1234",
+    });
+  });
+
   it("treats npm specs as other — scoped names are not shorthand", () => {
     expect(resolveSource("@scope/pkg")).toEqual({
       kind: "other",

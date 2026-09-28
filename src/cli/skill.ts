@@ -15,7 +15,7 @@
 
 import pc from "picocolors";
 import { existsSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import {
   deleteSkill,
   installSkillFromDir,
@@ -23,7 +23,13 @@ import {
   setSkillEnabled,
   type Skill,
 } from "../storage/skills.js";
-import { cloneShallow, resolveSource } from "./install-sources.js";
+import {
+  cloneSource,
+  resolveSource,
+  withCommit,
+  writeInstallRecord,
+  type GitSource,
+} from "./install-sources.js";
 
 const USAGE = [
   `  Usage: ${pc.cyan("talon skill <command>")}`,
@@ -32,6 +38,7 @@ const USAGE = [
   `    ${pc.cyan("list")}                       Show installed skills`,
   `    ${pc.cyan("install <source> [--force]")} Add skills from a local folder,`,
   "                               git URL, or owner/repo[/subpath]",
+  `    ${pc.cyan("  [--commit <sha>]")}         …at this commit (or <source>#<sha>)`,
   `    ${pc.cyan("enable <name>")}              Restore a skill to the prompt index`,
   `    ${pc.cyan("disable <name>")}             Hide a skill from the prompt index`,
   `    ${pc.cyan("remove <name>")}              Delete a skill folder`,
@@ -119,16 +126,61 @@ function installAll(dirs: string[], force: boolean): Skill[] {
   return installed;
 }
 
+type SkillInstallArgs = { source: string; force: boolean; commit?: string };
+
+function parseInstallArgs(args: string[]): SkillInstallArgs | null {
+  let source: string | undefined;
+  let force = false;
+  let commit: string | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!;
+    if (arg === "--force") force = true;
+    else if (arg === "--commit") commit = args[++i];
+    else if (!arg.startsWith("-") && source === undefined) source = arg;
+    else return null;
+  }
+  if (!source || (commit !== undefined && !commit)) return null;
+  return { source, force, ...(commit !== undefined ? { commit } : {}) };
+}
+
+/**
+ * Record, in each skill folder of the clone, which repo and commit it came
+ * from — before it is copied into the store.
+ */
+function recordProvenance(
+  source: GitSource,
+  root: string,
+  dirs: string[],
+  commit: string | undefined,
+): void {
+  for (const dir of dirs) {
+    const subpath = relative(root, dir).split(sep).join("/");
+    const inRepo = [source.subpath, subpath].filter(Boolean).join("/");
+    writeInstallRecord(dir, {
+      source: source.url,
+      ...(inRepo ? { subpath: inRepo } : {}),
+      ...(commit ? { commit } : {}),
+      ...(source.commit ? { pinned: true } : {}),
+    });
+  }
+}
+
 async function cmdInstall(args: string[]): Promise<void> {
-  const force = args.includes("--force");
-  const source = args.find((arg) => !arg.startsWith("-"));
-  if (!source) {
+  const parsed = parseInstallArgs(args);
+  if (!parsed) {
     console.log(USAGE);
     process.exitCode = 1;
     return;
   }
+  const { source, force } = parsed;
 
-  const resolved = resolveSource(source);
+  const pinned = withCommit(resolveSource(source), parsed.commit);
+  if (!pinned.ok) {
+    fail(pinned.error);
+    process.exitCode = 1;
+    return;
+  }
+  const resolved = pinned.source;
   if (resolved.kind === "other") {
     fail(
       `"${source}" is not a folder, git URL, or owner/repo — skills install from SKILL.md folders.`,
@@ -147,7 +199,7 @@ async function cmdInstall(args: string[]): Promise<void> {
     }
     installed = installAll(dirs, force);
   } else {
-    const clone = cloneShallow(resolved.url);
+    const clone = cloneSource(resolved);
     if (!clone.ok) {
       fail(clone.error);
       process.exitCode = 1;
@@ -170,6 +222,7 @@ async function cmdInstall(args: string[]): Promise<void> {
         process.exitCode = 1;
         return;
       }
+      recordProvenance(resolved, root, dirs, clone.commit);
       installed = installAll(dirs, force);
       if (clone.commit) {
         console.log(`  ${pc.dim(`From ${resolved.url} @ ${clone.commit}`)}`);
