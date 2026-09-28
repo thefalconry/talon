@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../services/dynamic_accent.dart';
 import '../../services/haptics.dart';
+import '../../services/linux_theme.dart';
 import '../../services/mesh_background.dart';
 import '../../services/message_notifications.dart';
 import '../../state/app_state.dart';
@@ -35,6 +36,10 @@ class _AppearanceCardState extends State<AppearanceCard> {
   void initState() {
     super.initState();
     if (DynamicAccent.supported) {
+      if (defaultTargetPlatform == TargetPlatform.linux &&
+          LinuxThemeService.currentAccentColor != null) {
+        _wallpaperAccent = LinuxThemeService.currentAccentColor;
+      }
       DynamicAccent.seed().then((seed) {
         if (mounted && seed != null) setState(() => _wallpaperAccent = seed);
       });
@@ -111,7 +116,9 @@ class _AppearanceCardState extends State<AppearanceCard> {
               // the same mark the voice picker uses for "automatic".
               if (DynamicAccent.supported)
                 _AccentSwatch(
-                  tooltip: 'Wallpaper',
+                  tooltip: defaultTargetPlatform == TargetPlatform.android
+                      ? 'Wallpaper'
+                      : 'Desktop theme',
                   color: _wallpaperSwatchColor,
                   icon: Icons.auto_awesome_rounded,
                   selected: dynamicAccent,
@@ -268,8 +275,11 @@ class _AppearanceCardState extends State<AppearanceCard> {
     final seed = await DynamicAccent.seed();
     if (!mounted) return;
     if (seed == null) {
-      messenger.showSnackBar(const SnackBar(
-        content: Text('This device does not expose a system colour'),
+      final msg = defaultTargetPlatform == TargetPlatform.android
+          ? 'This device does not expose a system colour'
+          : 'This desktop does not expose a theme accent colour';
+      messenger.showSnackBar(SnackBar(
+        content: Text(msg),
       ));
       return;
     }
