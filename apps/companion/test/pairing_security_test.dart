@@ -120,35 +120,25 @@ void main() {
     });
   });
 
-  group('device control is a per-bridge, opt-in grant', () {
+  group('device control is on by default; per-pairing grants are opt-in', () {
     const a = ConnectionConfig(host: '192.168.1.2', port: 19880);
     const b = ConnectionConfig(host: '192.168.1.3', port: 19880);
 
-    test('a fresh install starts with device control and elevation off',
+    test('a fresh install starts with device control and elevation on',
         () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await Prefs.load();
-      expect(prefs.meshDeviceControl, isFalse);
-      expect(prefs.meshElevated, isFalse);
-      expect(MeshService.capabilitiesFor(prefs, sandboxed: false),
-          MeshService.capabilities);
-    });
-
-    test('an existing install keeps device control for its current bridge',
-        () async {
-      SharedPreferences.setMockInitialValues({
-        'onboarded.v1': true,
-        'connection.v1': '{"host":"192.168.1.2","port":19880}',
-      });
-      final prefs = await Prefs.load();
       expect(prefs.meshDeviceControl, isTrue);
       expect(prefs.meshElevated, isTrue);
-      // Loading again (another isolate) changes nothing.
-      final again = await Prefs.load();
-      expect(again.meshDeviceControl, isTrue);
+      expect(prefs.meshGrantsPerPairing, isFalse);
+      expect(
+        MeshService.capabilitiesFor(prefs, sandboxed: false),
+        containsAll(DeviceExec.capabilities),
+      );
     });
 
-    test('an existing install that had turned it off keeps it off', () async {
+    test('an install that turned device control off before #1064 keeps it',
+        () async {
       SharedPreferences.setMockInitialValues({
         'onboarded.v1': true,
         'mesh.deviceControl.v1': false,
@@ -156,46 +146,93 @@ void main() {
       final prefs = await Prefs.load();
       expect(prefs.meshDeviceControl, isFalse);
       expect(prefs.meshElevated, isFalse);
+      // Elevation was never touched, so it follows the new default.
+      await prefs.setMeshDeviceControl(true);
+      expect(prefs.meshElevated, isTrue);
     });
 
-    test('a grant does not follow the profile to another bridge', () async {
+    test('grants wiped by #1064 (default or pairing) go back to on', () async {
+      SharedPreferences.setMockInitialValues({
+        'onboarded.v1': true,
+        'connection.v1': '{"host":"192.168.1.2","port":19880}',
+        'mesh.grantsMigrated.v1': true,
+        'mesh.deviceControl.v1': false,
+        'mesh.elevated.v1': false,
+      });
+      final prefs = await Prefs.load();
+      expect(prefs.meshDeviceControl, isTrue);
+      expect(prefs.meshElevated, isTrue);
+      // Loading again (another isolate) changes nothing.
+      await prefs.setMeshElevated(false);
+      final again = await Prefs.load();
+      expect(again.meshDeviceControl, isTrue);
+      expect(again.meshElevated, isFalse);
+    });
+
+    test('a choice made in settings under #1064 is kept', () async {
+      SharedPreferences.setMockInitialValues({
+        'onboarded.v1': true,
+        'connection.v1': '{"host":"192.168.1.2","port":19880}',
+        'mesh.grantsMigrated.v1': true,
+        'mesh.deviceControl.v1': true,
+        'mesh.elevated.v1': false,
+        'mesh.controlBridge.v1': '192.168.1.2:19880',
+      });
+      final prefs = await Prefs.load();
+      expect(prefs.meshDeviceControl, isTrue);
+      expect(prefs.meshElevated, isFalse);
+    });
+
+    test('by default the grants follow the profile to another bridge',
+        () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await Prefs.load();
       await prefs.setConnection(a);
-      await prefs.setMeshDeviceControl(true);
-      await prefs.setMeshElevated(true);
+      await prefs.setConnection(b);
+      await prefs.resetMeshGrantsForPairing();
       expect(prefs.meshDeviceControl, isTrue);
       expect(prefs.meshElevated, isTrue);
+      expect(prefs.meshDeviceControlOnPairing, isTrue);
+    });
+
+    test('opting into per-pairing grants ties them to one bridge', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await Prefs.load();
+      await prefs.setConnection(a);
+      await prefs.setMeshGrantsPerPairing(true);
+      // The bridge it was turned on for keeps what it had.
+      expect(prefs.meshDeviceControl, isTrue);
+      expect(prefs.meshElevated, isTrue);
+      expect(prefs.meshDeviceControlOnPairing, isFalse);
 
       await prefs.setConnection(b);
       expect(prefs.meshDeviceControl, isFalse);
       expect(prefs.meshElevated, isFalse);
-      expect(MeshService.capabilitiesFor(prefs, sandboxed: false),
-          MeshService.capabilities);
-    });
+      expect(
+        MeshService.capabilitiesFor(prefs, sandboxed: false),
+        MeshService.capabilities,
+      );
 
-    test('elevation needs device control, and goes with it', () async {
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await Prefs.load();
       await prefs.setConnection(a);
-      await prefs.setMeshElevated(true);
+      expect(prefs.meshDeviceControl, isTrue);
+      // A new pairing wipes both, even at the same address.
+      await prefs.resetMeshGrantsForPairing();
+      expect(prefs.meshDeviceControl, isFalse);
       expect(prefs.meshElevated, isFalse);
       await prefs.setMeshDeviceControl(true);
+      expect(prefs.meshElevated, isFalse);
       await prefs.setMeshElevated(true);
       expect(prefs.meshElevated, isTrue);
-      await prefs.setMeshDeviceControl(false);
-      await prefs.setMeshDeviceControl(true);
-      expect(prefs.meshElevated, isFalse);
     });
 
-    test('revokeMeshGrants clears both, even for the same bridge', () async {
+    test('elevation needs device control, and comes back with it', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await Prefs.load();
-      await prefs.setConnection(a);
+      await prefs.setMeshDeviceControl(false);
+      expect(prefs.meshElevated, isFalse);
       await prefs.setMeshDeviceControl(true);
-      await prefs.setMeshElevated(true);
-      await prefs.revokeMeshGrants();
-      expect(prefs.meshDeviceControl, isFalse);
+      expect(prefs.meshElevated, isTrue);
+      await prefs.setMeshElevated(false);
       expect(prefs.meshElevated, isFalse);
     });
   });
@@ -262,7 +299,7 @@ void main() {
       expect(result.data!['via'], 'root');
     });
 
-    test('the mesh wires its executor to the per-bridge grant', () async {
+    test('the mesh wires its executor to the elevation setting', () async {
       SharedPreferences.setMockInitialValues({});
       final prefs = await Prefs.load();
       const bridge = ConnectionConfig(host: '192.168.1.2', port: 19880);
@@ -272,13 +309,32 @@ void main() {
       final exec = android();
       MeshService(prefs, client, deviceExec: exec);
 
-      expect(exec.allowElevation(), isFalse);
-      await prefs.setMeshDeviceControl(true);
+      expect(exec.allowElevation(), isTrue);
+      await prefs.setMeshElevated(false);
       expect(exec.allowElevation(), isFalse);
       await prefs.setMeshElevated(true);
       expect(exec.allowElevation(), isTrue);
-      await prefs.revokeMeshGrants();
+      await prefs.setMeshDeviceControl(false);
       expect(exec.allowElevation(), isFalse);
+      await prefs.setMeshDeviceControl(true);
+      await prefs.setMeshGrantsPerPairing(true);
+      await prefs.resetMeshGrantsForPairing();
+      expect(exec.allowElevation(), isFalse);
+    });
+
+    test('the mesh wires its executor to the write cap setting', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await Prefs.load();
+      const bridge = ConnectionConfig(host: '192.168.1.2', port: 19880);
+      final client = BridgeClient(bridge);
+      addTearDown(client.dispose);
+      final exec = android();
+      MeshService(prefs, client, deviceExec: exec);
+
+      expect(exec.writeLimit(), DeviceExec.maxWriteBytes);
+      expect(DeviceExec.maxWriteBytes, 4 << 30);
+      await prefs.setMeshMaxWriteGiB(16);
+      expect(exec.writeLimit(), 16 << 30);
     });
   });
 
@@ -351,21 +407,46 @@ void main() {
       expect(state.prefs.onboarded, isFalse);
     });
 
-    testWidgets('connect applies the profile and starts without grants',
+    testWidgets('connect applies the profile and keeps the grants',
         (tester) async {
       final state = await pump(
         tester,
         good,
         prefs: {
           'onboarded.v1': true,
-          // Same address, so only the revocation (not the per-bridge key)
-          // can be what turns the grants off.
-          'connection.v1': '{"host":"192.168.1.2","port":19880,"tls":true}',
+          'connection.v1': '{"host":"192.168.1.9","port":19880,"tls":true}',
         },
       );
-      // The legacy install had device control on for this address.
+      expect(inDialog('Switch to another bridge?'), findsOneWidget);
+      expect(find.textContaining('able to run shell'), findsOneWidget);
+
+      await tester.tap(inDialog('Connect'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(state.applied, hasLength(1));
+      await state.prefs.setConnection(state.applied.single);
+      expect(state.prefs.meshDeviceControl, isTrue);
+      expect(state.prefs.meshElevated, isTrue);
+    });
+
+    testWidgets('with per-pairing grants, connect starts without them',
+        (tester) async {
+      final state = await pump(
+        tester,
+        good,
+        prefs: {
+          'onboarded.v1': true,
+          // Same address, so only the reset (not the per-bridge key) can be
+          // what turns the grants off.
+          'connection.v1': '{"host":"192.168.1.2","port":19880,"tls":true}',
+          'mesh.grantsPerPairing.v1': true,
+          'mesh.controlBridge.v1': '192.168.1.2:19880',
+        },
+      );
       expect(state.prefs.meshDeviceControl, isTrue);
       expect(inDialog('Switch to another bridge?'), findsOneWidget);
+      expect(find.textContaining('stays off for this bridge'), findsOneWidget);
 
       await tester.tap(inDialog('Connect'));
       await tester.pump();

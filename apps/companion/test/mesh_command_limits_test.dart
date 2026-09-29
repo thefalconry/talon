@@ -87,6 +87,85 @@ void main() {
     );
   });
 
+  test('the command limits follow the settings', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await Prefs.load();
+    final bridge = await MockBridge.start();
+    addTearDown(bridge.close);
+    final client = BridgeClient(
+      ConnectionConfig(
+        host: bridge.host,
+        port: bridge.port,
+        manageLocalDaemon: false,
+        localAutoDiscover: false,
+      ),
+    );
+    addTearDown(client.dispose);
+    await client.connect();
+    await prefs.setMeshMaxConcurrent(1);
+    await prefs.setMeshMaxQueued(2);
+
+    var running = 0;
+    var peak = 0;
+    final release = Completer<void>();
+    final service = MeshService(
+      prefs,
+      client,
+      locationProvider: () async => null,
+      batteryProvider: () async => const MeshBattery(),
+      nameProvider: () async => 'Test phone',
+      versionProvider: () async => '1.0.0+1',
+      foregroundStarter: () async {},
+      ringHandler: (_) async {
+        running++;
+        if (running > peak) peak = running;
+        await release.future;
+        running--;
+      },
+    );
+    addTearDown(service.stop);
+    await service.start();
+    await _waitFor(() => bridge.devices.length == 1);
+    final id = bridge.devices.single['id'] as String;
+
+    for (var i = 0; i < 5; i++) {
+      await bridge.emit({
+        'kind': 'device_command',
+        'id': 'ring-$i',
+        'deviceId': id,
+        'name': 'ring',
+        'params': <String, dynamic>{},
+      });
+    }
+    await _waitFor(() => bridge.commandResults.length == 2);
+    expect('${bridge.commandResults.first['message']}', contains('1 commands'));
+    release.complete();
+    await _waitFor(() => bridge.commandResults.length == 5);
+    expect(peak, 1);
+  });
+
+  test('write_file honours a raised write cap', () async {
+    final dir = await Directory.systemTemp.createTemp('talon-write-cap-');
+    addTearDown(() => dir.delete(recursive: true));
+    final exec = DeviceExec()..writeLimit = () => DeviceExec.maxWriteBytes * 2;
+    final r = await exec.writeFile(
+      '${dir.path}/big.bin',
+      base64Encode([1, 2, 3]),
+      offset: 0,
+      truncate: true,
+    );
+    expect(r.ok, isTrue);
+    final capped = DeviceExec()..writeLimit = () => 2;
+    final refused = await capped.writeFile(
+      '${dir.path}/small.bin',
+      base64Encode([1, 2, 3]),
+      offset: 0,
+      truncate: true,
+    );
+    expect(refused.ok, isFalse);
+    expect(refused.message, contains('2-byte limit'));
+  });
+
   test('write_file refuses to grow a file past the mesh write cap', () async {
     final dir = await Directory.systemTemp.createTemp('talon-write-cap-');
     addTearDown(() => dir.delete(recursive: true));

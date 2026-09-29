@@ -23,15 +23,28 @@ This tier is enough for "clean up my Downloads folder", moving/reading/writing
 files in shared storage, and running ordinary shell tools that ship with
 Android (`ls`, `rm`, `mv`, `find`, `cat`, …).
 
-Toggle in the app: **Settings → Mesh → Device control** (default OFF). It is
-granted to the bridge the app is connected to: pointing the app at another
-bridge (including through a pairing link) turns it off again until you enable
-it there. When off, the device advertises no exec/fs capabilities and refuses
-those commands.
+Toggle in the app: **Settings → Mesh → Device control** (default ON). When
+off, the device advertises no exec/fs capabilities and refuses those
+commands.
 
 Root and Shizuku are a separate switch, **Settings → Mesh → Elevated access**
-(default OFF, Android only). While it is off, commands run at this app-UID tier
+(default ON, Android only). While it is off, commands run at this app-UID tier
 and the app never asks the root manager or Shizuku for a grant.
+
+Restrictions you can opt into, in the same card:
+
+- **Ask again for each pairing** (default off). Every newly paired bridge
+  starts with device control and elevated access off, and a grant holds only
+  for the bridge it was given to: pointing the app at another bridge turns
+  both off until you enable them there.
+- **Commands at once** (default 4) and **Commands waiting** (default 16).
+  Beyond both, a command is answered "busy" straight away.
+- **Largest file write** (default 4 GiB, the same as talon-node). A
+  `write_file` or `download_file` that would grow a file past it is refused.
+
+Upgrading from a release where both switches defaulted to off: an install
+that never changed them gets the new defaults. A switch you turned off in
+Settings stays off.
 
 ## 2. Shizuku (optional, elevated)
 

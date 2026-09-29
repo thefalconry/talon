@@ -88,13 +88,19 @@ class _RootViewState extends State<RootView> with WidgetsBindingObserver {
       // the connection on its own — first run included. Only an explicit
       // "Connect" in the dialog does.
       final replacing = widget.state.prefs.onboarded;
-      if (!await PairConfirmDialog.ask(context, config, replacing: replacing)) {
+      final confirmed = await PairConfirmDialog.ask(
+        context,
+        config,
+        replacing: replacing,
+        deviceControl: widget.state.prefs.meshDeviceControlOnPairing,
+      );
+      if (!confirmed) {
         AppLog.info('pair', 'pairing link declined');
         return;
       }
-      // A newly paired bridge starts without device control or elevated
-      // access, whatever the previous bridge had been granted.
-      await widget.state.prefs.revokeMeshGrants();
+      // Device control carries over to the new bridge unless the user
+      // opted into per-pairing grants (Settings → Mesh).
+      await widget.state.prefs.resetMeshGrantsForPairing();
       await widget.state.prefs.setOnboarded(true);
       await widget.state.applyConfig(config);
       if (!mounted) return;

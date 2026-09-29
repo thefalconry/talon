@@ -234,11 +234,11 @@ const nativeConfigSchema = z
     legacySharedToken: z.boolean().optional(),
     /**
      * Scopes a companion's per-device credential carries — at pairing and
-     * on the in-band upgrade. Default ["device", "client"]: the mesh plus
-     * the chat UI. Adding "operator" lets every paired phone change config,
-     * toggle plugins and read logs; prefer granting it to one device with
-     * `talon mesh scopes <device> device,client,operator`. Nodes always get
-     * ["device"].
+     * on the in-band upgrade. Default ["device", "client", "operator"]:
+     * the mesh, the chat UI and its settings (config writes, plugin
+     * toggles, logs) — what the shared token allowed. Set ["device",
+     * "client"] to keep paired phones out of config; `talon mesh scopes
+     * <device> <list>` changes one device. Nodes always get ["device"].
      */
     companionScopes: z
       .array(z.enum(["device", "client", "operator"]))
@@ -677,14 +677,15 @@ const configSchema = z.object({
     .optional(),
   braveApiKey: z.string().optional(),
   /**
-   * `fetch_url` refuses hosts that resolve to loopback, private (RFC 1918,
-   * CGNAT, ULA), link-local (incl. the 169.254.169.254 metadata endpoint)
-   * or reserved addresses, re-checking every redirect hop. Set
-   * `allowPrivateNetworks: true` only on a host where the agent should
-   * read local services (a home lab, a dev server).
+   * `fetch_url` reaches any address by default, local services included (a
+   * home lab, a dev server, the LAN). Set `allowPrivateNetworks: false` to
+   * opt into the SSRF guard: it then refuses hosts that resolve to
+   * loopback, private (RFC 1918, CGNAT, ULA), link-local (incl. the
+   * 169.254.169.254 metadata endpoint) or reserved addresses, re-checking
+   * every redirect hop — worth it on a cloud VM.
    */
   fetchUrl: z
-    .object({ allowPrivateNetworks: z.boolean().default(false) })
+    .object({ allowPrivateNetworks: z.boolean().default(true) })
     .strict()
     .optional(),
   /**

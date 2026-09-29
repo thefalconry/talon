@@ -574,7 +574,7 @@ class AppState extends ChangeNotifier {
     _mesh = null;
     _client?.dispose();
     _client = null;
-    await prefs.revokeMeshGrants();
+    await prefs.resetMeshGrantsForPairing();
     await prefs.setOnboarded(false);
     config = ConnectionConfig.defaults();
     _activeConfig = null;
@@ -1031,9 +1031,31 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Let device control use root/Shizuku for the current bridge (Android).
+  /// Let device control use root/Shizuku (Android). On by default.
   Future<void> setMeshElevated(bool on) async {
     await prefs.setMeshElevated(on);
+    notifyListeners();
+    await _meshPrefsChanged();
+    notifyListeners();
+  }
+
+  /// Opt-in: start every new pairing without device control or elevation.
+  Future<void> setMeshGrantsPerPairing(bool on) async {
+    await prefs.setMeshGrantsPerPairing(on);
+    notifyListeners();
+    await _meshPrefsChanged();
+    notifyListeners();
+  }
+
+  /// Override one of the mesh command limits (null leaves it unchanged).
+  Future<void> setMeshLimits({
+    int? concurrent,
+    int? queued,
+    int? writeGiB,
+  }) async {
+    if (concurrent != null) await prefs.setMeshMaxConcurrent(concurrent);
+    if (queued != null) await prefs.setMeshMaxQueued(queued);
+    if (writeGiB != null) await prefs.setMeshMaxWriteGiB(writeGiB);
     notifyListeners();
     await _meshPrefsChanged();
     notifyListeners();

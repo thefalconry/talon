@@ -253,12 +253,39 @@ export class DeviceCredentialStore {
       });
     }
     const records = this.activeRecordsFor(deviceId);
-    for (const record of records) record.scopes = next;
+    const at = this.now();
+    for (const record of records) {
+      record.scopes = next;
+      record.scopesSetAt = at;
+    }
     if (records.length > 0) {
       await this.persist();
       this.emit(records.map((r) => r.id));
     }
     return records.map(publicView);
+  }
+
+  /**
+   * Move every live credential still holding exactly `from` to `to`, unless
+   * its scopes were set by hand — for when a default widens, so devices
+   * issued the old default get the new one. Returns how many changed.
+   */
+  async adoptDefaultScopes(
+    from: readonly MeshScope[],
+    to: readonly MeshScope[],
+  ): Promise<number> {
+    await this.load();
+    const was = normalizeScopes(from).join(",");
+    const next = normalizeScopes(to);
+    let changed = 0;
+    for (const record of this.records.values()) {
+      if (!this.isActive(record) || record.scopesSetAt !== undefined) continue;
+      if (record.scopes.join(",") !== was) continue;
+      record.scopes = [...next];
+      changed++;
+    }
+    if (changed > 0) await this.persist();
+    return changed;
   }
 
   /** Subscribe to revocations (the bridge drops matching sessions). */
@@ -313,11 +340,13 @@ export class DeviceCredentialStore {
     }
     const minted = mintCredentialToken();
     const at = this.now();
+    const scopesSetAt = this.handSetScopes(input.deviceId, scopes);
     const record: DeviceCredentialRecord = {
       id: minted.id,
       deviceId: input.deviceId,
       tokenHash: minted.tokenHash,
       scopes,
+      ...(scopesSetAt !== undefined ? { scopesSetAt } : {}),
       origin: input.origin,
       createdAt: at,
       ...(input.deviceId === null ? { expiresAt: at + UNBOUND_TTL_MS } : {}),
@@ -325,6 +354,18 @@ export class DeviceCredentialStore {
     if (input.deviceId !== null) this.supersede(input.deviceId, record.id, at);
     this.records.set(record.id, record);
     return { token: minted.token, credential: publicView(record) };
+  }
+
+  /** A re-issue keeps the mark of scopes an operator set by hand. */
+  private handSetScopes(
+    deviceId: string | null,
+    scopes: readonly MeshScope[],
+  ): number | undefined {
+    if (deviceId === null) return undefined;
+    const key = scopes.join(",");
+    return this.activeRecordsFor(deviceId).find(
+      (r) => r.scopesSetAt !== undefined && r.scopes.join(",") === key,
+    )?.scopesSetAt;
   }
 
   private isActive(record: DeviceCredentialRecord): boolean {

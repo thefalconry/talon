@@ -47,11 +47,11 @@ class DeviceExec {
   final bool Function() _isAndroid;
 
   /// Whether this executor may use (or ask for) root or Shizuku at all.
-  /// The mesh points this at the user's per-bridge elevation grant (see
-  /// `Prefs.meshElevated`); while it answers false, commands run as the app
-  /// and no root/Shizuku grant dialog is ever raised on their behalf. The
-  /// settings screen and the app's own updater keep the default, since the
-  /// user is driving those directly.
+  /// The mesh points this at the user's elevated-access setting (see
+  /// `Prefs.meshElevated`, default on); while it answers false, commands run
+  /// as the app and no root/Shizuku grant dialog is ever raised on their
+  /// behalf. The settings screen and the app's own updater keep the default,
+  /// since the user is driving those directly.
   bool Function() allowElevation = _always;
   static bool _always() => true;
   Future<bool>? _pendingShizukuPermission;
@@ -123,9 +123,14 @@ class DeviceExec {
 
   static const int _maxChunkBytes = 256 * 1024;
 
-  /// Largest file a mesh write (write_file chunks, download_file) may
-  /// produce on this device.
-  static const int maxWriteBytes = 2 * 1024 * 1024 * 1024;
+  /// Default for the largest file a mesh write (write_file chunks,
+  /// download_file) may produce on this device — the same 4 GiB as
+  /// talon-node. The mesh points [writeLimit] at the user's setting.
+  static const int maxWriteBytes = 4 * 1024 * 1024 * 1024;
+
+  /// The per-file mesh write cap in force (see [maxWriteBytes]).
+  int Function() writeLimit = _defaultWriteLimit;
+  static int _defaultWriteLimit() => maxWriteBytes;
   static const Duration _shizukuPermissionWait = Duration(seconds: 12);
 
   /// How long a root probe's answer is trusted before asking the bridge again.
@@ -771,13 +776,14 @@ class DeviceExec {
       final file = File(path);
       await file.parent.create(recursive: true);
       final bytes = base64Decode(b64);
-      // Capped per file: a mesh write never grows a file past maxWriteBytes.
+      // Capped per file: a mesh write never grows a file past writeLimit.
       // Below that, writes proceed until a real limit fails them (disk full,
       // permissions), and that exception is surfaced verbatim below.
-      if ((truncate ? 0 : offset) + bytes.length > maxWriteBytes) {
+      final cap = writeLimit();
+      if ((truncate ? 0 : offset) + bytes.length > cap) {
         return CommandOutcome.fail(
           'write_file refused: the file would exceed the '
-          '$maxWriteBytes-byte limit for mesh writes.',
+          '$cap-byte limit for mesh writes (Settings → Mesh).',
         );
       }
       // Write at the offset the daemon asked for — never blind-append. The

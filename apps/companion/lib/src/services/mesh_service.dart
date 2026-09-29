@@ -161,15 +161,15 @@ class MeshService {
        _systemInfoProvider = systemInfoProvider ?? _defaultSystemInfo,
        _onRegistered = onRegistered,
        _exec = deviceExec ?? DeviceExec() {
-    // Mesh commands climb to root/Shizuku only with the user's elevation
-    // grant for this bridge; without it they run as the app and nothing asks
-    // the root manager or Shizuku for anything.
+    // Mesh commands climb to root/Shizuku unless the user turned elevated
+    // access off; then they run as the app and nothing asks the root manager
+    // or Shizuku for anything.
     _exec.allowElevation = () => elevationAllowed(prefs);
+    _exec.writeLimit = () => maxWriteBytesFor(prefs);
   }
 
   /// Whether mesh commands may use root or Shizuku: device control is live
-  /// ([deviceControlAllowed]) AND the user turned elevated access on for this
-  /// bridge. Off by default and after every new pairing.
+  /// ([deviceControlAllowed]) AND elevated access is on (the default).
   static bool elevationAllowed(Prefs prefs, {bool? sandboxed}) =>
       deviceControlAllowed(prefs, sandboxed: sandboxed) && prefs.meshElevated;
 
@@ -202,8 +202,7 @@ class MeshService {
     // ignition) the root grant would otherwise be acquired mid-command, with
     // the root manager's dialog appearing while someone is driving and the
     // command blocked behind it. Fire-and-forget: nothing here gates the mesh.
-    // Only once the user has granted elevated access for this bridge — never
-    // as a side effect of merely connecting.
+    // Skipped only when the user turned elevated access off.
     if (elevationAllowed(prefs)) {
       unawaited(
         _exec.ensureRootReady().catchError(
@@ -307,20 +306,32 @@ class MeshService {
     }
   }
 
-  /// How many mesh commands run at once; up to [maxQueuedCommands] more wait
-  /// for a slot, and anything beyond that is answered "busy" straight away.
-  /// Bounds what a burst of frames (a buggy or compromised daemon) can pile
-  /// onto the device.
+  /// Default for how many mesh commands run at once; up to
+  /// [maxQueuedCommands] more wait for a slot, and anything beyond that is
+  /// answered "busy" straight away. Bounds what a burst of frames (a buggy or
+  /// compromised daemon) can pile onto the device. Both are overridable in
+  /// Settings → Mesh (`Prefs.meshMaxConcurrent` / `meshMaxQueued`).
   static const int maxConcurrentCommands = 4;
   static const int maxQueuedCommands = 16;
+
+  int get _maxConcurrent => prefs.meshMaxConcurrent ?? maxConcurrentCommands;
+  int get _maxQueued => prefs.meshMaxQueued ?? maxQueuedCommands;
+
+  static const int _gib = 1024 * 1024 * 1024;
+
+  /// The per-file mesh write cap: the user's setting, or the default.
+  static int maxWriteBytesFor(Prefs prefs) {
+    final gib = prefs.meshMaxWriteGiB;
+    return gib == null ? DeviceExec.maxWriteBytes : gib * _gib;
+  }
 
   int _commandsInFlight = 0;
   final Queue<Map<String, dynamic>> _queuedCommands = Queue();
 
   void _admitCommand(Map<String, dynamic> event) {
-    if (_commandsInFlight < maxConcurrentCommands) {
+    if (_commandsInFlight < _maxConcurrent) {
       _runCommand(event);
-    } else if (_queuedCommands.length < maxQueuedCommands) {
+    } else if (_queuedCommands.length < _maxQueued) {
       _queuedCommands.add(event);
     } else {
       unawaited(_answerBusy(event));
@@ -351,8 +362,8 @@ class MeshService {
         'commandId': id,
         'deviceId': myId,
         'ok': false,
-        'message': 'Device is busy ($maxConcurrentCommands commands running, '
-            '$maxQueuedCommands queued) — try again shortly.',
+        'message': 'Device is busy ($_maxConcurrent commands running, '
+            '$_maxQueued queued) — try again shortly.',
       });
     } catch (e) {
       AppLog.warn('mesh', 'busy result post failed', e);
@@ -447,9 +458,10 @@ class MeshService {
           try {
             written = await client.downloadFile(downToken, (chunk) async {
               received += chunk.length;
-              if (received > DeviceExec.maxWriteBytes) {
+              final cap = _exec.writeLimit();
+              if (received > cap) {
                 throw StateError(
-                  'download exceeds the ${DeviceExec.maxWriteBytes}-byte '
+                  'download exceeds the $cap-byte '
                   'write cap',
                 );
               }

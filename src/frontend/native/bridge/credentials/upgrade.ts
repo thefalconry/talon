@@ -6,8 +6,9 @@
  *   shared token → a per-device credential bound to the device id in the
  *     body (the migration path off `native.token`). Scopes are what the
  *     client asks for, capped by policy: a node gets `device`; a companion
- *     at most `native.companionScopes` (default device + client). Operator
- *     is never granted in-band unless the operator put it in that list.
+ *     at most `native.companionScopes` (default: all three, as the shared
+ *     token it is trading carried). A companion that asks for `client`
+ *     also gets `operator` whenever that list allows it.
  *
  *   per-device credential → a replacement with the same device and scopes
  *     (rotation, when the operator asked for it or the client wants one).
@@ -48,7 +49,19 @@ function grantFor(
   const ceiling: readonly BridgeScope[] =
     client === "node" ? ["device"] : credentials.policy.companionScopes;
   if (asked.length === 0) return [...ceiling];
-  return asked.filter((s) => ceiling.includes(s));
+  const granted = asked.filter((s) => ceiling.includes(s));
+  // Shipped companions ask for device + client: the list predates operator
+  // being part of the default. The companion is the full UI (settings,
+  // extensions), so it gets operator whenever the policy allows it.
+  if (
+    client !== "node" &&
+    granted.includes("client") &&
+    ceiling.includes("operator") &&
+    !granted.includes("operator")
+  ) {
+    granted.push("operator");
+  }
+  return granted;
 }
 
 export async function upgradeCredential(

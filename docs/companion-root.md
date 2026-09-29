@@ -1,9 +1,12 @@
 # Companion root access (Android)
 
-With **Settings → Mesh → Elevated access** on (it is off by default, and off
-again for every newly paired bridge), device control (teleport) runs at the
-**highest privilege the device will give it**, picked per command. With it
-off, everything runs at the `app` tier:
+With **Settings → Mesh → Elevated access** on (the default; turn it off there,
+or opt into **Ask again for each pairing** to have every new pairing start
+without it), device control (teleport) runs at the **highest privilege the
+device will give it**, picked per command. The mesh also warms the root grant
+when it starts, so a device that reboots often (a car head unit) has root
+before the first command arrives. With it off, everything runs at the `app`
+tier:
 
 | Tier | uid | How it's reached | What it adds |
 | --- | --- | --- | --- |
