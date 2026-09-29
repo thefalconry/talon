@@ -99,7 +99,10 @@ export class Weaver {
     const lifecycle = { started: false, killed: false, enqueuedAt: Date.now() };
     // The turn id is minted at enqueue so a queued turn's wait is already
     // attributable; the log scope goes live when the turn starts running.
-    const scope = createTurnScope(params.chatId);
+    const scope = createTurnScope(params.chatId, {
+      sender: params.senderKeys?.[0] ?? (params.senderName || undefined),
+      source: params.source,
+    });
     const trace = createTurnTrace(scope.turnId, params, thread.inFlightCount);
     // Registered before enqueueing so a turn waiting in its chat's FIFO is
     // visible as `queued` in the task table, not invisible until it runs.

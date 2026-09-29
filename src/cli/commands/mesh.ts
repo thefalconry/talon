@@ -7,6 +7,9 @@
  *   talon mesh rotate <device>           the device swaps credentials on its
  *                                        next heartbeat (old one: 7-day grace)
  *   talon mesh scopes <device> <list>    e.g. device,client,operator
+ *   talon mesh audit [--limit N] [--device X]
+ *                                        commands the daemon sent to devices
+ *                                        (core/mesh/audit.ts)
  *
  * Everything goes through the running daemon's loopback gateway
  * (core/engine/gateway-routes.ts → core/mesh/credentials/admin.ts): the
@@ -17,14 +20,16 @@
 import pc from "picocolors";
 import { fetchGateway, requireGatewayPort } from "../daemon-api.js";
 import type { DeviceCredential } from "../../core/mesh/credentials/index.js";
+import { parseAuditArgs, runMeshAudit } from "./mesh-audit.js";
 
 const USAGE = `
-  ${pc.bold("talon mesh")} — per-device mesh credentials
+  ${pc.bold("talon mesh")} — per-device mesh credentials and command audit
 
     ${pc.cyan("list")}                              credentials, scopes, last use (default)
     ${pc.cyan("revoke")} <device|credential-id>     revoke now; drops its live sessions
     ${pc.cyan("rotate")} <device>                   re-issue on the device's next heartbeat
     ${pc.cyan("scopes")} <device> <scope,scope>     set scopes: device, client, operator
+    ${pc.cyan("audit")} [--limit N] [--device X]    commands sent to devices (newest last)
 `;
 
 type Overview = {
@@ -101,12 +106,28 @@ async function adminOp(
   }
 }
 
+async function runAudit(args: readonly string[]): Promise<void> {
+  const query = parseAuditArgs(args);
+  if (typeof query === "string") {
+    console.error(`  ${pc.red("✖")} ${query}\n${USAGE}`);
+    process.exitCode = 1;
+    return;
+  }
+  const port = await requireGatewayPort();
+  if (port === null) {
+    process.exitCode = 1;
+    return;
+  }
+  await runMeshAudit(port, query);
+}
+
 export async function runMeshCommand(args: string[]): Promise<void> {
   const [sub = "list", target, scopes] = args;
   if (sub === "help" || sub === "--help" || sub === "-h") {
     console.log(USAGE);
     return;
   }
+  if (sub === "audit") return runAudit(args.slice(1));
   const known = ["list", "revoke", "rotate", "scopes"];
   if (!known.includes(sub)) {
     console.error(`  Unknown mesh command: ${sub}\n${USAGE}`);

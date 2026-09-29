@@ -113,7 +113,7 @@ function printHelp(): void {
     `    ${pc.cyan("backup")}     Snapshots and checkpoints (now/list/show/pin/restore)`,
   );
   console.log(
-    `    ${pc.cyan("mesh")}       Device credentials (list/revoke/rotate/scopes)`,
+    `    ${pc.cyan("mesh")}       Device credentials + command audit (list/revoke/rotate/scopes/audit)`,
   );
   console.log(`    ${pc.cyan("config")}     View/edit configuration`);
   console.log(

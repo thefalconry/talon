@@ -107,6 +107,21 @@ talon mesh scopes <device> <list>  # e.g. device,client — drops live sessions 
 `<device>` is a device id, a name the registry knows, or a credential id.
 The `remove_device` tool also revokes the device's credentials.
 
+### Command audit
+
+Every command the daemon sends to a device is recorded in
+`~/.talon/data/mesh-audit.jsonl` (0600): the time, the issuing chat, turn
+and sender when a turn sent it, the target device, the command name, the
+SHA-256 of its canonical arguments (never the arguments themselves), whether
+it succeeded (with a one-line reason when it did not), and how long it took.
+The file rotates to `mesh-audit.jsonl.1` at 1 MiB, so the pair stays
+bounded. A failing audit write is logged and never stops a command.
+
+```sh
+talon mesh audit                          # the last 50 commands, oldest first
+talon mesh audit --limit 200 --device pixel
+```
+
 ## Migrating off the shared token
 
 1. Update the daemon. `native.legacySharedToken` defaults to `true`: remote

@@ -205,6 +205,22 @@ const ROUTES: readonly GatewayRoute[] = [
     },
   },
   {
+    // The mesh command audit — the transport for `talon mesh audit`.
+    // Prefix match: the query (?limit=&device=) follows the path.
+    method: "GET",
+    path: "/mesh/audit",
+    match: "prefix",
+    handle: async ({ res, url }) => {
+      const limit = Number(url.searchParams.get("limit") ?? "");
+      const device = url.searchParams.get("device") ?? "";
+      const entries = await getMeshService().readAudit({
+        ...(Number.isInteger(limit) && limit > 0 ? { limit } : {}),
+        ...(device ? { device } : {}),
+      });
+      sendJson(res, 200, { ok: true, entries });
+    },
+  },
+  {
     // MCP hub — daemon-hosted MCP-over-HTTP endpoints for every backend
     // (see core/mcp-hub).
     method: "ANY",
