@@ -420,7 +420,7 @@ describe("bridge mesh routes", () => {
     ["acceptFileUpload", "acceptFileUpload", ["tok", {}, "phone"]],
     ["openFileDownload", "openFileDownload", ["tok", "phone"]],
     ["openCompanionPair", "openCompanionPair", ["tok", "png"]],
-    ["openNodeInstall", "openNodeInstall", ["tok"]],
+    ["openNodeInstall", "openNodeInstall", ["tok", "linux", "arm64"]],
     ["openNodeBinary", "openNodeBinary", ["tok"]],
   ];
 

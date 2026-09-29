@@ -5,8 +5,10 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  autoInstallOneLiners,
   checkBridgeUrl,
   installOneLiner,
+  installRefusalScript,
   NodeProvisionStore,
 } from "../core/mesh/links/node-provision.js";
 
@@ -244,5 +246,75 @@ describe("installer escaping (defence in depth)", () => {
     const grant = store.create({ ...BASE, name: 'a"$(b)`c`' });
     expect(grant.name).toBe("abc");
     expect(store.openScript(grant.token)!.script).toContain('--name "abc"');
+  });
+});
+
+describe("auto grants", () => {
+  const { goos, goarch, binaryPath, sha256, size, version, ...common } = BASE;
+  const target = { goos, goarch, binaryPath, sha256, size, version };
+
+  it("serve nothing until pinned, then behave like an ordinary grant", () => {
+    const store = new NodeProvisionStore();
+    const pending = store.createAuto(common);
+    expect(store.isPending(pending.token)).toBe(true);
+    expect(store.openScript(pending.token)).toBeNull();
+    expect(store.openBinary(pending.token)).toBeNull();
+
+    expect(store.pin(pending.token, target)).toBe(true);
+    expect(store.isPending(pending.token)).toBe(false);
+    expect(store.pin(pending.token, target)).toBe(false);
+    expect(store.openScript(pending.token)?.script).toContain(sha256);
+    expect(store.openBinary(pending.token)).toEqual({ path: binaryPath, size });
+  });
+
+  it("expire unclaimed like any other grant", () => {
+    const store = new NodeProvisionStore(-1);
+    const pending = store.createAuto(common);
+    expect(store.isPending(pending.token)).toBe(false);
+    expect(store.pin(pending.token, target)).toBe(false);
+  });
+
+  it("sanitize the device name", () => {
+    const store = new NodeProvisionStore();
+    const pending = store.createAuto({ ...common, name: 'x"; reboot #' });
+    expect(pending.name).toBe("x reboot ");
+  });
+
+  it("report the platform through pinned fetches", () => {
+    const cmd = autoInstallOneLiners({
+      bridgeUrl: BASE.bridgeUrl,
+      token: "T",
+      fingerprint: BASE.fingerprint,
+      spkiPin: PIN,
+    });
+    expect(cmd.posix).toBe(
+      `curl -fsSk --pinnedpubkey "sha256//${PIN}" "${BASE.bridgeUrl}/node/install?provision=T&os=$(uname -s)&arch=$(uname -m)" | sh`,
+    );
+    expect(cmd.windows).toContain(`[TalonPin]::Pin = '${DASHED}'`);
+    expect(cmd.windows).toContain(
+      `iex ([TalonPin]::Get('${BASE.bridgeUrl}/node/install?provision=T&os=windows&arch=' + $env:PROCESSOR_ARCHITECTURE))`,
+    );
+    expect(cmd.windows).not.toContain("{$true}");
+  });
+
+  it("fall back to unpinned fetches over plain HTTP", () => {
+    const cmd = autoInstallOneLiners({
+      bridgeUrl: "http://100.64.0.7:19880",
+      token: "T",
+    });
+    expect(cmd.posix).toBe(
+      `curl -fsSk "http://100.64.0.7:19880/node/install?provision=T&os=$(uname -s)&arch=$(uname -m)" | sh`,
+    );
+    expect(cmd.windows).toContain(
+      "&os=windows&arch=' + $env:PROCESSOR_ARCHITECTURE",
+    );
+  });
+
+  it("refusal scripts can't be broken out of", () => {
+    const script = installRefusalScript('bad "os" $(rm -rf /) `x` \\ 50% end');
+    const [line, rest] = script.split("\n", 2) as [string, string];
+    expect(line.startsWith('echo "talon-node install refused: bad')).toBe(true);
+    expect(line.slice('echo "'.length, -1)).not.toMatch(/["'`$\\%]/);
+    expect(rest).toBe("exit 1");
   });
 });

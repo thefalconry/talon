@@ -235,12 +235,20 @@ export const meshTools: ToolDefinition[] = [
   {
     name: "make_node_install_link",
     description:
-      "Mint a single-use install link served by this daemon's bridge and return the one command that attaches a fresh Linux/macOS/Windows host to the mesh as a headless talon-node. Running it on the host downloads the installer script and binary from the bridge (sha256-verified), installs talon-node, pre-pins the bridge TLS certificate, embeds the bearer token, and registers a boot service — no toolchain, package manager, or manual config on the host. The link expires in 30 minutes and each leg serves exactly once; the host only needs to reach the bridge URL. Requires the native bridge running on a non-loopback bind with a token.",
+      "Mint a single-use install link served by this daemon's bridge and return the one command that attaches a fresh Linux/macOS/Windows host to the mesh as a headless talon-node. Running it on the host downloads the installer script and binary from the bridge (sha256-verified), installs talon-node, pre-pins the bridge TLS certificate, embeds the bearer token, and registers a boot service — no toolchain, package manager, or manual config on the host. Omit os and arch when you don't know the host: you get a POSIX and a PowerShell command, and whichever runs reports its own platform so the bridge picks the right binary. The link expires in 30 minutes and each leg serves exactly once; the host only needs to reach the bridge URL. Requires the native bridge running on a non-loopback bind with a token.",
     schema: {
-      os: z.string().describe("Host OS: linux, macos/darwin, or windows."),
+      os: z
+        .string()
+        .optional()
+        .describe(
+          "Host OS: linux, macos/darwin, or windows. Omit (with arch) to auto-detect on the host.",
+        ),
       arch: z
         .string()
-        .describe("Host arch: amd64/x86_64, arm64/aarch64, or arm."),
+        .optional()
+        .describe(
+          "Host arch: amd64/x86_64, arm64/aarch64, or arm. Omit (with os) to auto-detect on the host.",
+        ),
       name: z
         .string()
         .optional()
@@ -251,7 +259,7 @@ export const meshTools: ToolDefinition[] = [
         .string()
         .optional()
         .describe(
-          "Bridge base URL as reachable FROM the new host (e.g. https://100.64.0.7:19880). Default: derived from the bridge bind (wildcard binds use this host's first external IPv4).",
+          "Bridge base URL as reachable FROM the new host (e.g. https://100.64.0.7:19880). Default: native.publicUrl when set, else derived from the bridge bind (wildcard binds use this host's first external IPv4).",
         ),
     },
     execute: (params, bridge) => bridge("make_node_install_link", params),

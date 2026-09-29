@@ -877,8 +877,12 @@ export class MeshService {
   }
 
   /** GET /node/install — serve a grant's installer script (single-use). */
-  openNodeInstall(token: string): { script: string; filename: string } | null {
-    return this.links.openNodeInstall(token);
+  openNodeInstall(
+    token: string,
+    os?: string | null,
+    arch?: string | null,
+  ): Promise<{ script: string; filename: string } | null> {
+    return this.links.openNodeInstall(token, os, arch);
   }
 
   /** GET /node/binary — serve a grant's binary (single-use). */
