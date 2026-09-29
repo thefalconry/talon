@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical mesh/device wire samples for Bridge Protocol v1: registration bodies, device/location shapes, the full device_command surface with canonical params, and command-result shapes. Asserted by all three implementations — the daemon validates registrations/locations through its real normalizers (protocol-conformance.test.ts), talon-node executes the `run: true` commands through its real dispatch and asserts capability parity (protocol_conformance_test.go), and the companion asserts capability parity and runs the DeviceExec subset (protocol_conformance_test.dart). `{{TMP}}` in params is replaced by each executor test with a sandbox directory it seeds from `sandboxFiles`. `dataKeys` lists result-data keys BOTH device implementations must produce for that command — the daemon's tools read these names.",
+  "_comment": "Canonical mesh/device wire samples for Bridge Protocol v1: registration bodies, device/location shapes, the full device_command surface with canonical params, and command-result shapes. Asserted by all three implementations — the daemon validates registrations/locations through its real normalizers (protocol-conformance.test.ts), talon-node executes the `run: true` commands through its real dispatch and asserts capability parity (protocol_conformance_test.go), and the companion asserts capability parity and runs the DeviceExec subset (protocol_conformance_test.dart). `{{TMP}}` in params is replaced by each executor test with a sandbox directory it seeds from `sandboxFiles`. `dataKeys` lists result-data keys BOTH device implementations must produce for that command — the daemon's tools read these names. `transfer: true` marks the streamed transfer commands: each suite serves `transferBody` for the push token and accepts the pull upload on a fake /devices/file, then checks the `sha256` both ways (the push param is the body's digest; the device reports the digest of what it moved).",
   "protocol": 1,
   "nodeCapabilities": [
     "ring",
@@ -110,6 +110,7 @@
     "ok": false,
     "message": "No such file: /tmp/missing"
   },
+  "transferBody": "conformance\n",
   "sandboxFiles": {
     "read.txt": "conformance\n",
     "delete-me.txt": "x",
@@ -233,8 +234,9 @@
     },
     {
       "run": false,
+      "transfer": true,
       "expectOk": true,
-      "dataKeys": ["bytes"],
+      "dataKeys": ["bytes", "sha256"],
       "command": {
         "id": "cmd_upload",
         "deviceId": "dev_node01",
@@ -244,13 +246,18 @@
     },
     {
       "run": false,
+      "transfer": true,
       "expectOk": true,
-      "dataKeys": ["bytesWritten"],
+      "dataKeys": ["bytesWritten", "sha256"],
       "command": {
         "id": "cmd_download",
         "deviceId": "dev_node01",
         "name": "download_file",
-        "params": { "token": "tok_dn01", "path": "{{TMP}}/downloaded.bin" }
+        "params": {
+          "token": "tok_dn01",
+          "path": "{{TMP}}/downloaded.bin",
+          "sha256": "9bb41e341b9f9e0e4e8c3deb379b31336352fe6b266b54d324e39a7aa956de8a"
+        }
       }
     },
     {

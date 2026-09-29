@@ -15,10 +15,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
+import { logDebug } from "../../../util/log.js";
 import { dirs } from "../../../util/paths.js";
 import {
   formatBytes,
@@ -202,7 +203,7 @@ export class DeviceFiles {
     // is normally already resolved — the grace window only catches a device
     // that claims success without having streamed anything.
     try {
-      const bytes = await Promise.race([
+      const receipt = await Promise.race([
         done,
         new Promise<never>((_, rej) =>
           setTimeout(
@@ -216,11 +217,81 @@ export class DeviceFiles {
           ).unref?.(),
         ),
       ]);
-      return { bytes };
+      // The device hashed what it sent; the store hashed what arrived.
+      const mismatch = digestMismatch(
+        dispatched.result,
+        receipt.sha256,
+        `pull of ${remote} from ${target.name}`,
+      );
+      if (mismatch) {
+        await rm(dest, { force: true }).catch(() => {});
+        return {
+          error: `Integrity check failed pulling ${remote} from ${target.name}: ${mismatch}. The received copy was discarded.`,
+        };
+      }
+      return { bytes: receipt.bytes };
     } catch (err) {
       this.transfers.cancel(token);
       return { error: (err as Error).message };
     }
+  }
+
+  /**
+   * Streamed daemon→device transfer: one command round trip, the body as a
+   * single raw HTTP response. The source's SHA-256 rides along so the device
+   * can refuse to rename a corrupted temp file into place; its reported
+   * digest is checked here too.
+   */
+  private async pushViaStream(
+    target: DeviceInfo,
+    local: string,
+    remote: string,
+  ): Promise<MeshToolResult> {
+    const started = Date.now();
+    // Hashing the source also sizes the budget (a local read, not a mesh
+    // round trip). A source we cannot read still gets a bounded, looser
+    // budget and no digest — this decides a timeout, not whether the
+    // transfer may start.
+    const source = await hashFile(local).catch(() => undefined);
+    const { token } = this.transfers.createPush(target.id, local);
+    const dispatched = await this.host.dispatchCommand(
+      target.id,
+      "download_file",
+      { token, path: remote, ...(source && { sha256: source.sha256 }) },
+      streamTransferTimeoutMs(source?.size),
+    );
+    if ("error" in dispatched) {
+      this.transfers.cancel(token);
+      return { ok: false, text: dispatched.error };
+    }
+    if (!dispatched.result.ok) {
+      this.transfers.cancel(token);
+      return {
+        ok: false,
+        text:
+          dispatched.result.message ??
+          `${target.name} could not download ${local}.`,
+      };
+    }
+    const mismatch =
+      source &&
+      digestMismatch(
+        dispatched.result,
+        source.sha256,
+        `push of ${local} to ${target.name}`,
+      );
+    if (mismatch) {
+      return {
+        ok: false,
+        text: `Integrity check failed pushing ${local} to ${remote} on ${target.name}: ${mismatch}.`,
+      };
+    }
+    const bytes = dispatched.result.data?.bytesWritten;
+    const size = typeof bytes === "number" ? bytes : 0;
+    return {
+      ok: true,
+      text: `Pushed ${formatBytes(size)} to ${remote} on ${target.name} (streamed, ${transferRate(size, started)})`,
+    };
   }
 
   /**
@@ -381,40 +452,7 @@ export class DeviceFiles {
     if ("error" in resolved) return { ok: false, text: resolved.error };
     const target = resolved.target;
     if (this.canStream(target, "download_file")) {
-      const started = Date.now();
-      // The source is on this host, so sizing the budget costs a local stat
-      // rather than a mesh round trip. A source we cannot stat still gets a
-      // bounded (if looser) budget — this decides a timeout, not whether
-      // the transfer is allowed to start.
-      const localSize = await stat(local)
-        .then((s) => s.size)
-        .catch(() => undefined);
-      const { token } = this.transfers.createPush(target.id, local);
-      const dispatched = await this.host.dispatchCommand(
-        target.id,
-        "download_file",
-        { token, path: remote },
-        streamTransferTimeoutMs(localSize),
-      );
-      if ("error" in dispatched) {
-        this.transfers.cancel(token);
-        return { ok: false, text: dispatched.error };
-      }
-      if (!dispatched.result.ok) {
-        this.transfers.cancel(token);
-        return {
-          ok: false,
-          text:
-            dispatched.result.message ??
-            `${target.name} could not download ${local}.`,
-        };
-      }
-      const bytes = dispatched.result.data?.bytesWritten;
-      const size = typeof bytes === "number" ? bytes : 0;
-      return {
-        ok: true,
-        text: `Pushed ${formatBytes(size)} to ${remote} on ${target.name} (streamed, ${transferRate(size, started)})`,
-      };
+      return this.pushViaStream(target, local, remote);
     }
     let data: Buffer;
     try {
@@ -736,6 +774,29 @@ export class DeviceFiles {
     } while (offset < data.length);
     return { bytes: data.length, deviceName };
   }
+}
+
+/**
+ * Compare the SHA-256 a device reported for a streamed transfer with the one
+ * the daemon holds. Returns a description of a mismatch, or null when they
+ * agree. A device build that predates transfer digests reports none; the
+ * check is then skipped (with a debug line), never failed.
+ */
+function digestMismatch(
+  result: DeviceCommandResult,
+  expected: string,
+  what: string,
+): string | null {
+  const reported = result.data?.sha256;
+  if (typeof reported !== "string" || !reported) {
+    logDebug(
+      "mesh",
+      `${what}: device reported no sha256 (older build) — skipping the integrity check`,
+    );
+    return null;
+  }
+  if (reported.toLowerCase() === expected.toLowerCase()) return null;
+  return `the device reported sha256 ${reported}, the daemon has ${expected}`;
 }
 
 /** "12.4 MB/s in 3.2s" — observability for streamed transfers. */

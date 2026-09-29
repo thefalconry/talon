@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,7 +62,33 @@ describe("TransferStore.cancel", () => {
     body.end(Buffer.alloc(4096, 3));
     expect(await upload).toEqual({ ok: true, bytes: 4096 });
     store.cancel(token);
-    expect(await done).toBe(4096);
+    expect(await done).toEqual({
+      bytes: 4096,
+      sha256: createHash("sha256").update(Buffer.alloc(4096, 3)).digest("hex"),
+    });
     expect(await readdir(dir)).toEqual(["out.bin"]);
+  });
+});
+
+describe("TransferStore pull digest", () => {
+  it("hashes the body as it streams, across chunks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "talon-mesh-transfer-"));
+    const store = new TransferStore();
+    const { token, done } = store.createPull("phone", join(dir, "out.bin"));
+    const body = new PassThrough();
+    const upload = store.acceptUpload(token, body, "phone");
+    const parts = [
+      Buffer.alloc(70_000, 1),
+      Buffer.alloc(3, 2),
+      Buffer.from("tail"),
+    ];
+    for (const p of parts) body.write(p);
+    body.end();
+    await upload;
+    const whole = Buffer.concat(parts);
+    expect(await done).toEqual({
+      bytes: whole.length,
+      sha256: createHash("sha256").update(whole).digest("hex"),
+    });
   });
 });

@@ -58,6 +58,14 @@ instead of shipping a silent misrender or a device command that times out.
   built by `upgradeRequestBody`, and every register/upgrade reply parses
   through the node's real decoders (unknown credential actions ignored).
 
+The streamed transfer samples (`transfer: true`: `upload_file`,
+`download_file`) carry payload digests. The daemon sends the body's `sha256`
+with a push and checks the `sha256` a device reports for a pull. The node
+and companion suites run both samples against a fake `/devices/file` serving
+`transferBody` and check both digests. The daemon suite checks the params it
+sends. The digests are additive: a device that reports none is not checked,
+and a push without one is written unverified, as before.
+
 ## The agent-host protocol
 
 The Claude Agent SDK is moving into its own process
