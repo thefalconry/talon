@@ -119,7 +119,19 @@ export function buildBridgeHandlers(
       // which `runTurn` sets synchronously, so even a rapid second /send from
       // any client is caught here rather than starting a concurrent turn.
       if (isBusy(runtime, entry.id)) {
-        setQueued(runtime, entry.id, { text, attachments });
+        const existing = runtime.queuedByChat.get(entry.id);
+        if (existing) {
+          const combinedText = [existing.text.trim(), text.trim()]
+            .filter(Boolean)
+            .join("\n\n");
+          const combinedAttachments = [...existing.attachments, ...attachments];
+          setQueued(runtime, entry.id, {
+            text: combinedText,
+            attachments: combinedAttachments,
+          });
+        } else {
+          setQueued(runtime, entry.id, { text, attachments });
+        }
         return;
       }
       startTurn(runtime, entry, text, { attachments });

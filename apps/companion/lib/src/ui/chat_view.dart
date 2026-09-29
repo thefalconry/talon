@@ -76,6 +76,7 @@ class _ChatViewState extends State<ChatView> {
   /// message (like any chat app), not the top of the scrollback.
   String? _anchoredChatId;
   bool _pendingJumpToBottom = false;
+  int _settleToken = 0;
 
   /// Whether the user has scrolled up into history far enough that a
   /// jump-to-latest affordance is useful.
@@ -237,17 +238,28 @@ class _ChatViewState extends State<ChatView> {
     if (chatId != _anchoredChatId) {
       _anchoredChatId = chatId;
       _pendingJumpToBottom = true;
+      _settleToken++;
     }
+    final token = _settleToken;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      final pos = _scroll.position;
+      if (!mounted || !_scroll.hasClients) return;
       if (_pendingJumpToBottom) {
-        _scroll.jumpTo(pos.maxScrollExtent);
-        // Only consider it settled once there's something to anchor to, so an
-        // async history load right after the switch still snaps to newest.
-        if (messageCount > 0) _pendingJumpToBottom = false;
+        void settle(int retry) {
+          if (!mounted || !_scroll.hasClients || _settleToken != token) return;
+          final p = _scroll.position;
+          if (p.pixels < p.maxScrollExtent && retry < 12) {
+            _scroll.jumpTo(p.maxScrollExtent);
+            WidgetsBinding.instance
+                .addPostFrameCallback((_) => settle(retry + 1));
+          } else {
+            if (messageCount > 0) _pendingJumpToBottom = false;
+          }
+        }
+
+        settle(0);
         return;
       }
+      final pos = _scroll.position;
       // Otherwise follow live growth only when the user is already near the
       // bottom, so we never yank them up while they're reading scrollback.
       if (pos.maxScrollExtent - pos.pixels < 260) {
@@ -294,7 +306,11 @@ class _ChatViewState extends State<ChatView> {
                     children: [
                       _QueuedBar(state: widget.state, chatId: chat.id),
                       Composer(
-                        onSend: widget.state.sendMessage,
+                        onSend: (text) {
+                          _pendingJumpToBottom = true;
+                          _settleToken++;
+                          return widget.state.sendMessage(text);
+                        },
                         attachments: _attachments,
                         enabled: widget.state.conn == ConnState.connected,
                         running: widget.state.isTurnRunning(chat.id),
@@ -401,7 +417,11 @@ class _ChatViewState extends State<ChatView> {
     if (msgs.isEmpty && !showActivity) {
       return _ConversationEmpty(
         onPrompt: widget.state.conn == ConnState.connected
-            ? (p) => widget.state.sendMessage(p)
+            ? (p) {
+                _pendingJumpToBottom = true;
+                _settleToken++;
+                return widget.state.sendMessage(p);
+              }
             : null,
       );
     }
@@ -893,10 +913,17 @@ class _ChatMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      icon: Icon(Icons.more_vert,
-          size: TalonDensity.d(20, 24), color: TalonColors.textDim),
+      icon: Icon(Icons.menu,
+          size: TalonDensity.d(20, 24), color: TalonColors.accent),
+      tooltip: 'Conversation menu',
       iconSize: TalonDensity.d(20, 24),
       color: TalonColors.surfaceHi,
+      surfaceTintColor: Colors.transparent,
+      elevation: 6,
+      shape: RoundedRectangleBorder(
+        borderRadius: TalonRadius.rMd,
+        side: BorderSide(color: TalonColors.glassStroke),
+      ),
       onSelected: (v) async {
         switch (v) {
           case 'reset':
@@ -953,9 +980,10 @@ class _MenuRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = danger ? TalonColors.bad : TalonColors.text;
+    final iconColor = danger ? TalonColors.bad : TalonColors.accent;
     return Row(
       children: [
-        Icon(icon, size: 17, color: color),
+        Icon(icon, size: 17, color: iconColor),
         const SizedBox(width: 10),
         Text(label, style: TextStyle(color: color, fontSize: 13.5)),
       ],

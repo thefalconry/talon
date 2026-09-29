@@ -72,13 +72,14 @@ class TalonPalette {
     required Color accent,
     required Color accent2,
     required Color accentDeep,
+    Color? surfaceHi,
   }) =>
       TalonPalette(
         brightness: brightness,
         void0: void0,
         void1: void1,
         surface: surface,
-        surfaceHi: surfaceHi,
+        surfaceHi: surfaceHi ?? this.surfaceHi,
         glassFill: glassFill,
         glassStroke: glassStroke,
         accent: accent,
@@ -192,10 +193,15 @@ class TalonAccents {
     final aHsl = HSLColor.fromColor(accent);
     final accentDeep =
         aHsl.withLightness((aHsl.lightness - 0.12).clamp(0.14, 1.0)).toColor();
+    final surfaceHi = Color.alphaBlend(
+      accent.withValues(alpha: dark ? 0.08 : 0.06),
+      dark ? const Color(0xFF141522) : const Color(0xFFF2F4FB),
+    );
     return base.copyWithAccent(
       accent: accent,
       accent2: accent2,
       accentDeep: accentDeep,
+      surfaceHi: surfaceHi,
     );
   }
 }
@@ -597,6 +603,20 @@ ThemeData buildTalonTheme() {
           WidgetStatePropertyAll(TalonColors.text.withValues(alpha: 0.12)),
       thickness: const WidgetStatePropertyAll(6),
       radius: const Radius.circular(8),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: TalonColors.surfaceHi,
+      surfaceTintColor: Colors.transparent,
+      elevation: 6,
+      shape: RoundedRectangleBorder(
+        borderRadius: TalonRadius.rMd,
+        side: BorderSide(color: TalonColors.glassStroke),
+      ),
+      textStyle: TextStyle(
+        color: TalonColors.text,
+        fontSize: 13.5,
+        fontFamily: _fontFamily,
+      ),
     ),
     // Material 3's default selected-track has no outline and a thumb that
     // can end up the same color as the track (see settings_screen.dart's

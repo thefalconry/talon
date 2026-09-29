@@ -167,4 +167,33 @@ describe("native chat wire projection", () => {
       chat: { id: entry.id, queued: undefined },
     });
   });
+
+  it("combines multiple queued messages without voiding earlier ones", () => {
+    const entry = runtime.chats.create();
+    const a1 = attachment("/uploads/1.png");
+    const a2 = attachment("/uploads/2.png");
+    setQueued(runtime, entry.id, { text: "first queued", attachments: [a1] });
+    const existing = runtime.queuedByChat.get(entry.id)!;
+    setQueued(runtime, entry.id, {
+      text: [existing.text.trim(), "second queued".trim()]
+        .filter(Boolean)
+        .join("\n\n"),
+      attachments: [...existing.attachments, a2],
+    });
+    expect(runtime.queuedByChat.get(entry.id)).toEqual({
+      text: "first queued\n\nsecond queued",
+      attachments: [a1, a2],
+    });
+    expect(events.at(-1)).toMatchObject({
+      kind: "chat_updated",
+      chat: {
+        id: entry.id,
+        queued: {
+          text: "first queued\n\nsecond queued",
+          hasAttachment: true,
+          attachmentCount: 2,
+        },
+      },
+    });
+  });
 });
