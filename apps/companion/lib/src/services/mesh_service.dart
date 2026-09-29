@@ -15,6 +15,7 @@ import 'bridge_client.dart';
 import 'command_wake_lock.dart';
 import 'device_exec.dart';
 import 'log.dart';
+import 'mesh_audit.dart';
 import 'prefs.dart';
 import 'sandbox.dart';
 
@@ -128,6 +129,7 @@ class MeshService {
   final MeshSystemInfoProvider _systemInfoProvider;
   final MeshRegisteredCallback? _onRegistered;
   final CommandApprover? _approver;
+  final MeshAudit _audit;
 
   StreamSubscription<Map<String, dynamic>>? _events;
   Timer? _heartbeat;
@@ -147,7 +149,9 @@ class MeshService {
     DeviceExec? deviceExec,
     MeshRegisteredCallback? onRegistered,
     CommandApprover? approver,
+    MeshAudit? audit,
   }) : _approver = approver,
+       _audit = audit ?? MeshAudit(),
        _locationProvider = locationProvider ?? _defaultLocation,
        _batteryProvider = batteryProvider ?? _defaultBattery,
        _nameProvider = nameProvider ?? _defaultName,
@@ -369,6 +373,7 @@ class MeshService {
     final params = event['params'] is Map
         ? (event['params'] as Map).cast<String, dynamic>()
         : <String, dynamic>{};
+    final clock = Stopwatch()..start();
 
     var ok = false;
     String? message;
@@ -487,6 +492,7 @@ class MeshService {
       AppLog.warn('mesh', 'device_command "$name" failed', e);
     }
 
+    final elapsed = clock.elapsed;
     try {
       await client.postCommandResult({
         'commandId': id,
@@ -498,6 +504,22 @@ class MeshService {
     } catch (e) {
       AppLog.warn('mesh', 'command result post failed', e);
     }
+    // After the answer is sent, and never awaited: the audit can neither
+    // delay nor fail a command (record() swallows its own errors).
+    unawaited(
+      _audit.record(
+        MeshAudit.entryFor(
+          commandId: id,
+          name: name,
+          params: params,
+          ok: ok,
+          message: message,
+          data: data,
+          elapsed: elapsed,
+          token: client.config.token,
+        ),
+      ),
+    );
   }
 
   Future<String?> _defaultApprover(String command) =>
