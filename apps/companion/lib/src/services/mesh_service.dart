@@ -153,8 +153,9 @@ class MeshService {
     MeshAudit? audit,
   }) : _approver = approver,
        _audit = audit ?? MeshAudit(),
+       // A function literal in an initializer list must be parenthesized.
        _locationProvider = locationProvider != null
-           ? ({bool live = false}) => locationProvider()
+           ? (({bool live = false}) => locationProvider())
            : _defaultLocation,
        _batteryProvider = batteryProvider ?? _defaultBattery,
        _nameProvider = nameProvider ?? _defaultName,

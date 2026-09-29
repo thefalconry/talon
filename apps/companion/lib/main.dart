@@ -1,5 +1,6 @@
 import 'dart:async';
-import 'dart:io' show Platform, ProcessSignal, exit;
+import 'dart:io' show ProcessSignal, exit;
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import 'src/services/connection_vault.dart';
 import 'src/services/dynamic_accent.dart';
 import 'src/services/haptics.dart';
 import 'src/services/linux_theme.dart';
+import 'src/services/log.dart';
 import 'src/services/mesh_background.dart';
 import 'src/services/message_notifications.dart';
 import 'src/services/prefs.dart';

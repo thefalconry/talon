@@ -306,10 +306,11 @@ class _ChatViewState extends State<ChatView> {
                     children: [
                       _QueuedBar(state: widget.state, chatId: chat.id),
                       Composer(
-                        onSend: (text) {
+                        onSend: (text, {attachments = const []}) {
                           _pendingJumpToBottom = true;
                           _settleToken++;
-                          return widget.state.sendMessage(text);
+                          return widget.state
+                              .sendMessage(text, attachments: attachments);
                         },
                         attachments: _attachments,
                         enabled: widget.state.conn == ConnState.connected,
@@ -420,7 +421,7 @@ class _ChatViewState extends State<ChatView> {
             ? (p) {
                 _pendingJumpToBottom = true;
                 _settleToken++;
-                return widget.state.sendMessage(p);
+                widget.state.sendMessage(p);
               }
             : null,
       );

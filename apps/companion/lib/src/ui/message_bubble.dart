@@ -723,7 +723,7 @@ void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved)
           AttachmentOpener.instance
               .openLocal(saved.file, saved.mimeType)
               .catchError((Object e) {
-            messenger?.showSnackBar(SnackBar(content: Text('$e')));
+            messenger.showSnackBar(SnackBar(content: Text('$e')));
           });
         },
       ),
