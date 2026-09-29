@@ -223,6 +223,15 @@ class ConnectionConfig {
         launchArgs: launchArgs ?? this.launchArgs,
       );
 
+  /// The [toJson] keys that are credentials: the bridge token (shared or
+  /// per-device) and the client certificate with its password. `Prefs`
+  /// keeps these in the OS keystore, apart from the rest of the profile.
+  static const Set<String> secretKeys = {
+    'token',
+    'clientP12',
+    'clientP12Password',
+  };
+
   Map<String, dynamic> toJson() => {
         'host': host,
         'port': port,
