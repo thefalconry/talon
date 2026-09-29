@@ -2003,7 +2003,7 @@ class AppState extends ChangeNotifier {
     _sub = null;
     _client?.dispose();
     _client = null;
-    _setConn(ConnState.disconnected, null);
+    _setConn(ConnState.idle, null);
     AppLog.info('app_state', 'UI stream paused for background battery savings');
   }
 
