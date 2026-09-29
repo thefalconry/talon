@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:talon_companion/src/models/bridge_models.dart';
+import 'package:talon_companion/src/services/attachment_opener.dart';
 import 'package:talon_companion/src/state/composer_attachments.dart';
 import 'package:talon_companion/src/theme.dart';
 import 'package:talon_companion/src/ui/composer.dart';
@@ -405,6 +406,69 @@ void main() {
       expect(find.text('shot.png'), findsNothing);
     });
 
+    testWidgets('tapping a chip opens it with the auth header', (tester) async {
+      final fake = _RecordingOpener();
+      AttachmentOpener.instance = fake;
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm3',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        mediaHeaders: const {'Authorization': 'Bearer secret'},
+        files: const [
+          BubbleFile(
+            name: 'logs.zip',
+            sizeLabel: '1.0 MB',
+            mimeType: 'application/zip',
+            url: 'http://host/media?id=logs',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('logs.zip'));
+      await tester.pump();
+
+      expect(fake.calls, hasLength(1));
+      final call = fake.calls.single;
+      expect(call.url, 'http://host/media?id=logs');
+      expect(call.url, isNot(contains('token')));
+      expect(call.headers, {'Authorization': 'Bearer secret'});
+      expect(call.mimeType, 'application/zip');
+    });
+
+    testWidgets('a failed open says so', (tester) async {
+      AttachmentOpener.instance = _RecordingOpener(fail: true);
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm4',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        files: const [
+          BubbleFile(
+            name: 'x.bin',
+            sizeLabel: '',
+            mimeType: 'application/octet-stream',
+            url: 'http://host/media?id=x',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('x.bin'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining("Couldn't open x.bin"), findsOneWidget);
+    });
+
     testWidgets('parses attachments off the wire', (tester) async {
       final m = ClientMessage.fromJson({
         'id': '7',
@@ -443,6 +507,41 @@ void main() {
       expect(snap.attachments.map((a) => a.name), ['a.png', 'b.zip']);
     });
 
+    test('a /media link is always fetched from the connected bridge', () {
+      const base = 'http://host:8080';
+      // The connected bridge's own media endpoint.
+      expect(
+          MessageBubble.bridgeMediaUrl(
+              'http://host:8080/media?id=mmuk3t31w', base),
+          'http://host:8080/media?id=mmuk3t31w');
+      // The daemon's public hostname while we're connected over LAN: the id
+      // is re-pointed at our bridge, so the header never leaves our origin.
+      expect(
+          MessageBubble.bridgeMediaUrl(
+              'https://talon.example.in/media?id=mmuk3t337', base),
+          'http://host:8080/media?id=mmuk3t337');
+      // A legacy token in the link is dropped, not forwarded.
+      expect(
+          MessageBubble.bridgeMediaUrl(
+              'https://other/media?id=a%2Fb&token=secret', base),
+          'http://host:8080/media?id=a%2Fb');
+      // A trailing slash on the base doesn't double up.
+      expect(
+          MessageBubble.bridgeMediaUrl('http://x/media?id=q', '$base/'),
+          'http://host:8080/media?id=q');
+      // Not a media link: other path, no id, non-http scheme.
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/other', base),
+          isNull);
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/media', base),
+          isNull);
+      expect(MessageBubble.bridgeMediaUrl('ftp://host/media?id=q', base),
+          isNull);
+      // No configured bridge base: nothing is ever treated as in-app.
+      expect(
+          MessageBubble.bridgeMediaUrl('http://host:8080/media?id=q', ''),
+          isNull);
+    });
+
     testWidgets('a text-only message renders no chips', (tester) async {
       await tester.pumpWidget(host(MessageBubble(
         message: ClientMessage(
@@ -458,4 +557,29 @@ void main() {
       expect(find.byIcon(Icons.open_in_new_rounded), findsNothing);
     });
   });
+}
+
+class _OpenCall {
+  final String url;
+  final String mimeType;
+  final Map<String, String> headers;
+  const _OpenCall(this.url, this.mimeType, this.headers);
+}
+
+class _RecordingOpener extends AttachmentOpener {
+  _RecordingOpener({this.fail = false});
+  final bool fail;
+  final calls = <_OpenCall>[];
+
+  @override
+  Future<File> open({
+    required String url,
+    required String name,
+    required String mimeType,
+    Map<String, String> headers = const {},
+  }) async {
+    calls.add(_OpenCall(url, mimeType, headers));
+    if (fail) throw const AttachmentException('No app could open it.');
+    return File(name);
+  }
 }

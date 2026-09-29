@@ -179,6 +179,22 @@ void main() {
       },
     );
 
+    test('authorises the stream with the header, never a URL token', () async {
+      final bridge = await MockBridge.start(token: 'secret');
+      addTearDown(bridge.close);
+      final client = BridgeClient(configFor(bridge, token: 'secret'))
+        ..meshDeviceId = 'dev-1';
+      addTearDown(client.dispose);
+
+      await client.connect();
+      await _waitFor(() => bridge.streamCount == 1);
+
+      final (uri, auth) = bridge.eventRequests.single;
+      expect(uri.queryParameters, {'deviceId': 'dev-1'});
+      expect(uri.toString(), isNot(contains('secret')));
+      expect(auth, 'Bearer secret');
+    });
+
     test('stream close surfaces an error', () async {
       final bridge = await MockBridge.start();
       addTearDown(bridge.close);

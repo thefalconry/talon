@@ -15,6 +15,7 @@ class MainActivity : FlutterFragmentActivity() {
     private var root: RootBridge? = null
     private var pair: PairBridge? = null
     private var update: UpdateBridge? = null
+    private var files: FileOpenBridge? = null
     private var voice: VoiceBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -59,6 +60,16 @@ class MainActivity : FlutterFragmentActivity() {
             MethodChannel(
                 flutterEngine.dartExecutor.binaryMessenger,
                 UpdateBridge.CHANNEL,
+            ),
+            applicationContext,
+        )
+
+        // Chat attachments: hand a file the app downloaded with its auth
+        // header to the app that handles its type (no token in any URL).
+        files = FileOpenBridge(
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                FileOpenBridge.CHANNEL,
             ),
             applicationContext,
         )
