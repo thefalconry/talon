@@ -603,6 +603,15 @@ class AppState extends ChangeNotifier {
     return MeshService.defaultApproval(prefs, name);
   }
 
+  /// Look at the certificate [candidate]'s bridge presents without sending
+  /// its token — the connect screen's first step for a hand-typed TLS host,
+  /// so the user can confirm the fingerprint before [applyConfig] hands the
+  /// token to it (and to the background mesh isolate).
+  Future<CertificateProbe> probeCertificate(ConnectionConfig candidate) {
+    AppLog.info('app_state', 'probing certificate at ${candidate.baseUrl}');
+    return BridgeClient.probeCertificate(candidate);
+  }
+
   /// Apply a new connection profile and reconnect from scratch.
   Future<void> applyConfig(ConnectionConfig next) async {
     config = next;

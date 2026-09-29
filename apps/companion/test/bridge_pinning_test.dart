@@ -117,4 +117,50 @@ void main() {
 
     BridgeTrust.pin(null); // leave no global state for other tests
   });
+
+  group('probeCertificate (manual-entry confirmation)', () {
+    test('reports the certificate without sending the token', () async {
+      final seen = <(String, String?)>[];
+      final context = SecurityContext()
+        ..useCertificateChain(certPath)
+        ..usePrivateKey(keyPath);
+      final server = await HttpServer.bindSecure('127.0.0.1', 0, context);
+      addTearDown(() => server.close(force: true));
+      server.listen((req) {
+        seen.add((
+          req.uri.toString(),
+          req.headers.value(HttpHeaders.authorizationHeader),
+        ));
+        req.response
+          ..headers.contentType = ContentType.json
+          ..write(jsonEncode({'app': 'talon-bridge', 'ok': true}));
+        req.response.close();
+      });
+
+      // A token and a stale pin on the profile: neither reaches the wire,
+      // and the stale pin does not stop the certificate being observed.
+      final probe = await BridgeClient.probeCertificate(
+        config(server.port, fingerprint: '00' * 32)
+            .copyWith(token: 'secret-token'),
+      );
+
+      expect(probe.fingerprint, fixtureFingerprint());
+      expect(probe.reached, isTrue);
+      expect(seen, [('/health', null)]);
+    });
+
+    test('nothing listening: no fingerprint, not reached', () async {
+      final socket = await ServerSocket.bind('127.0.0.1', 0);
+      final port = socket.port;
+      await socket.close();
+
+      final probe = await BridgeClient.probeCertificate(
+        config(port),
+        timeout: const Duration(seconds: 2),
+      );
+
+      expect(probe.fingerprint, isNull);
+      expect(probe.reached, isFalse);
+    });
+  });
 }

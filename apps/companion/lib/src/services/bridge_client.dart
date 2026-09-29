@@ -205,6 +205,38 @@ class BridgeClient {
     }
   }
 
+  /// Handshake with [config]'s bridge and report the certificate it
+  /// presents, without sending any credential: the token is dropped from
+  /// the probe's profile, and `/health` is the only request made. Any pin on
+  /// [config] is ignored too, so the certificate is always observed.
+  ///
+  /// The manual-entry path uses this to show the fingerprint for the user
+  /// to confirm before the token goes anywhere.
+  static Future<CertificateProbe> probeCertificate(
+    ConnectionConfig config, {
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    final probe = BridgeClient(
+      config.copyWith(clearToken: true, clearFingerprint: true),
+    );
+    try {
+      final h = await probe.health(timeout: timeout);
+      return CertificateProbe(
+        fingerprint: probe.seenFingerprint,
+        reached: h != null,
+      );
+    } on BridgeException {
+      // A proxy demanding a client certificate still answered; the connect
+      // that follows reports that properly.
+      return CertificateProbe(
+        fingerprint: probe.seenFingerprint,
+        reached: true,
+      );
+    } finally {
+      probe.dispose();
+    }
+  }
+
   // ── Per-device credentials ─────────────────────────────────────────────────
 
   /// `GET /auth/whoami` — which credential this connection uses and whether
@@ -789,6 +821,20 @@ class BridgeClient {
     _httpClient?.close();
     _events.close();
   }
+}
+
+/// What [BridgeClient.probeCertificate] saw.
+class CertificateProbe {
+  /// SHA-256 of the certificate the server presented, when the platform did
+  /// not already trust it (a bridge's own self-signed certificate). Null
+  /// for a certificate that chains to a trusted CA, or when no TLS
+  /// handshake happened at all.
+  final String? fingerprint;
+
+  /// Whether a Talon bridge (or a proxy in front of one) answered.
+  final bool reached;
+
+  const CertificateProbe({this.fingerprint, required this.reached});
 }
 
 class BridgeException implements Exception {
