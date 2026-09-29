@@ -13,6 +13,7 @@ import '../../services/log.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
 import '../connect_screen.dart';
+import '../shortcuts_help.dart';
 import 'settings_widgets.dart';
 
 class StatusCard extends StatelessWidget {
@@ -390,6 +391,33 @@ class ConnectionCard extends StatelessWidget {
                 child: const Text('Change'),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Help: access to keyboard navigation shortcuts and application help.
+class HelpCard extends StatelessWidget {
+  const HelpCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSection(
+      title: 'Help',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Keyboard navigation shortcuts and help.',
+            style: TextStyle(fontSize: 13, color: TalonColors.textDim),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => openShortcutsHelp(context),
+            icon: const Icon(Icons.keyboard_outlined, size: 16),
+            label: const Text('Keyboard shortcuts'),
           ),
         ],
       ),
