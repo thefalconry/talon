@@ -50,6 +50,19 @@ Developer account), so Gatekeeper warns on first launch. Either:
 The DMG art (`assets/dmg/`, rendered by `scripts/render-dmg-background.py`)
 and the volume icon are wired up in `.github/workflows/companion.yml`.
 
+## Installing (Windows)
+
+Grab `talon-companion-windows-setup.exe` from the latest release and run it —
+a standard installer that puts **Talon** under your user profile (no admin
+prompt) with Start-menu and optional desktop shortcuts. Prefer no installer?
+`talon-companion-windows.zip` is the same build unpacked; extract it anywhere
+and run `talon_companion.exe`.
+
+The installer is unsigned, so SmartScreen may warn on first run — choose **More
+info → Run anyway**. Its Inno Setup script lives at
+`installer/windows/talon-companion.iss` and is compiled in
+`.github/workflows/companion.yml`.
+
 ## Updates
 
 *Settings → Updates* shows what's running, what's available, and one button to
