@@ -1,5 +1,24 @@
 # Changelog
 
+## [5.22.0](https://github.com/thefalconry/talon/compare/v5.21.0...v5.22.0) (2026-09-29)
+
+
+### Features
+
+* **companion:** keep the bridge token and client certificate in the OS keystore ([#1125](https://github.com/thefalconry/talon/issues/1125)) ([484a830](https://github.com/thefalconry/talon/commit/484a830209232923a54cd46c2357dc7284cd1041))
+* **mesh:** auto-detect os/arch in node install links ([#1143](https://github.com/thefalconry/talon/issues/1143)) ([709d283](https://github.com/thefalconry/talon/commit/709d283e1e4c8594f3b7a1c2a18d7521fb9a1ec6))
+
+
+### Bug Fixes
+
+* **companion:** make disabled switches look disabled ([#1134](https://github.com/thefalconry/talon/issues/1134)) ([90231e8](https://github.com/thefalconry/talon/commit/90231e8216afb6830d8c84b816c82ad89caa1680))
+* **companion:** visible text selection in the user's own bubble ([#1138](https://github.com/thefalconry/talon/issues/1138)) ([29b2f33](https://github.com/thefalconry/talon/commit/29b2f3397d1669b833ee77d88d916404d57ff50f))
+
+
+### Miscellaneous Chores
+
+* **deps:** bump claude-agent-sdk to 0.3.284 (Sonnet 5.5) ([#1144](https://github.com/thefalconry/talon/issues/1144)) ([b2852de](https://github.com/thefalconry/talon/commit/b2852de6c8d3b46677b92cadfb19204777c24246))
+
 ## [5.21.0](https://github.com/thefalconry/talon/compare/v5.20.1...v5.21.0) (2026-09-29)
 
 
