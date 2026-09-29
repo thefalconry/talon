@@ -1732,10 +1732,10 @@ describe("MeshService node provisioning", () => {
     );
 
     const token = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
-    const install = service.openNodeInstall(token);
+    const install = await service.openNodeInstall(token);
     expect(install?.filename).toBe("install-talon-node.sh");
     expect(install?.script).toContain("bearer-secret");
-    expect(service.openNodeInstall(token)).toBeNull();
+    expect(await service.openNodeInstall(token)).toBeNull();
     expect(service.openNodeBinary(token)).toEqual({
       path: binaryPath,
       size: 16,
@@ -1785,6 +1785,78 @@ describe("MeshService node provisioning", () => {
     const badPublic = await service.makeNodeInstallLink("linux", "amd64");
     expect(badPublic.ok).toBe(false);
     expect(badPublic.text).toContain("native.publicUrl must be");
+  });
+
+  it("mints an auto-detect link that resolves the binary from the host's reported platform", async () => {
+    const { resolver, binaryPath, calls } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "0.0.0.0",
+      port: 19880,
+      token: "bearer-secret",
+      fingerprint: "cd".repeat(32),
+      publicUrl: "https://mesh.example.org/",
+    });
+
+    const minted = await service.makeNodeInstallLink(undefined, undefined);
+    expect(minted.ok).toBe(true);
+    expect(minted.text).toContain(
+      'curl -fsSk "https://mesh.example.org/node/install?provision=',
+    );
+    expect(minted.text).toContain('&os=$(uname -s)&arch=$(uname -m)" | sh');
+    expect(minted.text).toContain("$env:PROCESSOR_ARCHITECTURE");
+    // Nothing is resolved until the host reports in.
+    expect(calls).toEqual([]);
+
+    const token = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
+    // A platform with no build fails loudly and leaves the grant unspent.
+    const refused = await service.openNodeInstall(token, "Plan9", "mips");
+    expect(refused?.script).toContain("exit 1");
+    expect(refused?.script).toContain("refused");
+    expect(service.openNodeBinary(token)).toBeNull();
+
+    const install = await service.openNodeInstall(token, "Linux", "aarch64");
+    expect(calls).toEqual(["linux/arm64"]);
+    expect(install?.filename).toBe("install-talon-node.sh");
+    expect(install?.script).toContain(`SHA="${"ab".repeat(32)}"`);
+    expect(install?.script).toContain("for linux/arm64");
+    expect(await service.openNodeInstall(token, "Linux", "aarch64")).toBeNull();
+    expect(service.openNodeBinary(token)).toEqual({
+      path: binaryPath,
+      size: 16,
+    });
+    expect(service.openNodeBinary(token)).toBeNull();
+  });
+
+  it("auto links serve the PowerShell installer to a Windows host", async () => {
+    const { resolver, calls } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "100.64.0.7",
+      port: 19880,
+      token: "bearer-secret",
+    });
+    const minted = await service.makeNodeInstallLink("", "");
+    const token = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
+    const install = await service.openNodeInstall(token, "windows", "AMD64");
+    expect(calls).toEqual(["windows/amd64"]);
+    expect(install?.filename).toBe("install-talon-node.ps1");
+  });
+
+  it("rejects a half-specified target instead of guessing", async () => {
+    const { resolver } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "100.64.0.7",
+      port: 19880,
+      token: "bearer-secret",
+    });
+    const half = await service.makeNodeInstallLink("linux", undefined);
+    expect(half.ok).toBe(false);
+    expect(half.text).toContain("No talon-node target");
   });
 
   it("refuses install links when the bridge is loopback-only or absent", async () => {

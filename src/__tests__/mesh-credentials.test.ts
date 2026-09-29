@@ -496,7 +496,7 @@ describe("mesh service with credentials", () => {
     bridge(svc);
     const minted = await svc.makeNodeInstallLink("linux", "amd64");
     const grant = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
-    const script = svc.openNodeInstall(grant)!.script;
+    const script = (await svc.openNodeInstall(grant))!.script;
     expect(script).not.toContain("shared-secret");
     const token = /--token "([^"]+)"/.exec(script)![1]!;
     expect(svc.credentials!.authenticate(token)?.scopes).toEqual(["device"]);

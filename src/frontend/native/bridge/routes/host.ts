@@ -149,8 +149,18 @@ export type BridgeServerHandlers = {
     token: string,
     format: "html" | "json",
   ): { contentType: string; body: string } | null;
-  /** Resolve a node-provisioning token to its installer script, or null. */
-  openNodeInstall(token: string): { script: string; filename: string } | null;
+  /**
+   * Resolve a node-provisioning token to its installer script, or null. An
+   * auto link passes the os/arch its host reported.
+   */
+  openNodeInstall(
+    token: string,
+    os?: string | null,
+    arch?: string | null,
+  ):
+    | { script: string; filename: string }
+    | null
+    | Promise<{ script: string; filename: string } | null>;
   /** Resolve a node-provisioning token to the binary to stream, or null. */
   openNodeBinary(token: string): { path: string; size: number } | null;
 };

@@ -191,7 +191,7 @@ export function buildBridgeHandlers(
     openFileDownload: (token, fromDeviceId) =>
       mesh.openFileDownload(token, fromDeviceId),
     openCompanionPair: (token, format) => mesh.openCompanionPair(token, format),
-    openNodeInstall: (token) => mesh.openNodeInstall(token),
+    openNodeInstall: (token, os, arch) => mesh.openNodeInstall(token, os, arch),
     openNodeBinary: (token) => mesh.openNodeBinary(token),
   };
 }

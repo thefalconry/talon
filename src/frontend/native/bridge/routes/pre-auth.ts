@@ -73,9 +73,15 @@ export function preAuthRoutes(
     // the single-use grant token (minted by make_node_install_link,
     // expiring, one serve per leg) is the entire authorization, the same
     // trust model as streamed-transfer tokens.
-    "GET /node/install": ({ res, url }) => {
+    "GET /node/install": async ({ res, url }) => {
       const token = url.searchParams.get("provision") ?? "";
-      const install = token ? h.openNodeInstall(token) : null;
+      const install = token
+        ? await h.openNodeInstall(
+            token,
+            url.searchParams.get("os"),
+            url.searchParams.get("arch"),
+          )
+        : null;
       if (!install) return host.unknownProvision(res);
       res.writeHead(200, {
         "Content-Type": "text/plain; charset=utf-8",
