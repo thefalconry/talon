@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { X509Certificate, createHash, createPrivateKey } from "node:crypto";
+import { execFile, spawnSync } from "node:child_process";
 import { request } from "node:https";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ vi.mock("../util/log.js", () => ({
 
 import {
   certificateFingerprint,
+  certificateSpkiPin,
   formatFingerprint,
   generateSelfSignedCertificate,
   isLoopbackHost,
@@ -23,6 +25,15 @@ import {
   BridgeServer,
   type BridgeServerHandlers,
 } from "../frontend/native/bridge/server.js";
+
+/**
+ * A POSIX curl to exercise installer pinning with. Not on Windows (its
+ * Schannel curl differs) and not under bun (no tls parity yet).
+ */
+const HAS_CURL =
+  process.platform !== "win32" &&
+  typeof process.versions.bun !== "string" &&
+  spawnSync("curl", ["--version"]).status === 0;
 
 describe("bridge TLS identity", () => {
   it("mints a well-formed self-signed certificate", () => {
@@ -178,12 +189,14 @@ describe("bridge server over TLS", () => {
     status: number;
     body: Record<string, unknown>;
     peerDerSha256: string;
+    peerSpkiSha256: string;
   }> {
     return new Promise((resolvePromise, reject) => {
       // Capture the peer certificate at handshake time: auth refusals are
       // sent with `Connection: close`, so by the time the response callback
       // runs the socket may already be torn down.
       let peerDerSha256 = "";
+      let peerSpkiSha256 = "";
       const req = request(
         { host: "127.0.0.1", port, path, ca, headers },
         (res) => {
@@ -194,6 +207,7 @@ describe("bridge server over TLS", () => {
               status: res.statusCode ?? 0,
               body: JSON.parse(Buffer.concat(chunks).toString("utf-8")),
               peerDerSha256,
+              peerSpkiSha256,
             }),
           );
         },
@@ -201,9 +215,20 @@ describe("bridge server over TLS", () => {
       req.on("socket", (socket) => {
         const tlsSocket = socket as import("node:tls").TLSSocket;
         const capture = (): void => {
-          const raw = tlsSocket.getPeerCertificate()?.raw;
-          if (raw)
-            peerDerSha256 = createHash("sha256").update(raw).digest("hex");
+          const peer = tlsSocket.getPeerCertificate();
+          if (peer?.raw) {
+            peerDerSha256 = createHash("sha256").update(peer.raw).digest("hex");
+            // The DER SPKI — what curl --pinnedpubkey hashes. (`pubkey` is
+            // the bare EC point, not the SPKI.)
+            peerSpkiSha256 = createHash("sha256")
+              .update(
+                new X509Certificate(peer.raw).publicKey.export({
+                  type: "spki",
+                  format: "der",
+                }),
+              )
+              .digest("base64");
+          }
         };
         // A reused keep-alive socket has already shaken hands.
         capture();
@@ -250,6 +275,9 @@ describe("bridge server over TLS", () => {
         // What a pinning client computes (SHA-256 over the peer's DER) is
         // exactly the fingerprint the daemon advertises.
         expect(health.peerDerSha256).toBe(identity.fingerprint);
+        // Likewise the SPKI pin node installers hand curl.
+        expect(server.getSpkiPin()).toBe(health.peerSpkiSha256);
+        expect(server.getSpkiPin()).toBe(certificateSpkiPin(identity.certPem));
 
         const denied = await tlsGet(port, "/chats", identity.certPem);
         expect(denied.status).toBe(401);
@@ -269,6 +297,49 @@ describe("bridge server over TLS", () => {
     },
   );
 
+  /** curl against the bridge; resolves whether the fetch succeeded. */
+  function curlOk(args: string[]): Promise<boolean> {
+    return new Promise((resolvePromise) => {
+      execFile("curl", ["-fsS", "--noproxy", "*", ...args], (err) =>
+        resolvePromise(!err),
+      );
+    });
+  }
+
+  // What node installers run: `curl -k --pinnedpubkey`. Real curl, because
+  // the whole point is curl's semantics — the pin is enforced even with -k,
+  // and without -k a matching pin alone does not get past the self-signed
+  // chain.
+  it.skipIf(!HAS_CURL)(
+    "curl -k --pinnedpubkey accepts the bridge's pin and refuses any other",
+    async () => {
+      const dir = await mkdtemp(join(tmpdir(), "talon-tls-curl-"));
+      const identity = await loadOrCreateBridgeTlsIdentity(dir);
+      const server = new BridgeServer(
+        {
+          host: "127.0.0.1",
+          port: 0,
+          startedAt: "now",
+          tls: async () => identity,
+        },
+        handlers,
+      );
+      const port = await server.start();
+      const url = `https://127.0.0.1:${port}/health`;
+      const pin = (p: string): string[] => ["--pinnedpubkey", `sha256//${p}`];
+      const other = certificateSpkiPin(generateSelfSignedCertificate().certPem);
+      try {
+        expect(await curlOk(["-k", ...pin(server.getSpkiPin()!), url])).toBe(
+          true,
+        );
+        expect(await curlOk(["-k", ...pin(other), url])).toBe(false);
+        expect(await curlOk([...pin(server.getSpkiPin()!), url])).toBe(false);
+      } finally {
+        await server.stop();
+      }
+    },
+  );
+
   it("stays plain HTTP (scheme + null fingerprint) without a TLS identity", async () => {
     const server = new BridgeServer(
       { host: "127.0.0.1", port: 0, startedAt: "now" },
@@ -278,6 +349,7 @@ describe("bridge server over TLS", () => {
     try {
       expect(server.getScheme()).toBe("http");
       expect(server.getFingerprint()).toBeNull();
+      expect(server.getSpkiPin()).toBeNull();
       const res = await fetch(`http://127.0.0.1:${port}/health`);
       const body = (await res.json()) as Record<string, unknown>;
       expect(body.scheme).toBe("http");

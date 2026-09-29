@@ -226,6 +226,7 @@ export function createNativeFrontend(
         );
       }
       const fingerprint = server.getFingerprint();
+      const spkiPin = server.getSpkiPin();
       // Tell the mesh how this bridge is reachable — everything a generated
       // node installer needs (make_node_install_link fails cleanly without it).
       mesh.setBridgeInfo({
@@ -234,6 +235,7 @@ export function createNativeFrontend(
         port: server.getPort(),
         ...(listen.token ? { token: listen.token } : {}),
         ...(fingerprint ? { fingerprint } : {}),
+        ...(spkiPin ? { spkiPin } : {}),
         ...(config.native?.publicUrl
           ? { publicUrl: config.native.publicUrl }
           : {}),

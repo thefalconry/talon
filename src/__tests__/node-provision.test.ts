@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  checkBridgeUrl,
   installOneLiner,
   NodeProvisionStore,
 } from "../core/mesh/links/node-provision.js";
@@ -20,6 +21,9 @@ const BASE = {
   bearerToken: "bearer-secret",
   fingerprint: "cd".repeat(32),
 };
+
+const PIN = "pL1+qb9HTMRZJmuC/bB/ZI9d302BYrrqiVuRyW+DGrU=";
+const DASHED = Array.from({ length: 32 }, () => "CD").join("-");
 
 describe("NodeProvisionStore", () => {
   it("serves each leg exactly once", () => {
@@ -91,5 +95,154 @@ describe("installer scripts", () => {
     const { script } = store.openScript(grant.token)!;
     expect(script).not.toContain("--fingerprint");
     expect(script).not.toContain("--name");
+  });
+});
+
+describe("TLS pinning", () => {
+  it("unix one-liner and installer pin the bridge key, keeping -k", () => {
+    const store = new NodeProvisionStore();
+    const grant = store.create({ ...BASE, spkiPin: PIN });
+    expect(installOneLiner(grant)).toBe(
+      `curl -fsSk --pinnedpubkey "sha256//${PIN}" "${BASE.bridgeUrl}/node/install?provision=${grant.token}" | sh`,
+    );
+    const { script } = store.openScript(grant.token)!;
+    expect(script).toContain(
+      `curl -fsSk --pinnedpubkey "sha256//${PIN}" "$BRIDGE/node/binary?provision=${grant.token}"`,
+    );
+  });
+
+  it("windows one-liner and installer check the certificate hash, not trust-all", () => {
+    const store = new NodeProvisionStore();
+    const grant = store.create({ ...BASE, goos: "windows", goarch: "amd64" });
+    const line = installOneLiner(grant);
+    expect(line).toContain("Add-Type -IgnoreWarnings");
+    expect(line).toContain(`[TalonPin]::Pin = '${DASHED}'`);
+    expect(line).toContain(
+      `iex ([TalonPin]::Get('${BASE.bridgeUrl}/node/install?provision=${grant.token}'))`,
+    );
+    expect(line).not.toContain("{$true}");
+    // Same meaning in cmd.exe and a PowerShell prompt: nothing to expand,
+    // and the only double quotes are the -Command argument's own.
+    expect(line).not.toMatch(/[$%]/);
+    expect(line.match(/"/g)).toHaveLength(2);
+
+    const { script } = store.openScript(grant.token)!;
+    expect(script).toContain(`[TalonPin]::Pin = '${DASHED}'`);
+    expect(script).toContain(
+      `[TalonPin]::Save("$bridge/node/binary?provision=${grant.token}", $bin)`,
+    );
+    expect(script).not.toContain("{ $true }");
+    // The callback compares SHA-256 of the presented cert and fails closed.
+    expect(script).toContain("SHA256.Create().ComputeHash(c.GetRawCertData())");
+    expect(script).toContain("c!=null&&string.Equals(");
+  });
+
+  it("leaves plain-HTTP grants unpinned (nothing to pin)", () => {
+    const store = new NodeProvisionStore();
+    const { fingerprint: _drop, ...rest } = BASE;
+    const unix = store.create({ ...rest, bridgeUrl: "http://10.0.0.2:19880" });
+    expect(installOneLiner(unix)).toBe(
+      `curl -fsSk "http://10.0.0.2:19880/node/install?provision=${unix.token}" | sh`,
+    );
+    const win = store.create({
+      ...rest,
+      goos: "windows",
+      goarch: "amd64",
+      bridgeUrl: "http://10.0.0.2:19880",
+    });
+    expect(installOneLiner(win)).toContain(
+      "ServerCertificateValidationCallback={$true}",
+    );
+    expect(store.openScript(win.token)!.script).toContain(
+      "Invoke-WebRequest -UseBasicParsing",
+    );
+  });
+});
+
+describe("bridge URL validation", () => {
+  it("accepts ordinary http(s) URLs and trims trailing slashes", () => {
+    expect(checkBridgeUrl(" https://100.64.0.7:19880/ ")).toBe(
+      "https://100.64.0.7:19880",
+    );
+    expect(checkBridgeUrl("http://talon.lan:8080/bridge")).toBe(
+      "http://talon.lan:8080/bridge",
+    );
+    expect(checkBridgeUrl("https://[fd00::7]:19880")).toBe(
+      "https://[fd00::7]:19880",
+    );
+  });
+
+  it.each([
+    'https://evil.example/"; curl x | sh; echo "',
+    "https://evil.example/$(id)",
+    "https://evil.example/`id`",
+    "https://evil.example/${HOME}",
+    "https://evil.example/\\x",
+    "https://evil.example/'; iex x; '",
+    "https://evil.example/%PATH%",
+    "https://evil.example/a b",
+    "https://evil.example/\nrm",
+    "https://evil.example/\u201c",
+    "ftp://evil.example",
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "not a url",
+  ])("refuses %j", (url) => {
+    const result = checkBridgeUrl(url);
+    expect(typeof result).toBe("object");
+    expect((result as { error: string }).error).toContain("bridge_url");
+  });
+
+  it("names the setting it is checking", () => {
+    expect(checkBridgeUrl("https://x/$y", "native.publicUrl")).toEqual({
+      error: expect.stringContaining("native.publicUrl"),
+    });
+  });
+});
+
+describe("installer escaping (defence in depth)", () => {
+  const HOSTILE = {
+    bridgeUrl: 'https://h/"$(id)`id`\\',
+    bearerToken: 'tok"$x`y',
+  };
+
+  it("sh installer escapes every interpolated value", () => {
+    const store = new NodeProvisionStore();
+    const grant = store.create({ ...BASE, ...HOSTILE });
+    const { script } = store.openScript(grant.token)!;
+    expect(script).toContain('BRIDGE="https://h/\\"\\$(id)\\`id\\`\\\\"');
+    expect(script).toContain('--token "tok\\"\\$x\\`y"');
+    expect(installOneLiner(grant)).toContain('"https://h/\\"\\$(id)');
+  });
+
+  it("PowerShell installer escapes every interpolated value", () => {
+    const store = new NodeProvisionStore();
+    const grant = store.create({
+      ...BASE,
+      ...HOSTILE,
+      goos: "windows",
+      goarch: "amd64",
+    });
+    const { script } = store.openScript(grant.token)!;
+    expect(script).toContain('$bridge = "https://h/`"`$(id)``id``\\"');
+    expect(script).toContain('--token "tok`"`$x``y"');
+  });
+
+  it("single-quoted PowerShell URLs double their quotes", () => {
+    const store = new NodeProvisionStore();
+    const grant = store.create({
+      ...BASE,
+      goos: "windows",
+      goarch: "amd64",
+      bridgeUrl: "https://h/'x",
+    });
+    expect(installOneLiner(grant)).toContain("Get('https://h/''x/node/install");
+  });
+
+  it("still sanitises device names", () => {
+    const store = new NodeProvisionStore();
+    const grant = store.create({ ...BASE, name: 'a"$(b)`c`' });
+    expect(grant.name).toBe("abc");
+    expect(store.openScript(grant.token)!.script).toContain('--name "abc"');
   });
 });
