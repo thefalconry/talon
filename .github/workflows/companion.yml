@@ -206,7 +206,7 @@ jobs:
 
       - name: Build
         shell: bash
-        run: ${{ matrix.build }} --build-name="$APP_VERSION" --build-number="$APP_BUILD_NUMBER"
+        run: ${{ matrix.build }} --build-name="$APP_VERSION" --build-number="$APP_BUILD_NUMBER" --dart-define=TALON_COMMIT="${GITHUB_SHA:0:7}"
 
       - name: Package
         shell: bash
