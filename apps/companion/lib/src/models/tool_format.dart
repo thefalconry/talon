@@ -71,3 +71,82 @@ String toolPhrase(String raw) {
   if (words.isEmpty) return raw;
   return words[0].toUpperCase() + words.substring(1);
 }
+
+/// A one-line, Claude-desktop-style summary of a run of tool calls, used as
+/// the label of a collapsed tool group: `Ran 3 commands, read 2 files`.
+///
+/// Calls are bucketed by what they did (commands, reads, edits, searches, web,
+/// everything else) and the buckets are listed in order of first appearance,
+/// so the label reads in the order the work happened.
+String toolGroupSummary(List<String> names) {
+  if (names.isEmpty) return '';
+  final counts = <_ToolKind, int>{};
+  for (final n in names) {
+    final kind = _toolKind(n);
+    counts[kind] = (counts[kind] ?? 0) + 1;
+  }
+  final parts = [for (final e in counts.entries) _kindPhrase(e.key, e.value)];
+  final s = parts.join(', ');
+  return s[0].toUpperCase() + s.substring(1);
+}
+
+enum _ToolKind { command, read, edit, search, web, agent, other }
+
+_ToolKind _toolKind(String raw) {
+  final tool = (raw.startsWith('mcp__')
+          ? (raw.substring(5).split('__')..removeAt(0)).join('__')
+          : raw)
+      .toLowerCase()
+      .replaceAll('_', '');
+  // Names differ per backend (Claude Code, Codex, opencode, agy/Gemini), so
+  // each bucket lists every spelling seen, normalised to lowercase with the
+  // underscores dropped.
+  const kinds = <_ToolKind, Set<String>>{
+    _ToolKind.command: {
+      'bash', 'shell', 'executecommand', 'deviceexec', 'runcommand',
+      'execcommand', 'exec', 'localshell', 'commandexecution', 'runterminalcmd',
+    },
+    _ToolKind.read: {
+      'read', 'notebookread', 'viewfile', 'readfile', 'openfile',
+      'viewcodeitem', 'readmanyfiles',
+    },
+    _ToolKind.edit: {
+      'write', 'edit', 'multiedit', 'notebookedit', 'writefile', 'editfile',
+      'writetofile', 'createfile', 'applypatch', 'replacefilecontent',
+      'multireplacefilecontent', 'replace', 'patch',
+    },
+    _ToolKind.search: {
+      'glob', 'grep', 'search', 'grepsearch', 'findbyname', 'codebasesearch',
+      'filesearch', 'listdir', 'listdirectory', 'ls', 'searchfiles',
+    },
+    _ToolKind.web: {
+      'websearch', 'webfetch', 'fetchurl', 'searchweb', 'readurlcontent',
+      'fetch', 'googlesearch',
+    },
+    _ToolKind.agent: {'task', 'agent', 'spawnagent'},
+  };
+  for (final e in kinds.entries) {
+    if (e.value.contains(tool)) return e.key;
+  }
+  return _ToolKind.other;
+}
+
+String _kindPhrase(_ToolKind kind, int n) {
+  String count(String one, String many) => n == 1 ? 'a $one' : '$n $many';
+  switch (kind) {
+    case _ToolKind.command:
+      return 'ran ${count('command', 'commands')}';
+    case _ToolKind.read:
+      return 'read ${count('file', 'files')}';
+    case _ToolKind.edit:
+      return 'edited ${count('file', 'files')}';
+    case _ToolKind.search:
+      return n == 1 ? 'searched files' : 'searched files $n times';
+    case _ToolKind.web:
+      return n == 1 ? 'checked the web' : 'checked the web $n times';
+    case _ToolKind.agent:
+      return 'ran ${count('subtask', 'subtasks')}';
+    case _ToolKind.other:
+      return 'used ${count('tool', 'tools')}';
+  }
+}

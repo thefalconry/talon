@@ -48,7 +48,7 @@ class LiveTurn extends StatelessWidget {
                     // fold the strip into a quiet pill (tap re-expands).
                     condensed: turn.draft.isNotEmpty,
                   ),
-                if (turn.tools.isNotEmpty) ToolTimeline(tools: turn.tools),
+                if (turn.tools.isNotEmpty) ToolTrace(tools: turn.tools),
               ],
             )
           : null,
