@@ -9,6 +9,7 @@ import 'src/security/app_lock/app_lock_controller.dart';
 import 'src/services/bridge_trust.dart';
 import 'src/services/dynamic_accent.dart';
 import 'src/services/haptics.dart';
+import 'src/services/linux_theme.dart';
 import 'src/services/mesh_background.dart';
 import 'src/services/message_notifications.dart';
 import 'src/services/prefs.dart';
@@ -63,8 +64,12 @@ Future<void> main() async {
   TalonTheme.textScale.value = prefs.textScale;
   Haptics.enabled = prefs.haptics;
   TalonEffects.reduce.value = prefs.reduceEffects;
+  if (defaultTargetPlatform == TargetPlatform.linux) {
+    LinuxThemeService.initSync();
+  }
   TalonTheme.apply(
-    WidgetsBinding.instance.platformDispatcher.platformBrightness,
+    LinuxThemeService.currentBrightness ??
+        WidgetsBinding.instance.platformDispatcher.platformBrightness,
   );
   TalonTheme.syncSystemChrome();
   // App lock (#1051). Built before AppState so the sealed-snapshot sink is in
@@ -136,6 +141,13 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
     // so re-read it now and on every resume.
     WidgetsBinding.instance
         .addPostFrameCallback((_) => _refreshDynamicAccent());
+    if (defaultTargetPlatform == TargetPlatform.linux) {
+      LinuxThemeService.startMonitoring(onChanged: () {
+        if (!mounted) return;
+        _onThemeChanged();
+        unawaited(_refreshDynamicAccent());
+      });
+    }
     if (VoiceService.supported) {
       // Warm assist launches (gesture while the app runs) arrive as events;
       // a cold start straight from the gesture leaves a flag to consume once
@@ -204,6 +216,9 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
       final chatId = widget.state.selectedChatId;
       // Anything waiting in the shade for the chat now on screen is read.
       if (chatId != null) unawaited(MessageNotifications.clearChat(chatId));
+      if (defaultTargetPlatform == TargetPlatform.linux) {
+        unawaited(LinuxThemeService.refresh());
+      }
       unawaited(_refreshDynamicAccent());
     }
   }
@@ -256,7 +271,8 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
   void _onThemeChanged() {
     setState(() {
       TalonTheme.apply(
-        WidgetsBinding.instance.platformDispatcher.platformBrightness,
+        LinuxThemeService.currentBrightness ??
+            WidgetsBinding.instance.platformDispatcher.platformBrightness,
       );
     });
     TalonTheme.syncSystemChrome();
@@ -264,6 +280,9 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    if (defaultTargetPlatform == TargetPlatform.linux) {
+      LinuxThemeService.stopMonitoring();
+    }
     _assistSub?.cancel();
     widget.appLock?.removeListener(_onAppLockChanged);
     HardwareKeyboard.instance.removeHandler(_onKey);
