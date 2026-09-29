@@ -121,7 +121,7 @@ class MeshService {
   final Prefs prefs;
   final BridgeClient client;
   final DeviceExec _exec;
-  final MeshLocationProvider _locationProvider;
+  final Future<MeshFix?> Function({bool live}) _locationProvider;
   final MeshBatteryProvider _batteryProvider;
   final MeshNameProvider _nameProvider;
   final MeshVersionProvider _versionProvider;
@@ -153,7 +153,9 @@ class MeshService {
     MeshAudit? audit,
   }) : _approver = approver,
        _audit = audit ?? MeshAudit(),
-       _locationProvider = locationProvider ?? _defaultLocation,
+       _locationProvider = locationProvider != null
+           ? ({bool live = false}) => locationProvider()
+           : _defaultLocation,
        _batteryProvider = batteryProvider ?? _defaultBattery,
        _nameProvider = nameProvider ?? _defaultName,
        _versionProvider = versionProvider ?? _defaultVersion,
@@ -272,10 +274,10 @@ class MeshService {
     await _onRegistered?.call();
   }
 
-  Future<void> sendOneFix() async {
+  Future<void> sendOneFix({bool live = false}) async {
     if (!prefs.meshSharing) return;
     try {
-      final fix = await _locationProvider();
+      final fix = await _locationProvider(live: live);
       if (fix == null) return;
       final battery = await _batteryProvider();
       await client.postLocation({
@@ -301,7 +303,7 @@ class MeshService {
       return;
     }
     try {
-      await sendOneFix();
+      await sendOneFix(live: true);
     } catch (e) {
       AppLog.warn('mesh', 'locate handling failed', e);
     }
@@ -398,7 +400,7 @@ class MeshService {
       }
       switch (name) {
         case 'locate':
-          await sendOneFix();
+          await sendOneFix(live: true);
           ok = true;
           message = 'Fresh fix reported.';
           break;
@@ -597,7 +599,7 @@ class MeshService {
     if (!prefs.meshSharing || !prefs.meshPeriodic) return;
     _periodic = Timer.periodic(
       Duration(seconds: prefs.meshIntervalSeconds),
-      (_) => unawaited(sendOneFix()),
+      (_) => unawaited(sendOneFix(live: false)),
     );
   }
 
@@ -610,7 +612,7 @@ class MeshService {
     return 'linux';
   }
 
-  static Future<MeshFix?> _defaultLocation() async {
+  static Future<MeshFix?> _defaultLocation({bool live = false}) async {
     if (kIsWeb || Platform.isLinux) return null;
     try {
       var serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -629,10 +631,36 @@ class MeshService {
           await Geolocator.requestPermission();
         }
       }
+
+      // Check last known location first only for periodic/background fixes to
+      // avoid spinning up GNSS radio unnecessarily. On-demand locate ("find my
+      // phone") always requests a fresh live fix at high accuracy.
+      if (!live) {
+        try {
+          final lastKnown = await Geolocator.getLastKnownPosition();
+          if (lastKnown != null) {
+            final ageMs = DateTime.now().millisecondsSinceEpoch -
+                lastKnown.timestamp.millisecondsSinceEpoch;
+            // Re-use last known fix if it is fresh (< 60s old)
+            if (ageMs >= 0 && ageMs < 60000) {
+              return MeshFix(
+                lat: lastKnown.latitude,
+                lon: lastKnown.longitude,
+                accuracyM: lastKnown.accuracy,
+                altitudeM: lastKnown.altitude,
+                speedMps: lastKnown.speed,
+                headingDeg: lastKnown.heading,
+                ts: lastKnown.timestamp.millisecondsSinceEpoch,
+              );
+            }
+          }
+        } catch (_) {}
+      }
+
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 15),
+        locationSettings: LocationSettings(
+          accuracy: live ? LocationAccuracy.high : LocationAccuracy.medium,
+          timeLimit: Duration(seconds: live ? 15 : 10),
         ),
       );
       return MeshFix(
@@ -650,11 +678,12 @@ class MeshService {
     }
   }
 
+  static final Battery _battery = Battery();
+
   static Future<MeshBattery> _defaultBattery() async {
     try {
-      final battery = Battery();
-      final level = await battery.batteryLevel;
-      final state = await battery.batteryState;
+      final level = await _battery.batteryLevel;
+      final state = await _battery.batteryState;
       return MeshBattery(
         percent: level >= 0 ? level : null,
         charging: state == BatteryState.charging || state == BatteryState.full,
@@ -664,32 +693,44 @@ class MeshService {
     }
   }
 
+  static String? _cachedName;
+
   static Future<String> _defaultName() async {
+    if (_cachedName != null) return _cachedName!;
     try {
       final info = DeviceInfoPlugin();
       if (!kIsWeb && Platform.isAndroid) {
         final d = await info.androidInfo;
-        return '${d.manufacturer} ${d.model}'.trim();
+        final name = '${d.manufacturer} ${d.model}'.trim();
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isIOS) {
         final d = await info.iosInfo;
-        return d.name;
+        final name = d.name;
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isMacOS) {
         final d = await info.macOsInfo;
-        return d.computerName;
+        final name = d.computerName;
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isWindows) {
         final d = await info.windowsInfo;
-        return d.computerName;
+        final name = d.computerName;
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isLinux) {
         final d = await info.linuxInfo;
         final host = Platform.localHostname.trim();
-        if (host.isNotEmpty && host != 'localhost') {
-          return '${d.prettyName} ($host)';
-        }
-        return d.prettyName;
+        final name = (host.isNotEmpty && host != 'localhost')
+            ? '${d.prettyName} ($host)'
+            : d.prettyName;
+        _cachedName = name;
+        return name;
       }
     } catch (_) {
       /* fall through */
@@ -697,13 +738,24 @@ class MeshService {
     return 'Talon companion';
   }
 
+  static String? _cachedVersion;
+
   static Future<String> _defaultVersion() async {
+    if (_cachedVersion != null) return _cachedVersion!;
     try {
       final info = await PackageInfo.fromPlatform();
-      return '${info.version}+${info.buildNumber}';
+      final ver = '${info.version}+${info.buildNumber}';
+      _cachedVersion = ver;
+      return ver;
     } catch (_) {
       return 'unknown';
     }
+  }
+
+  @visibleForTesting
+  static void resetStaticCaches() {
+    _cachedName = null;
+    _cachedVersion = null;
   }
 
   /// Best-effort find-my-device with no extra plugins: a burst of system

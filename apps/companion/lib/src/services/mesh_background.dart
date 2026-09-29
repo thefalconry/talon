@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
@@ -45,7 +46,7 @@ void startMeshForegroundCallback() {
 }
 
 /// Task handler: delegates to a [MeshBackgroundRunner] for the whole service
-/// lifetime. The 60s repeat event doubles as a connection watchdog.
+/// lifetime. The 90s repeat event doubles as a connection watchdog.
 class MeshTaskHandler extends TaskHandler {
   MeshBackgroundRunner? _runner;
 
@@ -92,6 +93,7 @@ class MeshBackgroundRunner {
   BridgeClient? _client;
   MeshService? _mesh;
   StreamSubscription<Map<String, dynamic>>? _drops;
+  StreamSubscription<List<ConnectivityResult>>? _networkWatch;
   Timer? _retry;
   bool _connecting = false;
   bool _connected = false;
@@ -118,9 +120,9 @@ class MeshBackgroundRunner {
     'status',
   };
 
-  /// MeshService re-registers every 60 s on its own; the watchdog only
-  /// registers when that heartbeat has gone quiet for this long, so there is
-  /// one registration a minute instead of two (#1060).
+  /// MeshService re-registers every 60 s; the watchdog only registers when
+  /// that heartbeat has gone quiet for this long, so there is one
+  /// registration a minute instead of redundant heartbeats.
   static const Duration _heartbeatQuiet = Duration(seconds: 75);
 
   /// UI state pushed over the task channel (see
@@ -164,6 +166,24 @@ class MeshBackgroundRunner {
         _scheduleReconnect();
       },
     );
+    try {
+      _networkWatch = Connectivity().onConnectivityChanged.listen(
+        (results) {
+          if (results.every((r) => r == ConnectivityResult.none)) return;
+          if (_disposed) return;
+          if (!_connected && !_connecting) {
+            AppLog.info('mesh_bg', 'network restored; reconnecting now');
+            _retry?.cancel();
+            _backoffMs = _initialBackoffMs;
+            unawaited(_connect());
+          }
+        },
+        onError: (Object e) =>
+            AppLog.debug('mesh_bg', 'network watch unavailable', e),
+      );
+    } catch (e) {
+      AppLog.debug('mesh_bg', 'network watch setup failed', e);
+    }
     await _startMesh();
     await _connect();
   }
@@ -346,7 +366,7 @@ class MeshBackgroundRunner {
     await MeshLiveness.stamp(prefs, now);
   }
 
-  /// 60s watchdog (the foreground task's repeat event): keep registration
+  /// 90s watchdog (the foreground task's repeat event): keep registration
   /// fresh and reconnect with backoff when either SSE or registration stalls.
   void watchdog() {
     if (_disposed || _connecting) return;
@@ -404,6 +424,8 @@ class MeshBackgroundRunner {
     _disposed = true;
     _retry?.cancel();
     _retry = null;
+    await _networkWatch?.cancel();
+    _networkWatch = null;
     await _mesh?.stop();
     await _drops?.cancel();
     _client?.dispose();
@@ -511,7 +533,7 @@ class MeshForegroundController {
 
   /// Data message poking the task isolate to reload prefs and reconnect.
   static const String msgReconfigure = 'mesh.reconfigure.v1';
-  static const Duration staleAliveAfter = Duration(seconds: 90);
+  static const Duration staleAliveAfter = Duration(seconds: 120);
 
   /// Keys of the UI-state map pushed to the task with [pushUiState].
   static const String keyUiForeground = 'ui.foreground';
@@ -586,7 +608,7 @@ class MeshForegroundController {
       iosNotificationOptions: const IOSNotificationOptions(),
       foregroundTaskOptions: ForegroundTaskOptions(
         // Drives MeshTaskHandler.onRepeatEvent — the connection watchdog.
-        eventAction: ForegroundTaskEventAction.repeat(60000),
+        eventAction: ForegroundTaskEventAction.repeat(90000),
         autoRunOnBoot: true,
         autoRunOnMyPackageReplaced: true,
         // No lifetime wake/Wi-Fi locks (#1060): they kept the SoC and radio

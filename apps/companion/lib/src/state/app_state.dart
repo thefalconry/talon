@@ -1880,7 +1880,7 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  void _saveSnapshot() {
+  Future<void> _saveSnapshot() async {
     final snapshot = <String, dynamic>{
       'chats': chats.map((c) => c.toSnapshotJson()).toList(),
       'messages': {
@@ -1897,16 +1897,22 @@ class AppState extends ChangeNotifier {
       },
     };
     // Encoded and written off the UI isolate, to its own file (Prefs).
-    unawaited(prefs.saveSnapshot(snapshot));
+    await prefs.saveSnapshot(snapshot);
+  }
+
+  /// Flush the offline snapshot immediately and await completion (for clean
+  /// termination / exit without truncation or loss).
+  Future<void> flushSnapshot() async {
+    if (_disposed) return;
+    _snapshotTimer?.cancel();
+    _snapshotTimer = null;
+    await _saveSnapshot();
   }
 
   /// Write the offline snapshot now (app paused/hidden), instead of waiting
   /// for the debounce.
   void persistSnapshot() {
-    if (_disposed) return;
-    _snapshotTimer?.cancel();
-    _snapshotTimer = null;
-    _saveSnapshot();
+    unawaited(flushSnapshot());
   }
 
   @override
@@ -1952,9 +1958,40 @@ class AppState extends ChangeNotifier {
   static List<dynamic> _list(Object? value) =>
       value is List ? value : const <dynamic>[];
 
+  bool _uiStreamPaused = false;
+
+  /// Whether the UI isolate's streaming connection is currently paused while
+  /// running in the background.
+  bool get uiStreamPaused => _uiStreamPaused;
+
+  /// Pause the UI isolate's streaming connection when the app is placed in
+  /// the background on Android, avoiding redundant network traffic and battery
+  /// drain while the foreground service maintains notifications and mesh connectivity.
+  void pauseUiStream() {
+    if (_uiStreamPaused || _disposed) return;
+    _uiStreamPaused = true;
+    _reconnect?.cancel();
+    _reconnect = null;
+    _sub?.cancel();
+    _sub = null;
+    _client?.dispose();
+    _client = null;
+    _setConn(ConnState.disconnected, null);
+    AppLog.info('app_state', 'UI stream paused for background battery savings');
+  }
+
+  /// Resume the UI isolate's connection when the app returns to the foreground.
+  void resumeUiStream() {
+    if (!_uiStreamPaused || _disposed) return;
+    _uiStreamPaused = false;
+    AppLog.info('app_state', 'UI stream resuming from background');
+    unawaited(start());
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    _uiStreamPaused = false;
     _reconnect?.cancel();
     _networkDebounce?.cancel();
     _networkWatch?.cancel();
