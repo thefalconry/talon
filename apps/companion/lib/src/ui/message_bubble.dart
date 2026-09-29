@@ -1,5 +1,3 @@
-import 'dart:io' show File;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -334,19 +332,20 @@ class MessageBubble extends StatelessWidget {
   /// A tapped link in message text. A bridge attachment link (`/media?id=…`)
   /// is fetched in-app through the authenticated media stack, so the bearer
   /// token never rides in a browser-visible URL and mTLS still applies, then
-  /// opened locally. Everything else opens in the browser.
+  /// saved to Downloads (with an Open action). Everything else opens in the
+  /// browser.
   void _onTapLink(BuildContext context, String? href) {
     if (href == null) return;
     final media = bridgeMediaUrl(href, mediaBaseUrl);
     if (media != null) {
       final messenger = ScaffoldMessenger.maybeOf(context);
       AttachmentOpener.instance
-          .openLink(url: media, headers: mediaHeaders)
+          .saveLink(url: media, headers: mediaHeaders)
+          .then((saved) => showSavedSnackBar(messenger, saved))
           .catchError((Object e) {
         messenger?.showSnackBar(
-          SnackBar(content: Text("Couldn't open link: $e")),
+          SnackBar(content: Text("Couldn't save link: $e")),
         );
-        return File('');
       });
       return;
     }
@@ -713,11 +712,53 @@ class _FileChip extends StatefulWidget {
   State<_FileChip> createState() => _FileChipState();
 }
 
-/// Tapping downloads the file with the auth header and opens the local copy
-/// (see [AttachmentOpener]); the trailing icon turns into a spinner while
+/// "Saved to …" with an Open action for the cached copy.
+void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved) {
+  messenger?.showSnackBar(
+    SnackBar(
+      content: Text('Saved to ${saved.location}'),
+      action: SnackBarAction(
+        label: 'Open',
+        onPressed: () {
+          AttachmentOpener.instance
+              .openLocal(saved.file, saved.mimeType)
+              .catchError((Object e) {
+            messenger?.showSnackBar(SnackBar(content: Text('$e')));
+          });
+        },
+      ),
+    ),
+  );
+}
+
+/// Tapping downloads the file with the auth header and saves it to the
+/// user's Downloads (see [AttachmentOpener]), offering to open it; a
+/// long-press opens it directly. The trailing icon turns into a spinner while
 /// the download runs, and a failure says so in a snackbar.
 class _FileChipState extends State<_FileChip> {
   bool _busy = false;
+
+  Future<void> _save() async {
+    if (_busy) return;
+    final file = widget.file;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _busy = true);
+    try {
+      final saved = await AttachmentOpener.instance.save(
+        url: file.url,
+        name: file.name,
+        mimeType: file.mimeType,
+        headers: widget.headers,
+      );
+      showSavedSnackBar(messenger, saved);
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Couldn't save ${file.name}: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _open() async {
     if (_busy) return;
@@ -749,11 +790,13 @@ class _FileChipState extends State<_FileChip> {
         onAccent ? Colors.white.withValues(alpha: 0.75) : TalonColors.textFaint;
     return Semantics(
       button: true,
-      label: 'Attached file ${file.name}, ${file.sizeLabel}. Open',
+      label: 'Attached file ${file.name}, ${file.sizeLabel}. Save to Downloads',
+      onLongPressHint: 'Open',
       child: Tooltip(
-        message: 'Open ${file.name}',
+        message: 'Save ${file.name} to Downloads (long-press to open)',
         child: GestureDetector(
-          onTap: _open,
+          onTap: _save,
+          onLongPress: _open,
           child: Container(
             constraints: const BoxConstraints(maxWidth: 280),
             padding: const EdgeInsets.symmetric(
@@ -806,7 +849,7 @@ class _FileChipState extends State<_FileChip> {
                         strokeWidth: 1.6, color: faint),
                   )
                 else
-                  Icon(Icons.open_in_new_rounded, size: 14, color: faint),
+                  Icon(Icons.download_rounded, size: 14, color: faint),
               ],
             ),
           ),

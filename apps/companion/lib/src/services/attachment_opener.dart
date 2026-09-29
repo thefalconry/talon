@@ -11,7 +11,8 @@ import 'package:url_launcher/url_launcher.dart' show launchUrl;
 
 import 'log.dart';
 
-/// Opens a chat attachment with the OS handler for its type.
+/// Saves a chat attachment to the user's Downloads (the default action) or
+/// opens it with the OS handler for its type.
 ///
 /// Handing the bridge URL to a browser would need the bearer token in the
 /// query string, where it lands in browser history and any proxy's access
@@ -23,18 +24,29 @@ import 'log.dart';
 /// Android shares the file through the app's FileProvider (a raw `file://`
 /// URI throws FileUriExposedException on 7+); the desktops open the path
 /// with their default handler.
+///
+/// Saving copies the cached download out to a place the user owns: the
+/// public Downloads collection through MediaStore on Android (10+), the XDG /
+/// platform Downloads folder on the desktops.
 class AttachmentOpener {
   AttachmentOpener({
     http.Client Function()? client,
     Future<Directory> Function()? cacheRoot,
     Future<bool> Function(File file, String mimeType)? launch,
+    Future<Directory?> Function()? downloadsRoot,
+    Future<String?> Function(File file, String name, String mimeType)? store,
   })  : _client = client ?? http.Client.new,
         _cacheRoot = cacheRoot ?? getTemporaryDirectory,
-        _launch = launch ?? _platformLaunch;
+        _launch = launch ?? _platformLaunch,
+        _downloadsRoot = downloadsRoot ?? getDownloadsDirectory,
+        _storeOverride = store;
 
   final http.Client Function() _client;
   final Future<Directory> Function() _cacheRoot;
   final Future<bool> Function(File file, String mimeType) _launch;
+  final Future<Directory?> Function() _downloadsRoot;
+  final Future<String?> Function(File file, String name, String mimeType)?
+      _storeOverride;
 
   /// The opener the chat's file chips use. Swappable for widget tests.
   static AttachmentOpener instance = AttachmentOpener();
@@ -58,6 +70,92 @@ class AttachmentOpener {
       throw AttachmentException('No app could open $name.');
     }
     return file;
+  }
+
+  /// Fetch [url] with [headers] and save a copy to the user's Downloads.
+  /// Returns where it landed (a path on the desktops, `Download/<name>` on
+  /// Android) plus the cached copy, so the UI can offer to open it. Throws
+  /// [AttachmentException] when the download or the save fails.
+  Future<SavedAttachment> save({
+    required String url,
+    required String name,
+    required String mimeType,
+    Map<String, String> headers = const {},
+  }) async {
+    final file = await fetch(url: url, name: name, headers: headers);
+    return _saveFetched(file, safeName(name), mimeType);
+  }
+
+  /// [save] for a bare `/media?id=…` link: name and MIME come from the
+  /// response, as in [openLink].
+  Future<SavedAttachment> saveLink({
+    required String url,
+    Map<String, String> headers = const {},
+  }) async {
+    final (file, mimeType) = await _fetch(url: url, headers: headers);
+    return _saveFetched(file, _basename(file.path), mimeType);
+  }
+
+  /// Open a file this opener already downloaded (the "Open" action offered
+  /// after a save).
+  Future<void> openLocal(File file, String mimeType) async {
+    if (!await _launch(file, mimeType)) {
+      throw AttachmentException('No app could open ${_basename(file.path)}.');
+    }
+  }
+
+  Future<SavedAttachment> _saveFetched(
+    File file,
+    String name,
+    String mimeType,
+  ) async {
+    String? where;
+    try {
+      where = await (_storeOverride ?? _platformStore)(file, name, mimeType);
+    } catch (e) {
+      AppLog.warn('attachment', 'save to Downloads failed', e);
+    }
+    if (where == null) {
+      throw AttachmentException("Couldn't save $name to Downloads.");
+    }
+    return SavedAttachment(file: file, mimeType: mimeType, location: where);
+  }
+
+  /// Copy [file] into the platform's Downloads. Android goes through
+  /// MediaStore (scoped storage forbids raw paths); the desktops copy into
+  /// [getDownloadsDirectory], never overwriting an existing file.
+  Future<String?> _platformStore(File file, String name, String mimeType) async {
+    if (Platform.isAndroid) {
+      return _channel.invokeMethod<String>('saveToDownloads', {
+        'path': file.path,
+        'name': name,
+        'mimeType': mimeType,
+      });
+    }
+    final dir = await _downloadsRoot();
+    if (dir == null) return null;
+    await dir.create(recursive: true);
+    final target = uniqueTarget(dir, name);
+    await file.copy(target.path);
+    return target.path;
+  }
+
+  /// A file in [dir] named [name] that doesn't exist yet: `name`, then
+  /// `name (1)`, `name (2)`… with the counter before the extension.
+  @visibleForTesting
+  static File uniqueTarget(Directory dir, String name) {
+    final sep = Platform.pathSeparator;
+    var candidate = File('${dir.path}$sep$name');
+    if (!candidate.existsSync()) return candidate;
+    final dot = name.lastIndexOf('.');
+    final stem = dot > 0 ? name.substring(0, dot) : name;
+    final ext = dot > 0 ? name.substring(dot) : '';
+    for (var i = 1; i < 1000; i++) {
+      candidate = File('${dir.path}$sep$stem ($i)$ext');
+      if (!candidate.existsSync()) return candidate;
+    }
+    return File(
+        '${dir.path}$sep$stem (${DateTime.now().millisecondsSinceEpoch})$ext');
   }
 
   /// Open a bare bridge link that carries no attachment metadata — a
@@ -260,6 +358,19 @@ class AttachmentOpener {
     }
     return launchUrl(Uri.file(file.path));
   }
+}
+
+/// Where [AttachmentOpener.save] put a file: [location] is what to tell the
+/// user; [file] is the cached copy, for an "Open" action.
+class SavedAttachment {
+  final File file;
+  final String mimeType;
+  final String location;
+  const SavedAttachment({
+    required this.file,
+    required this.mimeType,
+    required this.location,
+  });
 }
 
 class AttachmentException implements Exception {
