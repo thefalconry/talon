@@ -2,13 +2,32 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:talon_companion/src/services/device_exec.dart';
 import 'package:talon_companion/src/services/prefs.dart';
 import 'package:talon_companion/src/services/update_installer.dart';
 import 'package:talon_companion/src/services/updater.dart';
+
+/// Counts silent-install attempts; never elevated, so it always declines.
+class _RecordingExec extends DeviceExec {
+  _RecordingExec() : super(isAndroid: () => true);
+  int installs = 0;
+
+  @override
+  Future<CommandOutcome> installApk(
+    String path, {
+    String? sha256,
+    int? delayMs,
+    bool allowDowngrade = false,
+  }) async {
+    installs++;
+    return CommandOutcome.fail('no root or Shizuku');
+  }
+}
 
 /// Records what it was handed instead of touching the machine.
 class _FakeInstaller implements UpdateInstaller {
@@ -115,6 +134,20 @@ void main() {
       expect(rel.assetSize, apk.length);
       expect(rel.sha256, sha256.convert(apk).toString());
       expect(rel.notes, 'Release notes');
+    });
+
+    test('a missing or malformed digest leaves sha256 unset', () {
+      final none = UpdateRelease.fromFeedJson(
+        _feed(tag: 'v4.2.0', apkBytes: apk, withDigest: false),
+        platform: 'android',
+      )!;
+      expect(none.sha256, isNull);
+      final feed = _feed(tag: 'v4.2.0', apkBytes: apk);
+      ((feed['assets'] as List)[1] as Map)['digest'] = 'sha256:not-hex';
+      expect(
+        UpdateRelease.fromFeedJson(feed, platform: 'android')!.sha256,
+        isNull,
+      );
     });
 
     test('every shipped platform has an asset name, web has none', () {
@@ -330,17 +363,25 @@ void main() {
       );
     });
 
-    test('a truncated download is caught even without a published digest',
-        () async {
-      final (svc, installer) = await armed(
-        served: apk.sublist(0, 4),
-        withDigest: false,
-      );
+    test('a truncated download is caught before hashing', () async {
+      final (svc, installer) = await armed(served: apk.sublist(0, 4));
       addTearDown(svc.dispose);
       await svc.downloadAndInstall();
       expect(svc.phase, UpdatePhase.error);
       expect(svc.error, contains('cut short'));
       expect(installer.installed, isNull);
+    });
+
+    test('a release with no published digest is refused, not downloaded',
+        () async {
+      final (svc, installer) = await armed(withDigest: false);
+      addTearDown(svc.dispose);
+      expect(svc.updateAvailable, isTrue, reason: 'still offered');
+      await svc.downloadAndInstall();
+      expect(svc.phase, UpdatePhase.error);
+      expect(svc.error, contains('no SHA-256 checksum'));
+      expect(installer.installed, isNull);
+      expect(await tmp.list().isEmpty, isTrue, reason: 'nothing downloaded');
     });
 
     test('a managed install degrades to "do it yourself", not a failure',
@@ -460,6 +501,82 @@ void main() {
         PlatformUpdateInstaller.macAppBundle('/usr/local/bin/talon_companion'),
         isNull,
       );
+    });
+  });
+
+  group('Android self-update signer check', () {
+    final release = UpdateRelease(
+      version: AppVersion.tryParse('4.2.0')!,
+      tag: 'v4.2.0',
+      notes: '',
+      pageUrl: kReleasesPageUrl,
+      assetName: 'talon-companion-android.apk',
+      assetUrl: 'https://example.invalid/talon-companion-android.apk',
+      assetSize: 1,
+      sha256: '0' * 64,
+    );
+
+    /// A `talon/update` channel whose signer check answers [verdict] and
+    /// records every method the installer calls.
+    List<String> mockUpdateChannel(
+      MethodChannel channel,
+      Map<String, Object> verdict,
+    ) {
+      final calls = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        switch (call.method) {
+          case 'checkSelfUpdateApk':
+            return verdict;
+          case 'canInstallPackages':
+          case 'installApk':
+            return true;
+        }
+        return null;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding
+          .instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null));
+      return calls;
+    }
+
+    test('a differently-signed APK is refused before any install', () async {
+      const channel = MethodChannel('talon/update-signer-mismatch');
+      final calls = mockUpdateChannel(channel, {
+        'ok': false,
+        'message': 'The update is signed by a different key.',
+      });
+      final exec = _RecordingExec();
+      final installer = PlatformUpdateInstaller(
+        androidChannel: channel,
+        exec: exec,
+        platform: 'android',
+      );
+      final out = await installer.install(File('/x/update.apk'), release);
+      expect(out.kind, InstallKind.failed);
+      expect(out.message, contains('different key'));
+      expect(out.message, contains('Nothing was installed'));
+      expect(exec.installs, 0, reason: 'pm install never reached');
+      expect(calls, ['checkSelfUpdateApk']);
+    });
+
+    test('a matching signer goes on to install', () async {
+      const channel = MethodChannel('talon/update-signer-match');
+      final calls = mockUpdateChannel(channel, {
+        'ok': true,
+        'message': 'Signer matches.',
+      });
+      final exec = _RecordingExec();
+      final installer = PlatformUpdateInstaller(
+        androidChannel: channel,
+        exec: exec,
+        platform: 'android',
+      );
+      final out = await installer.install(File('/x/update.apk'), release);
+      expect(out.kind, InstallKind.handedOff);
+      expect(exec.installs, 1);
+      expect(calls, contains('installApk'));
     });
   });
 }

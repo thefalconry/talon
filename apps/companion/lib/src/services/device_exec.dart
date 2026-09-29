@@ -399,6 +399,7 @@ class DeviceExec {
           _str(params['path']) ?? '',
           sha256: _str(params['sha256']),
           delayMs: _int(params['delayMs']),
+          allowDowngrade: params['allow_downgrade'] == true,
         );
       default:
         return null;
@@ -575,12 +576,15 @@ class DeviceExec {
   ///
   /// `pm install -r` also refuses a differently-signed APK, so a wrong or
   /// tampered file can't hijack the app — it just fails the reinstall — and,
-  /// without `-d`, refuses a lower versionCode, so an older signed build
-  /// can't be rolled back onto the device either.
+  /// by default, refuses a lower versionCode, so an older signed build can't
+  /// be rolled back onto the device by accident. [allowDowngrade] (the
+  /// command's `allow_downgrade: true`) adds `-d` for a deliberate rollback;
+  /// Android itself may still refuse it for a non-debuggable package.
   Future<CommandOutcome> installApk(
     String path, {
     String? sha256,
     int? delayMs,
+    bool allowDowngrade = false,
   }) async {
     if (!_isAndroid()) {
       return CommandOutcome.fail('install_apk is only supported on Android.');
@@ -642,7 +646,7 @@ class DeviceExec {
     final sleepSecs = (delay / 1000).ceil();
     try {
       await _elevatedExec(
-        'setsid sh -c ${_shQuote(installApkWorker(stagedDir, expected, sleepSecs))} '
+        'setsid sh -c ${_shQuote(installApkWorker(stagedDir, expected, sleepSecs, allowDowngrade: allowDowngrade))} '
         '>/dev/null 2>&1 &',
         5000,
       );
@@ -657,6 +661,7 @@ class DeviceExec {
         'staged': true,
         'stagedPath': staged,
         'delayMs': delay,
+        'allowDowngrade': allowDowngrade,
         'log': logPath,
         'via': (!_rootDemoted && _lastRoot?['tier'] == 'root')
             ? 'root'
@@ -695,18 +700,24 @@ class DeviceExec {
 
   /// The detached install worker: wait (so the mesh ack flushes before pm
   /// tears the app down), re-check the digest right before handing the file
-  /// to pm, then `pm install -r` — keep data, same-or-newer only: no `-d`, so
-  /// an older (validly signed) build can never be rolled back on. The staged
-  /// APK is removed afterwards; the log stays beside it.
+  /// to pm, then `pm install -r` — keep data, same-or-newer only unless
+  /// [allowDowngrade] adds `-d` for an explicit rollback. The staged APK is
+  /// removed afterwards; the log stays beside it.
   @visibleForTesting
-  static String installApkWorker(String dir, String expected, int sleepSecs) {
+  static String installApkWorker(
+    String dir,
+    String expected,
+    int sleepSecs, {
+    bool allowDowngrade = false,
+  }) {
     final apk = _shQuote('$dir/update.apk');
     final log = _shQuote('$dir/install.log');
     final want = _shQuote(expected);
+    final flags = allowDowngrade ? '-r -d' : '-r';
     return 'sleep $sleepSecs; '
         'if [ -z $want ] || '
         '[ "\$(sha256sum $apk | cut -d" " -f1)" = $want ]; then '
-        'pm install -r $apk > $log 2>&1; echo "exit=\$?" >> $log; '
+        'pm install $flags $apk > $log 2>&1; echo "exit=\$?" >> $log; '
         'else echo "integrity check failed before install" > $log; fi; '
         'rm -f $apk';
   }

@@ -22,6 +22,9 @@ const String kUpdateFeedUrl =
 /// (a managed install the app can't overwrite, or an unsupported platform).
 const String kReleasesPageUrl = 'https://github.com/thefalconry/talon/releases';
 
+/// A bare lowercase SHA-256 hex digest, as published in an asset's `digest`.
+final RegExp _sha256Hex = RegExp(r'^[0-9a-f]{64}$');
+
 /// A semantic version, ordered the way semver orders: numerically by
 /// major/minor/patch, with any pre-release suffix sorting *below* the release
 /// it leads to (4.2.0-rc.1 < 4.2.0).
@@ -135,7 +138,8 @@ class UpdateRelease {
 
   /// Lowercase hex SHA-256 of the asset, when the release API published one
   /// (`digest: "sha256:…"`). Verified before the bytes are ever handed to an
-  /// installer; absent, the download is still length-checked.
+  /// installer. A release without one is offered but never installed: there
+  /// is nothing to check the download against.
   final String? sha256;
 
   const UpdateRelease({
@@ -180,7 +184,8 @@ class UpdateRelease {
       if ('${asset['name'] ?? ''}' != wanted) continue;
       final url = '${asset['browser_download_url'] ?? ''}';
       if (url.isEmpty) continue;
-      final digest = '${asset['digest'] ?? ''}';
+      final digest = '${asset['digest'] ?? ''}'.toLowerCase();
+      final hex = digest.startsWith('sha256:') ? digest.substring(7) : '';
       return UpdateRelease(
         version: version,
         tag: tag,
@@ -189,9 +194,7 @@ class UpdateRelease {
         assetName: wanted,
         assetUrl: url,
         assetSize: (asset['size'] is num) ? (asset['size'] as num).toInt() : 0,
-        sha256: digest.startsWith('sha256:')
-            ? digest.substring(7).toLowerCase()
-            : null,
+        sha256: _sha256Hex.hasMatch(hex) ? hex : null,
       );
     }
     return null;
@@ -431,6 +434,16 @@ class UpdateService extends ChangeNotifier {
     _cancelRequested = false;
     _error = null;
     _message = null;
+    final expected = rel.sha256;
+    if (expected == null) {
+      // No digest, no install: the length alone can't tell a tampered or
+      // swapped asset from the real one. Refuse before downloading anything.
+      _error = 'This release publishes no SHA-256 checksum for '
+          '${rel.assetName}, so the download could not be verified. Nothing '
+          'was installed — get it from the release page instead.';
+      _setPhase(UpdatePhase.error);
+      return;
+    }
     _received = 0;
     _total = rel.assetSize;
     _setPhase(UpdatePhase.downloading);
@@ -475,14 +488,11 @@ class UpdateService extends ChangeNotifier {
           'the download is the wrong size — it was cut short',
         );
       }
-      final expected = rel.sha256;
-      if (expected != null && expected.isNotEmpty) {
-        final digest = await sha256.bind(artifact.openRead()).first;
-        if (digest.toString().toLowerCase() != expected) {
-          throw const FormatException(
-            'the download failed its checksum — nothing was installed',
-          );
-        }
+      final digest = await sha256.bind(artifact.openRead()).first;
+      if (digest.toString().toLowerCase() != expected) {
+        throw const FormatException(
+          'the download failed its checksum — nothing was installed',
+        );
       }
 
       _setPhase(UpdatePhase.installing);

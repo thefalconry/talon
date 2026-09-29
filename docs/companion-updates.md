@@ -29,12 +29,24 @@ semver (`4.10.0 > 4.9.0`, `4.2.0-rc.1 < 4.2.0`), never as strings.
 Release assets carry a `digest` (`sha256:…`) in the GitHub API. The downloaded
 file is checked against it — and against the published size — *before* it is
 handed to any installer. A mismatch deletes the download and reports it; it is
-never installed. On Android the elevated path re-hashes the staged copy in
-`/data/local/tmp` as well, since that is the file `pm` actually reads.
+never installed. A release whose asset has **no** digest is still offered, but
+**Download & install** refuses it up front (nothing is downloaded) with a clear
+error pointing at the release page: the length alone cannot tell a swapped
+asset from the real one. On Android the elevated path re-hashes the staged copy
+in `/data/local/tmp` as well, since that is the file `pm` actually reads.
 
-Two further checks are the platform's, not ours: `pm install -r` refuses an APK
-signed with a different key, and every desktop swap copies over the existing
-install *last*, so a failed unpack leaves the working version in place.
+On Android the APK must also be **this app, signed by this install's key**
+before either install path runs: `UpdateBridge.checkSelfUpdateApk` reads the
+APK's package name and signing certificates
+(`getPackageArchiveInfo(…, GET_SIGNING_CERTIFICATES)`) and compares them with
+the running app's (a v3 key-rotation lineage that includes the current key
+passes). A mismatch is reported as such and nothing is installed. This check
+is for the companion's own update only; the mesh's `install_apk` installs
+arbitrary APKs and does not go through it.
+
+The remaining check is the platform's: every desktop swap copies over the
+existing install *last*, so a failed unpack leaves the working version in
+place.
 
 ## Per-platform install path
 
