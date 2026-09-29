@@ -684,13 +684,12 @@ class AppState extends ChangeNotifier {
     final msgs = _messages[chatId];
     if (msgs == null || msgs.isEmpty) return 0;
     // Oldest server-assigned id (local system notes have non-numeric ids).
+    // The minimum, not the first: the first numeric id is only the oldest
+    // when the list is in order.
     int? oldest;
     for (final m in msgs) {
       final n = int.tryParse(m.id);
-      if (n != null) {
-        oldest = n;
-        break;
-      }
+      if (n != null && (oldest == null || n < oldest)) oldest = n;
     }
     if (oldest == null) return 0;
 
@@ -706,7 +705,9 @@ class AppState extends ChangeNotifier {
       if (page.length < _historyPageSize) _historyExhausted.add(chatId);
       final existing = msgs.map((m) => m.id).toSet();
       final fresh = page.where((m) => !existing.contains(m.id)).toList();
-      msgs.insertAll(0, fresh);
+      msgs
+        ..insertAll(0, fresh)
+        ..sort(compareMessageOrder);
       return fresh.length;
     } catch (e) {
       AppLog.warn('app_state', 'older-history fetch failed', e);
@@ -1696,14 +1697,23 @@ class AppState extends ChangeNotifier {
       // the bottom of the chat each time the app was reopened. Keep a system
       // notice only while it's genuinely the newest thing in the conversation;
       // once real history has moved past it, it has expired.
+      //
+      // Since the first fetch is a bounded window (the newest
+      // [_historyInitialSize]), "not in the window" also matches OLDER
+      // scrollback paged in earlier and old snapshot rows, and appending them
+      // pinned week-old messages below the newest on every reconnect. Only
+      // messages genuinely newer than the window survive the merge; older
+      // ones are dropped (scrolling up pages them back in, in order).
       final histIds = hist.map((m) => m.id).toSet();
       final newestTs = hist.isEmpty ? 0 : hist.last.ts;
-      final extras = (_messages[chatId] ?? const <ClientMessage>[]).where(
-        (m) =>
-            !histIds.contains(m.id) &&
-            (m.role != Role.system || m.ts >= newestTs),
-      );
-      _messages[chatId] = [...hist, ...extras];
+      final newestId = _maxServerId(hist);
+      final extras = (_messages[chatId] ?? const <ClientMessage>[]).where((m) {
+        if (histIds.contains(m.id)) return false;
+        final n = int.tryParse(m.id);
+        if (n != null && newestId != null) return n > newestId;
+        return m.ts >= newestTs;
+      });
+      _messages[chatId] = [...hist, ...extras]..sort(compareMessageOrder);
       _loadedHistory.add(chatId);
     } catch (_) {
       /* leave existing messages; stream will fill in */
@@ -1861,7 +1871,10 @@ class AppState extends ChangeNotifier {
                 .map(_map)
                 .whereType<Map<String, dynamic>>()
                 .map(ClientMessage.fromJson)
-                .toList();
+                .toList()
+              // Snapshots written before the merge fix can hold rows out of
+              // order; restoring them sorted heals those chats.
+              ..sort(compareMessageOrder);
           }
         });
       }
@@ -1961,6 +1974,16 @@ class AppState extends ChangeNotifier {
 
   static List<dynamic> _list(Object? value) =>
       value is List ? value : const <dynamic>[];
+
+  /// Highest server-assigned (numeric) id in [msgs], or null if none.
+  static int? _maxServerId(List<ClientMessage> msgs) {
+    int? max;
+    for (final m in msgs) {
+      final n = int.tryParse(m.id);
+      if (n != null && (max == null || n > max)) max = n;
+    }
+    return max;
+  }
 
   bool _uiStreamPaused = false;
 
