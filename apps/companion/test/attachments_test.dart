@@ -542,6 +542,30 @@ void main() {
           isNull);
     });
 
+    testWidgets('selected text in the user bubble uses a visible highlight',
+        (tester) async {
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm3',
+          chatId: 'c1',
+          role: Role.user,
+          text: 'copy me',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+      )));
+      await tester.pump();
+      final style = DefaultSelectionStyle.of(
+          tester.element(find.text('copy me')));
+      // Not the theme default (accent at 40%), which is invisible on the
+      // accent bubble.
+      expect(style.selectionColor, MessageBubble.userSelectionColor);
+      expect(style.selectionColor,
+          isNot(Theme.of(tester.element(find.text('copy me')))
+              .textSelectionTheme
+              .selectionColor));
+    });
+
     testWidgets('a text-only message renders no chips', (tester) async {
       await tester.pumpWidget(host(MessageBubble(
         message: ClientMessage(
