@@ -130,7 +130,8 @@ func NewNode(cfg *Config) (*Node, error) {
 // the same fingerprint /health advertises and companion pairing screens
 // display. With a pin configured, any mismatch kills the handshake. With no
 // pin yet, the observed hash is recorded and persisted after the first
-// successful authenticated call (see maybeAdoptFingerprint).
+// successful authenticated call (see maybeAdoptFingerprint) — unless strict
+// TLS is on, which refuses the handshake instead.
 func (n *Node) verifyPinnedCert(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 	if len(rawCerts) == 0 {
 		return errors.New("bridge presented no certificate")
@@ -138,13 +139,23 @@ func (n *Node) verifyPinnedCert(rawCerts [][]byte, _ [][]*x509.Certificate) erro
 	sum := sha256.Sum256(rawCerts[0])
 	got := hex.EncodeToString(sum[:])
 	n.seenFingerprint.Store(&got)
-	if pin := n.pinnedFingerprint(); pin != "" && pin != got {
+	pin := n.pinnedFingerprint()
+	if pin == "" && n.strictTLS() {
+		return fmt.Errorf("%w (bridge presented %s)", errStrictNoPin, got)
+	}
+	if pin != "" && pin != got {
 		return fmt.Errorf(
 			"bridge certificate mismatch: pinned %s, got %s — refusing to connect",
 			pin, got,
 		)
 	}
 	return nil
+}
+
+// strictTLS reports whether trust-on-first-use is off (Config.StrictTLS).
+// Set from config only, never changed while running.
+func (n *Node) strictTLS() bool {
+	return n.cfg != nil && n.cfg.StrictTLS
 }
 
 // maybeAdoptFingerprint persists the first-seen certificate hash so every
@@ -154,7 +165,9 @@ func (n *Node) verifyPinnedCert(rawCerts [][]byte, _ [][]*x509.Certificate) erro
 func (n *Node) maybeAdoptFingerprint() {
 	seen := n.lastSeenFingerprint()
 	n.pinMu.Lock()
-	if n.cfg.Fingerprint != "" || seen == "" {
+	// Strict TLS never adopts: the handshake already refused an unpinned
+	// bridge, so this is only a second line of defence.
+	if n.cfg.Fingerprint != "" || seen == "" || n.strictTLS() {
 		n.pinMu.Unlock()
 		return
 	}
@@ -166,7 +179,26 @@ func (n *Node) maybeAdoptFingerprint() {
 		log.Printf("warning: could not persist pinned fingerprint: %v", err)
 		return
 	}
-	log.Printf("pinned bridge certificate %s (trust-on-first-use)", seen)
+	logTOFUAdoption(seen, n.cfg.Path)
+}
+
+// logTOFUAdoption announces a trust-on-first-use pin loudly: it is the one
+// moment an operator can catch a man-in-the-middle, by comparing the pinned
+// fingerprint with the one the daemon host reports.
+func logTOFUAdoption(fingerprint, configPath string) {
+	for _, line := range []string{
+		"==================== TRUST ON FIRST USE ====================",
+		"Pinned the bridge TLS certificate on first connect:",
+		"  " + fingerprint,
+		"Compare it with the fingerprint `talon status` shows on the daemon",
+		"host (or the bridge's /health). If they differ, stop this node,",
+		"remove \"fingerprint\" from " + configPath + " and reconnect",
+		"with --fingerprint <the daemon's value>. Use --strict-tls to",
+		"refuse unpinned bridges altogether.",
+		"============================================================",
+	} {
+		log.Print(line)
+	}
 }
 
 // pinnedFingerprint is the configured pin ("" = none yet), safe to call from

@@ -78,6 +78,9 @@ Flags (run/install/status):
                         token is swapped for one automatically on connect)
   --name <name>         Device name shown in the mesh (default: hostname)
   --fingerprint <hex>   Pinned bridge TLS certificate SHA-256 (TOFU when empty)
+  --strict-tls          Refuse to connect without a configured fingerprint
+                        (no trust-on-first-use; https only). Saved to the
+                        config; --strict-tls=false turns it back off.
 
 Config file fields mirror the flags; flags override the file. The first
 successful TLS connect stores the bridge certificate fingerprint back into
@@ -122,6 +125,14 @@ func main() {
 	}
 }
 
+// tlsModeLabel describes the bridge trust mode for `talon-node status`.
+func tlsModeLabel(strict bool) string {
+	if strict {
+		return "strict (a configured fingerprint is required)"
+	}
+	return "trust-on-first-use (default; --strict-tls requires a configured fingerprint)"
+}
+
 // runNode is the long-lived service loop: register, keep a heartbeat, and
 // consume the SSE event stream, reconnecting forever with backoff. It only
 // returns on SIGINT/SIGTERM.
@@ -157,11 +168,15 @@ func statusCmd(cfg *Config) {
 	fmt.Printf("bridge:      %s\n", cfg.Bridge)
 	fmt.Printf("device name: %s\n", cfg.Name)
 	fmt.Printf("device id:   %s\n", cfg.DeviceID)
-	if cfg.Fingerprint != "" {
+	switch {
+	case cfg.Fingerprint != "":
 		fmt.Printf("pinned cert: %s\n", cfg.Fingerprint)
-	} else {
+	case cfg.StrictTLS:
+		fmt.Printf("pinned cert: (none — strict TLS will refuse to connect)\n")
+	default:
 		fmt.Printf("pinned cert: (none — trust-on-first-use)\n")
 	}
+	fmt.Printf("tls mode:    %s\n", tlsModeLabel(cfg.StrictTLS))
 	fmt.Printf("credential:  %s\n", credentialKind(cfg.Token))
 	fmt.Printf("service:     %s\n", serviceState())
 	printAuditTail(cfg.Path)
