@@ -240,6 +240,10 @@ class AppState extends ChangeNotifier {
   /// bridge file first; legacy managed mode can still supervise a daemon when
   /// explicitly configured; everywhere, open the event stream and load chats.
   Future<void> start() async {
+    // Paused in the background (Android, foreground service owns the
+    // connection): nothing — network changes, timers — may reopen the UI
+    // stream until resumeUiStream() clears the flag and calls start().
+    if (_uiStreamPaused) return;
     _reconnect?.cancel();
     final epoch = ++_epoch;
     AppLog.info('app_state', 'connect attempt ${config.host}:${config.port}');
@@ -534,7 +538,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _scheduleReconnect() {
-    if (_disposed) return;
+    if (_disposed || _uiStreamPaused) return;
     _reconnect?.cancel();
     AppLog.info('app_state', 'reconnect in ${_backoffMs}ms');
     _reconnect = Timer(Duration(milliseconds: _backoffMs), () {
