@@ -290,4 +290,20 @@ void main() {
       expect(cfg.editable, contains('model'));
     });
   });
+
+  group('compareMessageOrder', () {
+    ClientMessage m(String id, int ts) => ClientMessage.fromJson(
+        {'id': id, 'chatId': 'c', 'role': 'user', 'text': id, 'ts': ts});
+
+    test('orders by timestamp, then numeric id, local notes after', () {
+      final list = [
+        m('sys-a', 5),
+        m('12', 5),
+        m('3', 9),
+        m('11', 5),
+        m('1', 1),
+      ]..sort(compareMessageOrder);
+      expect(list.map((x) => x.id), ['1', '11', '12', 'sys-a', '3']);
+    });
+  });
 }
