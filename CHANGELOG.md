@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.26.5](https://github.com/thefalconry/talon/compare/v5.26.4...v5.26.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* **docker:** one persistent data root, old-layout detection, Claude transcript relink ([#1214](https://github.com/thefalconry/talon/issues/1214)) ([9ad2f88](https://github.com/thefalconry/talon/commit/9ad2f8818cd3e7321abe87d583894fa695781619))
+
+
+### Tests
+
+* isolate every worker from the real home; guard against ~/.talon access ([#1213](https://github.com/thefalconry/talon/issues/1213)) ([aca2d83](https://github.com/thefalconry/talon/commit/aca2d83b8f3ac96874f7aa8f94583786728cfe86))
+
 ## [5.26.4](https://github.com/thefalconry/talon/compare/v5.26.3...v5.26.4) (2026-09-30)
 
 
