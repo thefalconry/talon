@@ -1,7 +1,8 @@
 /**
  * One inbound message, from `messages.upsert` to the model's turn:
  * access gates → media saved to the workspace → history recorded →
- * slash commands (../commands.ts) → catch-up policy → `execute()`.
+ * slash commands (../commands.ts; skipped in the catch-up backlog) →
+ * catch-up policy → `execute()`.
  */
 
 import { isJidGroup, type WAMessage } from "baileys";
@@ -17,7 +18,7 @@ import {
   recordMessageReceived,
 } from "../../../util/watchdog.js";
 import { isAddressedToSelf, isGroupAllowed } from "../access.js";
-import { handleWhatsAppCommand } from "../commands.js";
+import { handleWhatsAppCommand, parseWhatsAppCommand } from "../commands.js";
 import { sendText } from "../actions/send.js";
 import {
   bareId,
@@ -207,6 +208,32 @@ function catchUpDeservesReply(inbound: RecordedMessage): boolean {
   return true;
 }
 
+/**
+ * A slash command in the catch-up backlog was issued against an earlier
+ * state of the chat — replaying `/reset` or `/model x` after a restart
+ * would silently undo whatever happened since. It stays recorded but does
+ * not run; while fresh, the sender is told so they can resend it.
+ */
+async function skipCatchUpCommand(
+  runtime: WhatsAppRuntime,
+  inbound: RecordedMessage,
+  name: string,
+): Promise<void> {
+  const { chat, senderName } = inbound;
+  log(
+    "whatsapp",
+    `[${chat.chatId}] Skipped /${name} from ${senderName} (sent while offline)`,
+  );
+  recordMessageProcessed();
+  const sock = runtime.sock;
+  if (!sock || !shouldReplyToCatchUp(inbound.platformTs)) return;
+  await sendText(
+    { sock, gateway: runtime.gateway },
+    chat,
+    `Not run: /${name} was sent while offline. Send it again to run it.`,
+  ).catch(() => {});
+}
+
 async function onTurnEvent(
   runtime: WhatsAppRuntime,
   chat: WhatsAppChatInfo,
@@ -307,6 +334,10 @@ export async function handleInbound(
   if (!admitted) return;
   const inbound = await recordInbound(runtime, msg, admitted);
   if (!inbound) return;
+  if (options.catchUp) {
+    const cmd = parseWhatsAppCommand(inbound.text);
+    if (cmd) return skipCatchUpCommand(runtime, inbound, cmd.name);
+  }
   if (await handleWhatsAppCommand(runtime, inbound)) return;
   if (options.catchUp && !catchUpDeservesReply(inbound)) return;
   await runInboundTurn(runtime, inbound);

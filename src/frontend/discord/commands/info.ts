@@ -6,6 +6,7 @@ import {
   type ChatInputCommandInteraction,
   type Client,
   MessageFlags,
+  Status,
 } from "discord.js";
 import {
   formatDuration,
@@ -111,12 +112,23 @@ export async function handlePing(
   const start = Date.now();
   await i.deferReply({ flags: MessageFlags.Ephemeral });
   const apiLatency = Date.now() - start;
-  // client.ws.ping is the WebSocket heartbeat RTT (the real gateway latency).
-  const wsPing = i.client.ws.ping;
+  await i.editReply(renderPingReply(i.client.ws, apiLatency));
+}
+
+/**
+ * The /ping body. `ws.ping` is the gateway heartbeat RTT (-1 until the
+ * first heartbeat is acknowledged); `ws.status` is the live connection
+ * state, reported by name when it isn't Ready.
+ */
+export function renderPingReply(
+  ws: { ping: number; status: Status },
+  restLatencyMs: number,
+): string {
+  const wsPing = ws.ping >= 0 ? `${Math.round(ws.ping)}ms` : "n/a";
+  const gateway =
+    ws.status === Status.Ready ? "✓" : `✗ (${Status[ws.status] ?? ws.status})`;
   const uptime = formatDuration(process.uptime() * 1000);
-  await i.editReply(
-    `Pong! WS: ${wsPing}ms · REST: ${apiLatency}ms\nGateway: ✓ | Uptime: ${uptime}`,
-  );
+  return `Pong! WS: ${wsPing} · REST: ${restLatencyMs}ms\nGateway: ${gateway} | Uptime: ${uptime}`;
 }
 
 export async function handlePlugins(

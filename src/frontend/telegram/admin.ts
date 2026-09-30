@@ -11,7 +11,12 @@
 
 import type { Bot, Context } from "grammy";
 import type { TalonConfig } from "../../core/config/index.js";
-import { replyActiveChats, broadcast, killSession } from "./admin/sessions.js";
+import {
+  replyActiveChats,
+  broadcast,
+  killSession,
+  type AdminGateway,
+} from "./admin/sessions.js";
 import {
   replyStats,
   replyRecentErrors,
@@ -25,6 +30,7 @@ type AdminSubcommand = (
   rest: string[],
   bot: Bot,
   config: TalonConfig,
+  gateway?: AdminGateway,
 ) => Promise<void>;
 
 // Null-prototype so `/admin constructor` can't resolve an inherited
@@ -80,6 +86,7 @@ export async function handleAdminCommand(
   ctx: Context,
   bot: Bot,
   config: TalonConfig,
+  gateway?: AdminGateway,
 ): Promise<void> {
   const args = ((ctx.match as string) ?? "").trim();
   const [subcommand, ...rest] = args.split(/\s+/);
@@ -94,5 +101,5 @@ export async function handleAdminCommand(
     );
     return;
   }
-  await run(ctx, rest, bot, config);
+  await run(ctx, rest, bot, config, gateway);
 }
