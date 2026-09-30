@@ -1,15 +1,17 @@
 /**
  * /backup — the snapshot panel (admin only).
  *
- *   /backup                    status: schedule, sizes, targets
+ *   /backup                    the interactive panel: status + buttons
  *   /backup now                take a snapshot now
  *   /backup checkpoint <label> take a labelled, pinned-on-request snapshot
  *   /backup list               recent snapshots
  *   /backup pin|unpin <id>     keep past retention, or release
  *   /backup restore <id>       confirm button → staged restore + restart
  *
- * Restore is the only destructive one, so it is the only one behind a
- * button. It does not restore in place: a running daemon holds the
+ * The bare command opens a panel (render/backup-panel.ts) whose buttons —
+ * Back up now, Snapshots, How restore works, Refresh — are handled in
+ * callbacks/backup.ts. Restore is the only destructive action, so it is
+ * always behind an explicit confirmation button. It does not restore in place: a running daemon holds the
  * database it would replace, so the request is staged to
  * ~/.talon/restore-pending.json and applied by the next boot before
  * anything opens the database (see core/backup/restore.ts).
@@ -17,8 +19,6 @@
 
 import type { Bot, Context } from "grammy";
 import {
-  collectBackupStatus,
-  formatBackupStatus,
   formatSnapshotList,
   isSnapshotId,
   listSnapshots,
@@ -29,13 +29,16 @@ import {
 } from "../../../core/backup/index.js";
 import { respawnSelf } from "../../../core/daemon/respawn.js";
 import { escapeHtml } from "../formatting.js";
+import { renderRestoreConfirm } from "../../presentation/backup-panel.js";
+import { TELEGRAM_REPORTS } from "../render/html.js";
+import { inlineKeyboard, loadStatusPanel } from "../render/backup-panel.js";
 import { logError } from "../../../util/log.js";
 import { isAuthorizedAdmin } from "./state.js";
 
 const HELP = [
   "<b>/backup</b> — snapshots and checkpoints",
   "",
-  "<code>/backup</code> — status",
+  "<code>/backup</code> — the backup panel",
   "<code>/backup now</code> — take a snapshot",
   "<code>/backup checkpoint &lt;label&gt;</code> — labelled checkpoint",
   "<code>/backup list</code> — recent snapshots",
@@ -48,13 +51,47 @@ function pre(text: string): string {
 }
 
 async function sendStatus(ctx: Context): Promise<void> {
-  const status = await collectBackupStatus();
-  await ctx.reply(pre(formatBackupStatus(status)), { parse_mode: "HTML" });
+  const view = await loadStatusPanel();
+  await ctx.reply(view.text, {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: inlineKeyboard(view.buttons) },
+  });
 }
 
 async function sendList(ctx: Context): Promise<void> {
   const snapshots = await listSnapshots();
   await ctx.reply(pre(formatSnapshotList(snapshots)), { parse_mode: "HTML" });
+}
+
+/**
+ * Run one snapshot and describe the outcome as a single HTML line. Shared
+ * by `/backup now|checkpoint` and the panel's 📸 button, which edit their
+ * own messages with it. Never throws: a failure is the line.
+ */
+export async function runSnapshotForChat(
+  label?: string,
+): Promise<{ ok: boolean; text: string }> {
+  try {
+    const manifest = await runBackup({
+      kind: label ? "checkpoint" : "backup",
+      label,
+      pinned: Boolean(label),
+      trigger: "command",
+    });
+    return {
+      ok: true,
+      text:
+        `✅ <code>${escapeHtml(manifest.id)}</code> — ${manifest.parts.length} part(s), ` +
+        `${(manifest.sizeBytes / 1024 / 1024).toFixed(1)} MB` +
+        (label ? " (pinned)" : ""),
+    };
+  } catch (err) {
+    logError("backup", "/backup now failed", err);
+    return {
+      ok: false,
+      text: `⚠️ Backup failed: ${escapeHtml(err instanceof Error ? err.message : String(err))}`,
+    };
+  }
 }
 
 async function takeSnapshot(ctx: Context, label?: string): Promise<void> {
@@ -64,30 +101,10 @@ async function takeSnapshot(ctx: Context, label?: string): Promise<void> {
       : "📸 Taking a snapshot…",
     { parse_mode: "HTML" },
   );
-  try {
-    const manifest = await runBackup({
-      kind: label ? "checkpoint" : "backup",
-      label,
-      pinned: Boolean(label),
-      trigger: "command",
-    });
-    await ctx.api.editMessageText(
-      ctx.chat!.id,
-      sent.message_id,
-      `✅ <code>${escapeHtml(manifest.id)}</code> — ${manifest.parts.length} part(s), ` +
-        `${(manifest.sizeBytes / 1024 / 1024).toFixed(1)} MB` +
-        (label ? " (pinned)" : ""),
-      { parse_mode: "HTML" },
-    );
-  } catch (err) {
-    logError("backup", "/backup now failed", err);
-    await ctx.api.editMessageText(
-      ctx.chat!.id,
-      sent.message_id,
-      `⚠️ Backup failed: ${escapeHtml(err instanceof Error ? err.message : String(err))}`,
-      { parse_mode: "HTML" },
-    );
-  }
+  const result = await runSnapshotForChat(label);
+  await ctx.api.editMessageText(ctx.chat!.id, sent.message_id, result.text, {
+    parse_mode: "HTML",
+  });
 }
 
 async function setPinned(
@@ -124,27 +141,20 @@ async function askToRestore(ctx: Context, id: string): Promise<void> {
     );
     return;
   }
-  await ctx.reply(
-    `♻️ <b>Restore <code>${escapeHtml(id)}</code>?</b>\n` +
-      (manifest.label ? `“${escapeHtml(manifest.label)}”\n` : "") +
-      `Taken ${new Date(manifest.createdAt).toISOString()}\n\n` +
-      "This replaces config, prompts, keys, sessions, the database and memory, " +
-      "then restarts. A pinned checkpoint of the current state is taken first.",
-    {
-      parse_mode: "HTML",
-      reply_markup: {
-        inline_keyboard: [
-          [
-            {
-              text: "♻️ Restore and restart",
-              callback_data: `backup:restore:${id}`,
-            },
-            { text: "Cancel", callback_data: "backup:cancel" },
-          ],
+  await ctx.reply(renderRestoreConfirm(TELEGRAM_REPORTS, manifest), {
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "♻️ Restore and restart",
+            callback_data: `backup:restore:${id}`,
+          },
+          { text: "Cancel", callback_data: "backup:cancel" },
         ],
-      },
+      ],
     },
-  );
+  });
 }
 
 /**

@@ -77,6 +77,15 @@ exactly the snapshot's contents. Files created after the snapshot move into
 that checkpoint. A snapshot taken under a different user home is refused
 unless you pass `--clone`.
 
+From chat, the admin's `/backup` opens a panel (Telegram and Discord): the
+schedule, the last run and any failing streak, local size and pins,
+retention, encryption and each target's readiness, with buttons to back up
+now, browse snapshots (pin, unpin, restore), read how restore works, and
+refresh. A snapshot's Restore button only opens a confirmation; the
+confirmed restore is staged to `~/.talon/restore-pending.json`, Talon
+restarts, and the next boot applies it before the database opens. Chat
+restores use the local copy — fetch a remote-only snapshot with the CLI.
+
 ## Cloning onto a new machine
 
 1. Install Talon on the new machine (docs/server-install.md). Don't start it.

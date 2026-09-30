@@ -18,6 +18,8 @@
  *   model:nav:*                 (pager)
  *   model:backend-select        (select menu)
  *   metrics:today | metrics:all
+ *   backup:panel|now|guide|list:<p>|pin:<p>:<id>|unpin:<p>:<id>|ask:<p>:<id>
+ *                               (the /backup panel, admin only)
  *   backup:restore:<id> | backup:cancel  (restore confirmation, admin only)
  *   ai:<id>                     (AI-generated buttons — forwarded to agent)
  */
