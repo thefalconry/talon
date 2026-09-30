@@ -8,6 +8,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      linux_debug:
+        description: "Also build a Linux debug bundle (asserts on, full stack traces) for chasing bugs"
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
     paths:
@@ -339,6 +344,23 @@ jobs:
         with:
           name: talon-companion-${{ matrix.platform }}
           path: apps/companion/dist/*
+
+      # Opt-in only (manual run with linux_debug ticked): a debug build doubles
+      # the Linux job's time, so it never runs on PRs or releases.
+      - name: Build Linux debug bundle
+        if: matrix.platform == 'linux' && github.event_name == 'workflow_dispatch' && inputs.linux_debug
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter build linux --debug --dart-define=TALON_COMMIT="${GITHUB_SHA:0:7}"
+          tar -C build/linux/x64/debug -czf talon-companion-linux-debug.tar.gz bundle
+
+      - name: Upload Linux debug bundle
+        if: matrix.platform == 'linux' && github.event_name == 'workflow_dispatch' && inputs.linux_debug
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: talon-companion-linux-debug
+          path: apps/companion/talon-companion-linux-debug.tar.gz
 
       - name: Attach to Release
         if: github.event_name == 'release'
