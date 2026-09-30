@@ -6,9 +6,10 @@
 # Before installing, create ONE dataset for Talon with the "Apps" dataset
 # preset (owner apps:apps = 568:568), e.g. /mnt/tank/apps/talon, and put
 # its path in the volume line below. Everything Talon keeps — config,
-# sessions, workspace, memory, bridge keys, and the Claude / Antigravity
-# sign-ins — lives in that one dataset, so snapshots and replication cover
-# all of it.
+# chat history, workspace, memory, bridge keys, and every backend's sign-in
+# and conversation transcripts — lives in that one dataset, so snapshots
+# and replication cover all of it. Map the dataset to /data as a whole;
+# mapping only a .talon folder loses the transcripts on every update.
 
 services:
   talon:
@@ -22,8 +23,10 @@ services:
     user: "568:568"
 
     environment:
-      # HOME *is* the dataset: ~/.talon, ~/.claude, ~/.gemini and
-      # ~/.claude.json all persist without separate mounts.
+      # HOME *is* the dataset: ~/.talon, ~/.claude, ~/.claude.json,
+      # ~/.codex, ~/.gemini and ~/.local/share (OpenCode/Kilo) all persist
+      # without separate mounts. /data is also the image default; it is
+      # spelled out here so the layout is visible in the app's YAML.
       HOME: /data
       TZ: Etc/UTC
 
@@ -32,10 +35,10 @@ services:
       # are ignored afterwards; edit the file (or use /settings) from then
       # on. Leave TALON_BOT_TOKEN empty to start with just the companion
       # app bridge.
-      TALON_BOT_TOKEN: ""        # Telegram bot token from @BotFather
-      TALON_ADMIN_USER_ID: ""    # your numeric Telegram user id
-      TALON_FRONTEND: ""         # blank = telegram if a token is set, else native
-      TALON_BACKEND: "claude"    # claude | agy | codex | kilo | opencode | openai-agents
+      TALON_BOT_TOKEN: "" # Telegram bot token from @BotFather
+      TALON_ADMIN_USER_ID: "" # your numeric Telegram user id
+      TALON_FRONTEND: "" # blank = telegram if a token is set, else native
+      TALON_BACKEND: "claude" # claude | agy | codex | kilo | opencode | openai-agents
       # Address your phone uses to reach this NAS; pairing links point here.
       TALON_BRIDGE_URL: "https://truenas.local:19880"
 
