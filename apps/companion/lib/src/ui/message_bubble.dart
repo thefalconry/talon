@@ -363,7 +363,6 @@ class MessageBubble extends StatelessWidget {
 
   /// Extracts a clean file name from a tapped link label or query string,
   /// or null if the link does not specify a filename.
-  @visibleForTesting
   static String? _nameFromLink(String? text, String href) {
     final uri = Uri.tryParse(href);
     final queryName =
