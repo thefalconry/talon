@@ -314,6 +314,19 @@ export function clearAllChatModels(chatId: string): void {
 }
 
 /**
+ * Drop only the legacy single-slot `model` field, keeping every
+ * per-backend pick. The boot reconcile uses it: a stale legacy value must
+ * go, but the picks the chat made on other backends are still good.
+ */
+export function clearLegacyChatModel(chatId: string): void {
+  const entry = cache.get(chatId);
+  if (!entry || entry.model === undefined) return;
+  delete entry.model;
+  cleanupEmpty(chatId);
+  persist(chatId);
+}
+
+/**
  * @deprecated Prefer `setChatModelForBackend(chatId, backendId, model)`
  * which is explicit about which backend's slot is being mutated.
  *

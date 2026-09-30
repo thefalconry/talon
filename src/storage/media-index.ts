@@ -48,15 +48,16 @@ function isMediaEntry(value: unknown): value is MediaEntry {
 
 /**
  * Run the one-time import of the legacy JSON store, then sweep
- * expired entries. Idempotent; called once at boot.
+ * expired entries (unless `purgeExpired: false` — a boot with no safety
+ * checkpoint deletes nothing). Idempotent; called once at boot.
  */
-export function loadMediaIndex(): void {
+export function loadMediaIndex(options: { purgeExpired?: boolean } = {}): void {
   try {
     importLegacyMediaIndex();
   } catch (err) {
     logError("media", "Media index load failed", err);
   }
-  purgeExpired();
+  if (options.purgeExpired !== false) purgeExpired();
 }
 
 /** Legacy shape: bare MediaEntry[]. */

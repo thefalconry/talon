@@ -41,6 +41,8 @@ export {
   writeRestorePending,
 } from "./restore.js";
 
+export { checkpointOnVersionChange } from "./boot/version-checkpoint.js";
+
 export { discoverTargets, type BackupTarget } from "./targets.js";
 
 export {

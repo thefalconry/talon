@@ -145,6 +145,11 @@ function defaultPath(): string {
   return process.env.TALON_DB_PATH || files.database;
 }
 
+/** Where the process-wide database lives (or will, once opened). */
+export function databasePath(): string {
+  return defaultPath();
+}
+
 /**
  * Open (or return) the process-wide database. The first call wins the
  * path; tests pass an explicit tmp path and call closeDatabase() in

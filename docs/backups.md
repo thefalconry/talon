@@ -63,6 +63,22 @@ Chats then restore to session ids that have no transcript behind them.
 everything else. When it is off, the snapshot stays local: remote targets
 refuse plaintext parts.
 
+## Upgrade checkpoints
+
+The first boot of a new version takes a pinned `pre-upgrade <old>→<new>`
+checkpoint before anything else runs against your data: after a staged
+restore, before the stores open and before any migration or model
+reconcile. This covers every install shape: Docker and TrueNAS image
+updates, npm and binary upgrades, and git checkouts (`/update` also takes
+its own `pre-update` checkpoint). The last version that booted is recorded
+in `~/.talon/last-boot-version.json`.
+
+If that checkpoint fails (a missing backup key is the usual cause), Talon
+still boots. It raises a critical alert to the admin, skips its boot-time
+cleanup (old daily logs and notes, expired media), and tries the checkpoint
+again on the next boot. Set `backup.checkpointBeforeUpdate: false` to turn
+both upgrade and update checkpoints off.
+
 ## Restoring on the same machine
 
 ```sh

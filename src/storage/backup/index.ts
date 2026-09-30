@@ -22,7 +22,7 @@ import * as repo from "./repo.js";
  * handle stays inside storage/ (`db-handle-stays-in-storage`), and a
  * snapshot of the database is a storage concern with a storage API.
  */
-export { snapshotDatabase, snapshotSqliteFile } from "../db.js";
+export { databasePath, snapshotDatabase, snapshotSqliteFile } from "../db.js";
 
 export type { BackupRecord, BackupRemoteRecord } from "./repo.js";
 import type { BackupRecord, BackupRemoteRecord } from "./repo.js";
