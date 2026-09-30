@@ -1,17 +1,126 @@
 name: CI
 
+# ── What runs when ──────────────────────────────────────────────
+# Pull requests get a LIGHT gate: PR title, typecheck/lint/format/knip
+# (Code Quality), the unit suite on ubuntu, secret scan, npm audit,
+# dependency review and lockfile portability. Heavier tiers join a PR
+# only when it touches what they guard (native/** → the drift guards and
+# the native addon/warden suites on ubuntu; Docker files → Docker Build;
+# package.json → Tarball Check). Everything — the full 3-OS matrix,
+# backend-live, fuzz, docker, tarball — runs on push to main, on
+# workflow_dispatch, and on any PR carrying the `full-ci` label.
+# Docs-only / companion-only PRs run just the PR title + secret scan.
+#
+# The `changes` job below decides all of that. It is an `if:` gate rather
+# than `paths-ignore` on purpose: `CI Status` is the required check, and a
+# workflow skipped by a path filter never reports it, which blocks the
+# merge. Gating jobs keeps the workflow (and `CI Status`) running on every
+# PR, and `CI Status` treats skipped jobs as passed, failed/cancelled ones
+# as failed.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    # `labeled` so adding `full-ci` kicks off the full matrix straight
+    # away. Other labels just rerun the light gate (the older run is
+    # cancelled by the concurrency group).
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
+# PR runs are keyed by PR number and superseded by newer pushes; every
+# push/dispatch run gets its own group (run_id) so a main run is never
+# cancelled — not even while pending behind another one.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ── Scope: what this run has to cover ────────────────────────
+  # Outputs (strings "true"/"false"):
+  #   full    — push / dispatch / `full-ci` label: run everything
+  #   code    — anything beyond docs/**, apps/companion/** and loose *.md
+  #             (prompts/** and src/** always count, *.md included —
+  #             they ship in the binary)
+  #   native  — native/** or src/native/** (drift guards + addon suites)
+  #   docker  — Dockerfile, .dockerignore, docker/**, docker-compose*.yml
+  #   package — package.json / tarball checker (Tarball Check)
+  #   os      — JSON OS list for the cross-platform matrices
+  # Non-PR events set everything true. Any API failure fails this job,
+  # which fails `CI Status` — the gate fails closed, never open.
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ steps.scope.outputs.full }}
+      code: ${{ steps.scope.outputs.code }}
+      native: ${{ steps.scope.outputs.native }}
+      docker: ${{ steps.scope.outputs.docker }}
+      package: ${{ steps.scope.outputs.package }}
+      os: ${{ steps.scope.outputs.os }}
+    steps:
+      - name: Classify the change set
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          full=false code=false native=false docker=false package=false
+          if [[ "$EVENT" != "pull_request" ]]; then
+            full=true
+          else
+            # Labels are read live (not from the event payload) so that
+            # "add full-ci, then re-run" works too.
+            # Captured first: an API error must fail the job, not read
+            # as "no label".
+            labels=$(gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name')
+            if grep -qx 'full-ci' <<<"$labels"; then
+              full=true
+            fi
+            # Renames count on both sides. The endpoint caps at 3000
+            # files; at the cap, assume everything changed.
+            files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" \
+              --jq '.[] | .filename, (.previous_filename // empty)')
+            if [[ $(grep -c . <<<"$files" || true) -ge 3000 ]]; then
+              echo "::notice::PR file list hit the API cap — running everything"
+              full=true
+            fi
+            while IFS= read -r f; do
+              [[ -z "$f" ]] && continue
+              case "$f" in
+                docs/*|apps/companion/*) ;;
+                prompts/*|src/*) code=true ;;
+                *.md) ;;
+                *) code=true ;;
+              esac
+              case "$f" in native/*|src/native/*) native=true ;; esac
+              case "$f" in Dockerfile|.dockerignore|docker/*|docker-compose*.yml) docker=true ;; esac
+              case "$f" in package.json|.npmignore|.github/scripts/tarball-check.mjs) package=true ;; esac
+            done <<<"$files"
+          fi
+          if [[ "$full" == true ]]; then
+            code=true native=true docker=true package=true
+            os='["ubuntu-latest","macos-latest","windows-latest"]'
+          else
+            os='["ubuntu-latest"]'
+          fi
+          {
+            echo "full=$full"; echo "code=$code"; echo "native=$native"
+            echo "docker=$docker"; echo "package=$package"; echo "os=$os"
+          } | tee -a "$GITHUB_OUTPUT"
+          {
+            echo "### CI scope"
+            echo "full=\`$full\` code=\`$code\` native=\`$native\` docker=\`$docker\` package=\`$package\` os=\`$os\`"
+            [[ "$full" == true ]] || echo "Light PR gate. Add the \`full-ci\` label to run the full 3-OS matrix."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ── PR title must be a conventional commit ────────────────────
   # Squash merges use the PR title as the commit subject, and
   # release-please only counts typed commits (feat/fix/…) towards a
@@ -40,6 +149,8 @@ jobs:
   # ── Lint, format, and type-check ──────────────────────────────
   quality:
     name: Code Quality
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -95,24 +206,19 @@ jobs:
   # ── Unit & integration tests + coverage ────────────────────────
   test:
     name: Tests (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # One ubuntu run WITH coverage — instrumentation overhead is
-          # noise the macOS/Windows legs already absorb, and a second
-          # uninstrumented ubuntu leg just ran the same suite twice.
-          - os: ubuntu-latest
-            node-version: 24
-            coverage: true
-          - os: macos-latest
-            node-version: 24
-            coverage: false
-          - os: windows-latest
-            node-version: 24
-            coverage: false
+        # ubuntu only on a light PR run; all three OSes on main /
+        # dispatch / `full-ci`. The ubuntu leg carries coverage —
+        # instrumentation overhead is noise the macOS/Windows legs
+        # already absorb.
+        os: ${{ fromJSON(needs.changes.outputs.os) }}
+        node-version: [24]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -124,11 +230,11 @@ jobs:
       - run: npm ci
 
       - name: Run tests
-        if: ${{ !matrix.coverage }}
+        if: matrix.os != 'ubuntu-latest'
         run: npm run test:ci
 
       - name: Run tests with coverage
-        if: ${{ matrix.coverage }}
+        if: matrix.os == 'ubuntu-latest'
         run: npx vitest run --coverage --reporter=verbose --reporter=json --outputFile=test-results.json
 
       - name: Test summary
@@ -136,7 +242,7 @@ jobs:
         run: node .github/scripts/vitest-summary.mjs test-results.json "Tests (${{ matrix.os }}, Node ${{ matrix.node-version }})" coverage/coverage-summary.json
 
       - name: Validate coverage report
-        if: ${{ matrix.coverage }}
+        if: matrix.os == 'ubuntu-latest'
         run: |
           node -e "if (!require('fs').existsSync('coverage/coverage-summary.json')) { console.error('Coverage report not generated'); process.exit(1); }"
 
@@ -149,7 +255,7 @@ jobs:
           retention-days: 14
 
       - name: Upload coverage
-        if: always() && matrix.coverage
+        if: always() && matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-report
@@ -162,6 +268,9 @@ jobs:
   # as well as Linux so we catch platform regressions before they hit users.
   functional-cross-platform:
     name: Functional (${{ matrix.os }})
+    # Heavy tier: main / dispatch / `full-ci` only.
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -208,6 +317,9 @@ jobs:
   # live external service. See `talon-mcp-functional.test.ts`.
   integration:
     name: Integration (${{ matrix.os }})
+    # Heavy tier: main / dispatch / `full-ci` only.
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -254,6 +366,9 @@ jobs:
   # (prompts-embed.test.ts), same as the SQL embed.
   compile-smoke:
     name: Compile Smoke (${{ matrix.os }})
+    # Heavy tier: main / dispatch / `full-ci` only.
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -339,6 +454,9 @@ jobs:
   # if the committed artifacts drifted.
   gleam-artifact:
     name: Gleam Artifact
+    # On PRs only when native/** or src/native/** changed.
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -365,6 +483,9 @@ jobs:
   # committed bytes drifted.
   zig-artifact:
     name: Zig Toolchain Artifacts
+    # On PRs only when native/** or src/native/** changed.
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -431,6 +552,9 @@ jobs:
   # version matrix.
   wasm-artifact:
     name: WASM Artifact Check
+    # On PRs only when native/** or src/native/** changed.
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -476,6 +600,9 @@ jobs:
   # the cmd-based warden smoke suite over the real talon-warden.exe.
   warden:
     name: Warden (${{ matrix.os }})
+    # On PRs only when native/** or src/native/** changed, and then ubuntu only.
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions:
@@ -483,7 +610,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.os) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -534,6 +661,9 @@ jobs:
   # rather than silently riding the wasm fallback there.
   napi:
     name: Blake3 Napi (${{ matrix.os }})
+    # On PRs only when native/** or src/native/** changed, and then ubuntu only.
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     permissions:
@@ -541,7 +671,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: ${{ fromJSON(needs.changes.outputs.os) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -595,6 +725,9 @@ jobs:
   # every other host runs the (also tested) fuseless degradation path.
   fusefs:
     name: Namespace FUSE (ubuntu-latest)
+    # On PRs only when native/** or src/native/** changed.
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -704,6 +837,9 @@ jobs:
   # discovery and Claude Code's real SDK subprocess/model-discovery bridge.
   backend-live:
     name: Backend Live (${{ matrix.backend }}, ${{ matrix.os }})
+    # Heavy tier: main / dispatch / `full-ci` only.
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -784,6 +920,9 @@ jobs:
   # ── Fuzz testing (property-based with fast-check) ─────────────
   fuzz:
     name: Fuzz Testing
+    # Heavy tier: main / dispatch / `full-ci` only.
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -816,6 +955,8 @@ jobs:
   # ── Security audit ────────────────────────────────────────────
   security:
     name: Security Audit
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -891,8 +1032,9 @@ jobs:
   # vulnerable version (rare but happens) and human PRs that add risky deps.
   dep-review:
     name: Dependency Review
+    needs: changes
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.code == 'true'
     timeout-minutes: 5
     permissions:
       contents: read
@@ -913,6 +1055,8 @@ jobs:
   # package-lock.json to a fresh tmpdir and runs `npm ci` there.
   lockfile:
     name: Lockfile Portability
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
@@ -961,6 +1105,9 @@ jobs:
   # ── Docker build validation ───────────────────────────────────
   docker:
     name: Docker Build
+    # On PRs only when Docker files changed.
+    needs: changes
+    if: needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -1012,6 +1159,9 @@ jobs:
   # ship a leaky tarball to npm.
   tarball:
     name: Tarball Check
+    # On PRs only when package.json / the checker changed.
+    needs: changes
+    if: needs.changes.outputs.package == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1034,6 +1184,7 @@ jobs:
     name: CI Status
     if: always()
     needs:
+      - changes
       - pr-title
       - quality
       - test
@@ -1059,8 +1210,10 @@ jobs:
         env:
           # Single source of truth: every job in the `needs` list above
           # is checked automatically — no second hand-written list to
-          # forget when adding a job. (Jobs skipped by their `if` are
-          # fine; dep-review is PR-only, for example.)
+          # forget when adding a job. Skipped = passed (the light PR gate
+          # skips the heavy tiers by design); failure or cancelled = failed.
+          # `changes` is in the list too: if scoping fails, every gated
+          # job is skipped, and this still goes red.
           NEEDS: ${{ toJSON(needs) }}
         run: |
           fail=0
@@ -1077,20 +1230,13 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          NEEDS: ${{ toJSON(needs) }}
         run: |
-          echo "## CI Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Quality | ${{ needs.quality.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tests | ${{ needs.test.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Functional | ${{ needs.functional-cross-platform.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Integration | ${{ needs.integration.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| WASM Artifact | ${{ needs.wasm-artifact.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Backend Live | ${{ needs.backend-live.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Fuzz | ${{ needs.fuzz.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Security | ${{ needs.security.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Secrets | ${{ needs.secrets.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Lockfile | ${{ needs.lockfile.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Docker | ${{ needs.docker.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tarball | ${{ needs.tarball.result == 'success' && 'pass' || 'FAIL' }} |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## CI Results"
+            echo ""
+            echo "| Job | Status |"
+            echo "|-----|--------|"
+            jq -r 'to_entries[] | "| \(.key) | \(.value.result | if . == "success" then "pass" elif . == "skipped" then "skipped" else "FAIL (\(.))" end) |"' <<< "$NEEDS"
+          } >> "$GITHUB_STEP_SUMMARY"
