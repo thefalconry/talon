@@ -93,6 +93,8 @@ export const dirs = {
   ns: resolve(TALON_ROOT, "ns"),
   /** CLI-installed plugins (`talon plugin install`): ~/.talon/plugins/ */
   plugins: resolve(TALON_ROOT, "plugins"),
+  /** Helper binaries downloaded on first use (curl-impersonate): ~/.talon/bin/ */
+  bin: resolve(TALON_ROOT, "bin"),
 } as const;
 
 // ── Files ──────────────────────────────────────────────────────────────────

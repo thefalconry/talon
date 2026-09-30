@@ -115,6 +115,18 @@ vi.mock("node:fs", () => ({
   readFileSync: vi.fn(),
 }));
 
+// The fetch ladder's impersonation rungs need the curl-impersonate binary;
+// keep it "not installed" here so every fetch_url case exercises the plain
+// rung against the stubbed global fetch (and nothing is downloaded).
+vi.mock("../core/fetch/curl-impersonate.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../core/fetch/curl-impersonate.js")
+  >()),
+  resolveCurlImpersonate: vi.fn(async () => {
+    throw new Error("curl-impersonate not installed (test)");
+  }),
+}));
+
 const { handleSharedAction, handleChatFreeAction, isChatFreeAction } =
   await import("../core/engine/gateway-actions/index.js");
 const { registerCrossSendTarget } =
@@ -506,7 +518,10 @@ describe("gateway shared actions", () => {
         123,
       );
 
-      expect(result).toEqual({ ok: true, text: '{"status":"ok"}' });
+      expect(result).toEqual({
+        ok: true,
+        text: '{"status":"ok"}\n\n[fetched via plain]',
+      });
     });
 
     it("decodes text using the response charset", async () => {
@@ -531,7 +546,7 @@ describe("gateway shared actions", () => {
 
       expect(result).toEqual({
         ok: true,
-        text: "Hello from a UTF-16 page — café",
+        text: "Hello from a UTF-16 page — café\n\n[fetched via plain]",
       });
     });
 
@@ -597,7 +612,9 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(true);
-      expect(result?.text).toBe("(Page has no readable content)");
+      expect(result?.text).toBe(
+        "(Page has no readable content)\n\n[fetched via plain]",
+      );
     });
 
     it("returns HTTP error for non-ok response", async () => {
@@ -614,7 +631,10 @@ describe("gateway shared actions", () => {
         123,
       );
 
-      expect(result).toEqual({ ok: false, error: "HTTP 404" });
+      // A 404 is a wrong URL, not a bot wall: reported as such, no climbing.
+      expect(result?.ok).toBe(false);
+      expect(result?.error).toMatch(/^HTTP 404 via plain — /);
+      expect(result?.error).toContain("wrong URL, not a block");
     });
 
     it("returns HTTP 500 error", async () => {
@@ -631,7 +651,7 @@ describe("gateway shared actions", () => {
         123,
       );
 
-      expect(result).toEqual({ ok: false, error: "HTTP 500" });
+      expect(result).toEqual({ ok: false, error: "HTTP 500 via plain" });
     });
 
     it("handles network errors", async () => {
@@ -646,7 +666,8 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(false);
-      expect(result?.error).toContain("Fetch failed: ECONNREFUSED");
+      expect(result?.error).toContain("Could not reach the site on any rung");
+      expect(result?.error).toContain("plain ECONNREFUSED");
     });
 
     it("handles timeout errors", async () => {
@@ -663,7 +684,7 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(false);
-      expect(result?.error).toContain("Fetch failed");
+      expect(result?.error).toContain("Could not reach the site");
       expect(result?.error).toContain("timeout");
     });
 
@@ -677,7 +698,7 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(false);
-      expect(result?.error).toBe("Fetch failed: string error");
+      expect(result?.error).toContain("plain string error");
     });
 
     // ── Binary download tests ─────────────────────────────────────────────

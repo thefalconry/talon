@@ -40,7 +40,11 @@ afterEach(() => {
 describe("fetch_url private networks", () => {
   it("fetches a loopback address with no config at all", async () => {
     const result = await fetchLocal();
-    expect(result).toMatchObject({ ok: true, text: '{"status":"ok"}' });
+    // Loopback targets get the plain rung only (no bot wall, no exits).
+    expect(result).toMatchObject({
+      ok: true,
+      text: '{"status":"ok"}\n\n[fetched via plain]',
+    });
   });
 
   it("fetches a loopback address when fetchUrl is present but unset", async () => {
