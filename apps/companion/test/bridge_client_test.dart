@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:talon_companion/src/models/connection.dart';
 import 'package:talon_companion/src/services/bridge_client.dart';
-import 'package:talon_companion/src/services/mesh_service.dart';
 
 import 'mock_bridge.dart';
 
@@ -144,10 +143,11 @@ void main() {
 
   group('BridgeClient connection reuse', () {
     test('idle connections outlive the mesh heartbeat', () {
-      // Otherwise every 60 s registration opens a fresh TCP + TLS connection.
+      // MeshService re-registers every 60 s; a pool that drops idle
+      // connections sooner opens a fresh TCP + TLS connection every time.
       expect(
         BridgeClient.restIdleTimeout,
-        greaterThan(MeshService.heartbeatInterval),
+        greaterThan(const Duration(seconds: 60)),
       );
     });
 
