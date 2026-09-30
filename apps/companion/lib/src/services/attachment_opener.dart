@@ -384,7 +384,6 @@ class AttachmentOpener {
 
   /// [name] reduced to a single safe path segment: no separators, no leading
   /// dots, nothing outside a conservative character set.
-  @visibleForTesting
   static String safeName(String name) {
     var s = name.replaceAll(RegExp(r'[^\w .()+-]'), '_').trim();
     s = s.replaceFirst(RegExp(r'^\.+'), '');
