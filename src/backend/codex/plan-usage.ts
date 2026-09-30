@@ -12,13 +12,13 @@
  */
 
 import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { logWarn } from "../../util/log.js";
 import type {
   PlanUsage,
   PlanWindow,
 } from "../../core/agent-runtime/capabilities.js";
+import { userHome } from "../../util/fs-path.js";
 
 const USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
 const REQUEST_TIMEOUT_MS = 5_000;
@@ -37,7 +37,7 @@ function authPath(): string {
   const home = process.env.CODEX_HOME?.trim();
   return home && home.length > 0
     ? join(home, "auth.json")
-    : join(homedir(), ".codex", "auth.json");
+    : join(userHome(), ".codex", "auth.json");
 }
 
 interface CodexAuth {

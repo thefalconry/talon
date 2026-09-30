@@ -222,6 +222,16 @@ describe("classify", () => {
     );
   });
 
+  it("classifies Claude's 'No conversation found' as session_expired", () => {
+    expect(
+      classify(
+        new Error(
+          "No conversation found with session ID: 0f3c6a9e-1111-2222-3333-444455556666",
+        ),
+      ).reason,
+    ).toBe("session_expired");
+  });
+
   it("classifies 'invalid.*resume' as session_expired", () => {
     expect(
       classify(new Error("invalid session, resume not possible")).reason,

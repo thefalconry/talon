@@ -38,25 +38,31 @@ RUN rm -rf /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl
 # lives here and is inherited by the final stage — the rest of the build
 # is runtime-agnostic.
 #
-# HOME is /home/bun in *both* so a single docker-compose.yml serves
-# either variant: the mount paths never move. Both base images ship an
-# unprivileged UID 1000 (`bun` / `node`), which is what the app runs as
-# by default — any other UID works too (see the HOME permissions below).
+# HOME is /data in *both*: one data root holding everything that must
+# outlive the container — ~/.talon, and every backend's sign-in and
+# session store (~/.claude, ~/.claude.json, ~/.codex, ~/.gemini,
+# ~/.local/share/{opencode,kilo}). Mount one volume at /data and nothing
+# is left on the image's writable layer. Images before this one used
+# HOME=/home/bun with separate mounts; the entrypoint still recognises
+# that layout (docker/entrypoint.sh) and docs/docker.md covers moving off
+# it. Both base images ship an unprivileged UID 1000 (`bun` / `node`),
+# which is what the app runs as by default — any other UID works too (see
+# the HOME permissions below). TALON_CONTAINER tells the daemon it runs
+# here, which turns on its boot-time persistence check.
 #
 # ENTRYPOINT is set here rather than in the runtime stage on purpose:
 # declaring an ENTRYPOINT in a stage resets the CMD it inherited, and the
 # CMD is what differs per runtime.
 
 FROM oven/bun:1 AS base-bun
-ENV TALON_RUNTIME=bun HOME=/home/bun
+ENV TALON_RUNTIME=bun HOME=/data TALON_CONTAINER=1
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD bun -e "fetch('http://127.0.0.1:19876/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["bun", "src/index.ts"]
 
 FROM node:24-slim AS base-node
-ENV TALON_RUNTIME=node HOME=/home/bun
-RUN mkdir -p /home/bun && chown node:node /home/bun
+ENV TALON_RUNTIME=node HOME=/data TALON_CONTAINER=1
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:19876/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
@@ -126,10 +132,15 @@ COPY --chown=1000:1000 --chmod=0755 docker/entrypoint.sh docker/seed-config.mjs 
 RUN set -eux; \
   claude_bin="$(ls -d /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-*/claude | head -n1)"; \
   ln -sf "$claude_bin" /usr/local/bin/claude; \
-  mkdir -p "$HOME/.talon" "$HOME/.claude" "$HOME/.gemini"; \
-  chown -R 1000:1000 "$HOME"; \
-  chmod 0777 "$HOME" "$HOME/.talon" "$HOME/.claude" "$HOME/.gemini"
+  for home in /data /home/bun; do \
+    mkdir -p "$home/.talon" "$home/.claude" "$home/.gemini"; \
+    chown -R 1000:1000 "$home"; \
+    chmod 0777 "$home" "$home/.talon" "$home/.claude" "$home/.gemini"; \
+  done
 
+# /home/bun is created too, so a container still started with the old
+# layout's mounts (/home/bun/.talon, /home/bun/.claude) keeps working.
+#
 # Arbitrary-UID support. NAS appliances run containers as their own app
 # user (TrueNAS: `user: "568:568"`, owner of the app's datasets), not as
 # the image's 1000. Everything persistent is bind-mounted and owned by that
@@ -141,14 +152,15 @@ RUN set -eux; \
 # TrueNAS's `apps` user (568) also gets a passwd entry: git and ssh look
 # the current user up and refuse to work for a UID that has none.
 RUN groupadd -g 568 apps \
-  && useradd -u 568 -g 568 -d /home/bun -M -s /bin/sh apps
+  && useradd -u 568 -g 568 -d /data -M -s /bin/sh apps
 
 USER 1000:1000
 
-# Persistent state lives under ~/.talon/ — bind-mount this from the host
-# so config, sessions, workspace, palace, and userbot session survive
-# container restarts. See docker-compose.yml for the canonical layout.
-VOLUME /home/bun/.talon
+# All persistent state lives under /data (HOME). Bind-mount a host
+# directory or a named volume there; without one Docker creates an
+# anonymous volume, which is lost when the container is removed (the
+# daemon alerts about that at boot). See docs/docker.md.
+VOLUME /data
 
 # 19880: native bridge (companion app, nodes). The gateway (19876) binds
 # 127.0.0.1 inside the container and only serves the in-container

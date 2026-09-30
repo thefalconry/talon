@@ -21,7 +21,6 @@
  */
 
 import { existsSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { DoctorCheck } from "../../core/doctor/index.js";
 import {
@@ -41,6 +40,7 @@ import {
   type ProvisionState,
 } from "../../core/plugin/provision.js";
 import { dirs, files } from "../../util/paths.js";
+import { userHome } from "../../util/fs-path.js";
 
 /**
  * The mempalace version Talon installs and reconciles the managed venv
@@ -89,7 +89,7 @@ export interface MempalaceSection {
  */
 export function resolveMempalacePaths(
   section: MempalaceSection | undefined,
-  home = homedir(),
+  home = userHome(),
 ): { pythonPath: string; palacePath: string } {
   return {
     pythonPath: resolve(
@@ -166,7 +166,7 @@ export async function provisionMempalace(
   const exec = deps.exec ?? runStep;
   const platform = deps.platform ?? process.platform;
   const now = deps.now ?? Date.now;
-  const home = deps.home ?? homedir();
+  const home = deps.home ?? userHome();
   const pathExists = deps.pathExists ?? existsSync;
   const target = section.version ?? MEMPALACE_PINNED_VERSION;
 
@@ -606,7 +606,7 @@ export async function inspectMempalace(
 ): Promise<DoctorCheck[]> {
   const exec = deps.exec ?? runStep;
   const pathExists = deps.pathExists ?? existsSync;
-  const home = deps.home ?? homedir();
+  const home = deps.home ?? userHome();
   const { pythonPath: python } = resolveMempalacePaths(section, home);
   const pin = section.version ?? MEMPALACE_PINNED_VERSION;
   const managed =

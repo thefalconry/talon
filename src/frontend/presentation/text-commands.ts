@@ -161,13 +161,12 @@ function renderStatus(s: SessionStatusData): string {
 // ── Replies ─────────────────────────────────────────────────────────────────
 
 /**
- * How a frontend changes backend. By default the shared switch runs, with
- * `keepHistory` deciding whether the local chat log survives it; a
- * frontend that owns more per-chat state than the shared stores (the
- * native bridge's turn meta and cached readouts) supplies its own.
+ * How a frontend changes backend. By default the shared switch runs (it
+ * never touches chat history); a frontend that owns more per-chat state
+ * than the shared stores (the native bridge's cached readouts) supplies
+ * its own.
  */
 export type BackendSwitchHooks = {
-  keepHistory?: boolean;
   switchBackend?: (target: { id: string; label: string }) => Promise<string>;
   resetBackend?: () => Promise<string>;
 };
@@ -181,10 +180,9 @@ export async function modelCommandReply(
 ): Promise<string> {
   if (!arg) return renderModelOverview(await describeChatModels(chatId, deps));
   const lower = arg.toLowerCase();
-  const keepHistory = hooks.keepHistory === true;
   if (lower === "backend default" || lower === "backend reset") {
     if (hooks.resetBackend) return hooks.resetBackend();
-    return (await resetChatBackend(chatId, deps, { keepHistory })).text;
+    return (await resetChatBackend(chatId, deps)).text;
   }
   if (lower === "reset" || lower === "default") {
     return (await resetChatModel(chatId, deps)).text;
@@ -192,8 +190,7 @@ export async function modelCommandReply(
   const backend = matchBackendArg(arg, deps.config);
   if (backend) {
     if (hooks.switchBackend) return hooks.switchBackend(backend);
-    return (await switchChatBackend(chatId, backend, deps, { keepHistory }))
-      .text;
+    return (await switchChatBackend(chatId, backend, deps)).text;
   }
   return (await selectChatModel(chatId, arg, deps)).text;
 }

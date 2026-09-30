@@ -678,6 +678,33 @@ describe("plugin system", () => {
       }
     });
 
+    it("an init that outlives its deadline keeps running and clears the alert when it finishes", async () => {
+      vi.useFakeTimers();
+      try {
+        const plugin = createMockPlugin({
+          init: () => new Promise<void>((r) => setTimeout(r, 45_000)),
+        });
+        const mod = await setup(plugin);
+        const { sent, keys } = await captureAlerts();
+
+        const loading = mod.loadPlugins([{ path: "/fake/plugin" }]);
+        await vi.advanceTimersByTimeAsync(30_001);
+        await loading;
+        // Boot moved on; the plugin is registered and alerted, not dropped.
+        expect(mod.getPluginCount()).toBe(1);
+        expect(keys()).toEqual(["plugin.test-plugin"]);
+        expect(sent[0]).toMatch(/timed out after 30s/);
+
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(keys()).toEqual([]);
+        expect(sent.at(-1)).toMatch(
+          /Plugin "test-plugin" finished initialising late \(45s\)/,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("alerts when a native runtime fails to provision and clears when it is usable", async () => {
       let status: "failed" | "ready" = "failed";
       vi.doMock("../plugins/github/index.js", () => ({

@@ -8,13 +8,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   BOOT_DELAY_MS,
   _backupDeps,
   _resetBackupScheduler,
+  checkBackupKey,
+  checkpointBeforeUpdate,
   firstRunDelayMs,
   initBackup,
   runBackup,
@@ -25,6 +27,15 @@ import {
   DEFAULT_BACKUP_SETTINGS,
   resolveBackupSettings,
 } from "../core/backup/plan.js";
+import {
+  PASSPHRASE_ENV,
+  generatePassphraseFile,
+  passphraseProblem,
+} from "../core/backup/passphrase.js";
+import {
+  collectBackupStatus,
+  formatBackupStatus,
+} from "../core/backup/status.js";
 import type { Manifest } from "../core/backup/types.js";
 
 const HOUR = 60 * 60_000;
@@ -288,5 +299,216 @@ describe("the failure path", () => {
     await vi.advanceTimersByTimeAsync(BOOT_DELAY_MS - 1);
     await drain();
     expect(build).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("checkpointBeforeUpdate", () => {
+  it("fails when this process has no backup subsystem", async () => {
+    expect(await checkpointBeforeUpdate("a", "b")).toEqual({
+      status: "failed",
+      error: "the backup subsystem is not running in this process",
+    });
+  });
+
+  it("reports disabled when the operator turned it off", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-sched-cp-"));
+    const build = vi.fn(async () => manifest("never"));
+    _backupDeps.build = build as unknown as typeof _backupDeps.build;
+    await initBackup({
+      settings: resolveBackupSettings({
+        enabled: false,
+        checkpointBeforeUpdate: false,
+      }),
+      home,
+      notify: async () => undefined,
+    });
+    expect(await checkpointBeforeUpdate("a", "b")).toEqual({
+      status: "disabled",
+    });
+    expect(build).not.toHaveBeenCalled();
+  });
+
+  it("takes a pinned checkpoint even with the schedule disabled", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-sched-cp-"));
+    const build = vi.fn(async () => manifest("cp-1"));
+    _backupDeps.build = build as unknown as typeof _backupDeps.build;
+    _backupDeps.pruneLocal = (async () => undefined) as never;
+    _backupDeps.discover = (async () => []) as never;
+    await initBackup({
+      settings: resolveBackupSettings({ enabled: false }),
+      home,
+      notify: async () => undefined,
+    });
+    expect(await checkpointBeforeUpdate("aaa", "bbb")).toEqual({
+      status: "taken",
+      id: "cp-1",
+    });
+    expect(build).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "checkpoint",
+        pinned: true,
+        label: "pre-update aaa→bbb",
+      }),
+    );
+  });
+
+  it("reports the error instead of swallowing it", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-sched-cp-"));
+    _backupDeps.build = (async () => {
+      throw new Error(
+        "Cannot read backup.encryption.passphraseFile /k: ENOENT",
+      );
+    }) as unknown as typeof _backupDeps.build;
+    await initBackup({
+      settings: resolveBackupSettings({ enabled: false }),
+      home,
+      notify: async () => undefined,
+    });
+    expect(await checkpointBeforeUpdate("a", "b")).toEqual({
+      status: "failed",
+      error: "Cannot read backup.encryption.passphraseFile /k: ENOENT",
+    });
+  });
+});
+
+describe("the key check", () => {
+  async function withAlerts() {
+    const alerts = await import("../core/frontend-runtime/alerts.js");
+    const sent: string[] = [];
+    alerts.resetAlertsForTest(async (text) => {
+      sent.push(text);
+    });
+    return { sent, activeAlerts: alerts.activeAlerts };
+  }
+
+  async function keyedHome() {
+    const home = mkdtempSync(join(tmpdir(), "talon-sched-key-"));
+    const keyFile = await generatePassphraseFile(
+      join(home, "workspace", "secrets", "backup.key"),
+    );
+    const settings = resolveBackupSettings({
+      enabled: false,
+      encryption: { passphraseFile: keyFile },
+    });
+    return { home, keyFile, settings };
+  }
+
+  it("alerts once when the key goes missing and once when it is back", async () => {
+    const { sent, activeAlerts } = await withAlerts();
+    const { home, keyFile, settings } = await keyedHome();
+    const key = await import("node:fs").then((fs) =>
+      fs.readFileSync(keyFile, "utf8"),
+    );
+    await initBackup({ settings, home });
+    expect(sent).toEqual([]);
+
+    rmSync(keyFile);
+    expect(await checkBackupKey()).toMatch(/ENOENT/);
+    // Every later check — manual, status, hourly — is silent.
+    await checkBackupKey();
+    await vi.advanceTimersByTimeAsync(3 * HOUR);
+    await until(() => false);
+    await checkBackupKey();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(/Backup key problem: .*ENOENT/);
+    expect(sent[0]).toMatch(/\/update is refused unless forced/);
+    expect(activeAlerts().map((a) => a.key)).toEqual(["backup.key"]);
+
+    writeFileSync(keyFile, key, { mode: 0o600 });
+    expect(await checkBackupKey()).toBeNull();
+    expect(sent).toHaveLength(2);
+    expect(sent[1]).toMatch(/readable again/);
+    expect(activeAlerts()).toEqual([]);
+  });
+
+  it("alerts at boot when the key is already gone", async () => {
+    const { sent } = await withAlerts();
+    const { home, keyFile, settings } = await keyedHome();
+    rmSync(keyFile);
+    await initBackup({ settings, home });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(/Backup key problem/);
+  });
+
+  it("finds a key that vanished between runs on the hourly check", async () => {
+    const { sent } = await withAlerts();
+    const { home, keyFile, settings } = await keyedHome();
+    await initBackup({ settings, home });
+    rmSync(keyFile);
+    expect(sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(HOUR);
+    await until(() => sent.length > 0);
+    expect(sent).toHaveLength(1);
+  });
+
+  it("uses the backup notice route when one is configured", async () => {
+    const { home, keyFile, settings } = await keyedHome();
+    const notify = vi.fn(async (_text: string) => undefined);
+    rmSync(keyFile);
+    await initBackup({ settings, home, notify });
+    await checkBackupKey();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(String(notify.mock.calls[0]?.[0])).toMatch(/Backup key problem/);
+  });
+
+  it("shows the problem in the status panel", async () => {
+    await withAlerts();
+    const { home, keyFile, settings } = await keyedHome();
+    await initBackup({ settings, home });
+    rmSync(keyFile);
+    const status = await collectBackupStatus({ home, withTargets: false });
+    expect(status.keyProblem).toMatch(/ENOENT/);
+    expect(formatBackupStatus(status)).toMatch(/^Key: PROBLEM — .*ENOENT/m);
+  });
+
+  it("describes the config's key when no daemon is running (the CLI)", async () => {
+    const { home, keyFile, settings } = await keyedHome();
+    rmSync(keyFile);
+    const status = await collectBackupStatus({
+      home,
+      withTargets: false,
+      settings,
+    });
+    expect(status.keyProblem).toMatch(/ENOENT/);
+  });
+});
+
+describe("passphraseProblem", () => {
+  it("is null for a readable key, or with encryption off", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-key-"));
+    const passphraseFile = await generatePassphraseFile(join(home, "k"));
+    expect(
+      await passphraseProblem({ encryption: { passphraseFile } }, {}),
+    ).toBe(null);
+    expect(await passphraseProblem({}, {})).toBe(null);
+  });
+
+  it("blocks when the file is missing and nothing else supplies a key", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-key-"));
+    const problem = await passphraseProblem(
+      { encryption: { passphraseFile: join(home, "gone") } },
+      {},
+    );
+    expect(problem?.blocking).toBe(true);
+    expect(problem?.message).toMatch(/Cannot read .*ENOENT/);
+  });
+
+  it("still reports a missing file while the environment keeps backups going", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-key-"));
+    const problem = await passphraseProblem(
+      { encryption: { passphraseFile: join(home, "gone") } },
+      { [PASSPHRASE_ENV]: "a-long-enough-passphrase" },
+    );
+    expect(problem?.blocking).toBe(false);
+    expect(problem?.message).toMatch(/ENOENT/);
+  });
+
+  it("blocks on a short environment passphrase or no source at all", async () => {
+    expect(
+      (await passphraseProblem({}, { [PASSPHRASE_ENV]: "short" }))?.blocking,
+    ).toBe(true);
+    expect((await passphraseProblem({ encryption: {} }, {}))?.message).toMatch(
+      /no passphrase was found/,
+    );
   });
 });

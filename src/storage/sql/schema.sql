@@ -52,6 +52,19 @@ CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE OF text, sender_name ON his
   VALUES (new.id, new.text, new.sender_name);
 END;
 
+-- Per-chat history state. Chat history is never deleted by a reset, a
+-- backend switch or a chat deletion: a reset records a context floor
+-- (`cleared_through_id`, the newest history_messages.id at reset time) so
+-- the bot's context starts fresh after it while every row stays stored
+-- and searchable; deleting a chat in a client sets `hidden_at`. Only the
+-- operator's explicit `talon history purge` removes rows.
+CREATE TABLE IF NOT EXISTS history_chat_state (
+  chat_id            TEXT    PRIMARY KEY,
+  cleared_through_id INTEGER NOT NULL DEFAULT 0,
+  cleared_at         INTEGER,
+  hidden_at          INTEGER
+);
+
 -- Typed memory: one row per claim, with an FTS5 index over subject +
 -- text. Kinds are lifecycles, not labels (docs/memory-persona-plan.md
 -- §3.1): `directive` is durable human intent, `fact` is durable and

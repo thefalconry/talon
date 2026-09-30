@@ -29,7 +29,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { dirs } from "../../util/paths.js";
@@ -54,6 +54,7 @@ import {
 import { signManifest } from "./archive/manifest-auth.js";
 import { TarWriter } from "./archive/tar.js";
 import { createCompressor } from "./archive/zstd.js";
+import { verifyWrittenParts } from "./archive/verify.js";
 import {
   collectTree,
   excludeForRoot,
@@ -88,6 +89,7 @@ import type {
   SnapshotKind,
   SnapshotPart,
 } from "./types.js";
+import { userHome } from "../../util/fs-path.js";
 
 /** The part that holds WhatsApp auth and the userbot session. */
 const LOGINS_PART = "logins.tar.zst";
@@ -466,7 +468,7 @@ async function sourceContext(
       options.userHome !== undefined
         ? options.userHome
         : realHome
-          ? homedir()
+          ? userHome()
           : null,
     env: options.env ?? (realHome ? process.env : {}),
     config: await readConfigJson(home),
@@ -755,6 +757,7 @@ export async function buildSnapshot(options: BuildOptions): Promise<Manifest> {
       }
     }
     await removeScratch(dir);
+    const verifiedAt = await verifyWrittenParts(dir, parts, passphrase);
 
     const gitHead = await readGitHead(process.cwd());
     const manifest: Manifest = {
@@ -776,6 +779,7 @@ export async function buildSnapshot(options: BuildOptions): Promise<Manifest> {
       ...(palaceHash ? { palaceHash } : {}),
       sizeBytes: parts.reduce((sum, part) => sum + part.bytes, 0),
       remote: {},
+      verifiedAt,
     };
     if (passphrase) manifest.auth = await signManifest(manifest, passphrase);
     await writeManifest(manifest, home);

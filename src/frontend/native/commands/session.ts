@@ -28,7 +28,7 @@ import {
   statusCommandReply,
 } from "../../presentation/text-commands.js";
 import { broadcastChatUpdated } from "../chats/chat-wire.js";
-import { resetChat, wipeChatConversation } from "../chats/reset.js";
+import { resetChat, handOffChatBackend } from "../chats/reset.js";
 import { setBackend } from "../surface/models.js";
 import { broadcastStatus } from "../surface/status.js";
 import { interruptTurn } from "../turn/turn.js";
@@ -48,7 +48,7 @@ async function model(ctx: NativeCommandContext): Promise<void> {
     },
     resetBackend: async () => {
       const outcome = await resetChatBackend(entry.id, deps);
-      wipeChatConversation(runtime, entry.id);
+      handOffChatBackend(runtime, entry.id);
       broadcastStatus(runtime);
       return outcome.text;
     },

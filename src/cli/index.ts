@@ -37,6 +37,7 @@ import { showEvents } from "./events.js";
 import { runPluginCommand } from "./plugin.js";
 import { runSkillCommand } from "./skill.js";
 import { runMemoryCommand } from "./memory.js";
+import { runHistoryCommand } from "./commands/history.js";
 import { mainMenu } from "./menu.js";
 import { runBackupCommand } from "./commands/backup.js";
 import { runMeshCommand } from "./commands/mesh.js";
@@ -62,6 +63,7 @@ const CLI_COMMANDS = [
   "plugin",
   "skill",
   "memory",
+  "history",
   "backup",
   "mesh",
 ];
@@ -108,6 +110,9 @@ function printHelp(): void {
   );
   console.log(
     `    ${pc.cyan("memory")}     Read/edit the memory store (list/search/import/render)`,
+  );
+  console.log(
+    `    ${pc.cyan("history")}    Chat history kept by Talon (show/hidden/purge)`,
   );
   console.log(
     `    ${pc.cyan("backup")}     Snapshots and checkpoints (now/list/show/pin/restore)`,
@@ -180,6 +185,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   plugin: (args) => runPluginCommand(args),
   skill: (args) => runSkillCommand(args),
   memory: (args) => runMemoryCommand(args),
+  history: (args) => runHistoryCommand(args),
   "--version": () => console.log(pkg.version),
   "-v": () => console.log(pkg.version),
   "--help": () => printHelp(),

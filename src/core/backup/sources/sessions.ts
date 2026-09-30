@@ -180,6 +180,35 @@ async function storeRoots(
 }
 
 /**
+ * The directory each configured backend keeps its sessions (and sign-in)
+ * under, whether or not it exists yet. Claude is always listed: it is the
+ * default backend. The container storage check uses this to tell which
+ * of them would vanish with the container.
+ */
+export function backendStoreDirs(
+  userHome: string,
+  env: SourceContext["env"],
+  config: Record<string, unknown>,
+): { backend: string; path: string }[] {
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
+  const out = [
+    { backend: "claude", path: configDir || join(userHome, ".claude") },
+  ];
+  const backends = enabledBackends(config);
+  for (const spec of STORES) {
+    if (!backends.has(spec.backend)) continue;
+    const dir = spec.dir(userHome, env);
+    // agy's store is one level inside ~/.gemini, which also holds its
+    // sign-in: check the whole directory.
+    out.push({
+      backend: spec.backend,
+      path: spec.backend === "agy" ? join(userHome, ".gemini") : dir,
+    });
+  }
+  return out;
+}
+
+/**
  * Every session root this machine has for the configured backends, in a
  * deterministic order. Nothing outside the Talon home is looked at when
  * `userHome` is null (tests that only fake a Talon home).

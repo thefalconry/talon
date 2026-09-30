@@ -15,7 +15,7 @@ import { loadSessions, resetSession } from "./storage/sessions.js";
 import { loadChatSettings } from "./storage/chat-settings.js";
 import { loadCronJobs } from "./storage/cron.js";
 import { loadTriggers } from "./storage/triggers.js";
-import { clearHistory, loadHistory } from "./storage/history.js";
+import { loadHistory } from "./storage/history.js";
 import { loadMediaIndex } from "./storage/media-index.js";
 import { cleanupOldLogs } from "./storage/daily-log.js";
 import {
@@ -90,6 +90,12 @@ function resolveFrontendByNumericId(
 export type BootstrapOptions = {
   /** Override frontend names for plugin loading (e.g. ["terminal"]). */
   frontendNames?: string[];
+  /**
+   * Skip the boot steps that delete data (expired daily logs and memory
+   * notes, expired media). Set when the pre-upgrade checkpoint failed:
+   * with no snapshot to fall back on, this boot deletes nothing.
+   */
+  skipDestructiveSteps?: boolean;
 };
 
 export type BootstrapResult = {
@@ -165,9 +171,16 @@ export async function bootstrap(
     loadCronJobs();
     loadTriggers();
     loadHistory();
-    loadMediaIndex();
+    loadMediaIndex({ purgeExpired: !options.skipDestructiveSteps });
   });
-  cleanupOldLogs();
+  if (options.skipDestructiveSteps) {
+    logWarn(
+      "bot",
+      "Skipping boot-time cleanup (old daily logs, expired media): no pre-upgrade checkpoint to fall back on",
+    );
+  } else {
+    cleanupOldLogs();
+  }
 
   return { config };
 }
@@ -195,89 +208,191 @@ type ChatBindingDeps = {
   getBackendIdForChat: (chatId: string) => string;
   getBackendForChat: (chatId: string) => Backend;
   isModelValidForBackend: (backend: Backend, model: string) => Promise<boolean>;
+  /**
+   * Tell the operator what the reconcile changed — once per boot, one
+   * message for every chat. Defaults to an operator alert.
+   */
+  notify?: (text: string) => void;
 };
 
 const CHAT_BINDING_CONCURRENCY = 8;
 const REBIND_RETRY_DELAY_MS = 1_500;
+const ONE_MILLION_SUFFIX = /\s*\[1m\]$/i;
 
 /**
  * Re-establish every chat's stored backend/model override against the
  * backends this boot actually has. Chats are independent, so they are
  * reconciled `CHAT_BINDING_CONCURRENCY` at a time; a shared backend that
  * two chats need at once is initialised exactly once by the pool.
+ *
+ * Never deletes chat history. A stale override is corrected (remapped to
+ * the closest valid id, or cleared so the backend default serves) and the
+ * operator is told once, naming every chat that changed. Only a chat whose
+ * backend is gone gets a fresh backend session — its old session id is
+ * archived by `resetSession`, and its history rows stay.
  */
 export async function reconcileChatBindings(
   config: TalonConfig,
   deps: ChatBindingDeps,
 ): Promise<void> {
   const { getAllChatSettings } = await import("./storage/chat-settings.js");
+  const changes: string[] = [];
   await mapConcurrent(
     Object.entries(getAllChatSettings()),
     CHAT_BINDING_CONCURRENCY,
-    ([cid, settings]) => reconcileChatBinding(cid, settings, config, deps),
+    async ([cid, settings]) => {
+      const change = await reconcileChatBinding(cid, settings, config, deps);
+      if (change) changes.push(`• ${cid}: ${change}`);
+    },
+  );
+  if (changes.length === 0) return;
+  const text =
+    `Boot reconcile adjusted ${changes.length} chat(s) whose pinned backend/model ` +
+    `is no longer available (chat history kept):\n${changes.sort().join("\n")}`;
+  logWarn("bot", text);
+  (deps.notify ?? defaultReconcileNotify)(text);
+}
+
+function defaultReconcileNotify(text: string): void {
+  void import("./core/frontend-runtime/alerts.js").then(({ raiseAlert }) =>
+    raiseAlert("chat-bindings.reconciled", text, { severity: "warn" }),
   );
 }
 
+/**
+ * The closest valid id for a model the catalog no longer lists, or null.
+ * Today: `<id>[1m]` → `<id>` (SDK catalogs stopped enumerating the 1M
+ * context variants), so a chat keeps its model family instead of being
+ * dropped to the backend default.
+ */
+async function remapModelAlias(
+  backend: Backend,
+  model: string,
+  deps: ChatBindingDeps,
+): Promise<string | null> {
+  if (!ONE_MILLION_SUFFIX.test(model)) return null;
+  const stem = model.replace(ONE_MILLION_SUFFIX, "").trim();
+  if (!stem) return null;
+  return (await deps.isModelValidForBackend(backend, stem)) ? stem : null;
+}
+
+/**
+ * Reconcile one chat. Returns a short description of what changed, or
+ * null when nothing did.
+ */
 async function reconcileChatBinding(
   cid: string,
   settings: { backend?: string; model?: string },
   config: TalonConfig,
   deps: ChatBindingDeps,
-): Promise<void> {
-  const { getAllChatSettings, setChatBackend, setChatModel } =
-    await import("./storage/chat-settings.js");
-  let resetVolatileState = false;
+): Promise<string | null> {
+  const changes: string[] = [];
   if (settings.backend) {
-    if (!deps.isBackendAvailable(settings.backend, config)) {
-      log(
-        "bot",
-        `Per-chat backend ${settings.backend} for ${cid} is no longer available — resetting chat to default backend`,
-      );
-      await deps.releaseChat(cid);
-      setChatBackend(cid, undefined);
-      setChatModel(cid, undefined);
-      resetVolatileState = true;
-    } else {
-      let result = await deps.rebindChat(cid, settings.backend, config);
-      if (!result.ok) {
-        await new Promise((r) => setTimeout(r, REBIND_RETRY_DELAY_MS));
-        result = await deps.rebindChat(cid, settings.backend, config);
-      }
-      if (!result.ok) {
-        log(
-          "bot",
-          `Per-chat backend rebind failed for ${cid} → ${settings.backend}: ${result.error} — keeping the setting; will serve on the default backend until re-selected`,
-        );
-      }
-    }
+    const change = await reconcileChatBackend(
+      cid,
+      settings.backend,
+      config,
+      deps,
+    );
+    if (change) changes.push(change);
   }
   const bindingMatchesSetting =
     !settings.backend || deps.getBackendIdForChat(cid) === settings.backend;
-  const currentModel = getAllChatSettings()[cid]?.model;
-  if (currentModel && bindingMatchesSetting) {
-    const be = deps.getBackendForChat(cid);
-    try {
-      const valid = await deps.isModelValidForBackend(be, currentModel);
-      if (!valid) {
-        log(
-          "bot",
-          `Per-chat model ${currentModel} for ${cid} is not valid for its backend — resetting model to default`,
-        );
-        setChatModel(cid, undefined);
-        resetVolatileState = true;
-      }
-    } catch (err) {
-      log(
-        "bot",
-        `Per-chat model validation failed for ${cid} (${currentModel}): ${
-          err instanceof Error ? err.message : String(err)
-        } — keeping stored model`,
-      );
-    }
+  if (bindingMatchesSetting) {
+    const change = await reconcileChatModel(cid, deps);
+    if (change) changes.push(change);
   }
-  if (resetVolatileState) {
-    resetSession(cid);
-    clearHistory(cid);
+  return changes.length > 0 ? changes.join("; ") : null;
+}
+
+async function reconcileChatBackend(
+  cid: string,
+  backendId: string,
+  config: TalonConfig,
+  deps: ChatBindingDeps,
+): Promise<string | null> {
+  const { setChatBackend, clearLegacyChatModel } =
+    await import("./storage/chat-settings.js");
+  if (!deps.isBackendAvailable(backendId, config)) {
+    logWarn(
+      "bot",
+      `Per-chat backend ${backendId} for ${cid} is no longer available — serving the chat on the default backend (history kept)`,
+    );
+    await deps.releaseChat(cid);
+    setChatBackend(cid, undefined);
+    // The per-backend model picks stay: they are keyed by backend, so the
+    // default backend's pick (if any) still applies and the vanished
+    // backend's comes back with it. Only the unkeyed legacy slot goes.
+    clearLegacyChatModel(cid);
+    // The stored session belongs to the vanished backend and cannot resume
+    // on another one. resetSession archives its id; history is untouched.
+    resetSession(cid, "backend-unavailable");
+    return `backend ${backendId} unavailable → default backend`;
+  }
+  let result = await deps.rebindChat(cid, backendId, config);
+  if (!result.ok) {
+    await new Promise((r) => setTimeout(r, REBIND_RETRY_DELAY_MS));
+    result = await deps.rebindChat(cid, backendId, config);
+  }
+  if (!result.ok) {
+    log(
+      "bot",
+      `Per-chat backend rebind failed for ${cid} → ${backendId}: ${result.error} — keeping the setting; will serve on the default backend until re-selected`,
+    );
+  }
+  return null;
+}
+
+/**
+ * Check the chat's pinned model against the backend that serves it.
+ * The unkeyed legacy slot is remapped or cleared when stale; a per-backend
+ * pick is only ever remapped (the send-time resolver already falls back
+ * past a stale one, and a catalog that failed to load must not erase it).
+ * The backend session is kept either way: a resume under a different
+ * model is fine, and the conversation is the point.
+ */
+async function reconcileChatModel(
+  cid: string,
+  deps: ChatBindingDeps,
+): Promise<string | null> {
+  const {
+    getAllChatSettings,
+    getChatModelForBackend,
+    setChatModelForBackend,
+    clearLegacyChatModel,
+  } = await import("./storage/chat-settings.js");
+  const backendId = deps.getBackendIdForChat(cid);
+  const legacy = getAllChatSettings()[cid]?.model;
+  const model = legacy ?? getChatModelForBackend(cid, backendId);
+  if (!model) return null;
+  const be = deps.getBackendForChat(cid);
+  try {
+    if (await deps.isModelValidForBackend(be, model)) return null;
+    const remapped = await remapModelAlias(be, model, deps);
+    if (remapped) {
+      setChatModelForBackend(cid, backendId, remapped);
+      if (legacy) clearLegacyChatModel(cid);
+      logWarn(
+        "bot",
+        `Per-chat model ${model} for ${cid} is not in the ${backendId} catalog — remapped to ${remapped} (history and session kept)`,
+      );
+      return `model ${model} → ${remapped}`;
+    }
+    if (!legacy) return null;
+    clearLegacyChatModel(cid);
+    logWarn(
+      "bot",
+      `Per-chat model ${model} for ${cid} is not valid for its backend — falling back to the backend default (history and session kept)`,
+    );
+    return `model ${model} unavailable → backend default`;
+  } catch (err) {
+    log(
+      "bot",
+      `Per-chat model validation failed for ${cid} (${model}): ${
+        err instanceof Error ? err.message : String(err)
+      } — keeping stored model`,
+    );
+    return null;
   }
 }
 
@@ -370,11 +485,10 @@ export async function initBackendAndDispatcher(
   );
 
   // Re-acquire any persisted per-chat backend/model overrides so chats
-  // resume exactly where they were before restart. If a backend has
-  // since been disabled/removed, or the stored model is no longer valid
-  // for the backend that would serve it, clear the override and reset
-  // volatile chat state so the next user message starts a fresh default
-  // session instead of crashing on an orphaned model id.
+  // resume exactly where they were before restart. A backend that has
+  // since gone, or a stored model its backend no longer lists, is
+  // corrected (remapped or cleared to the default) — never by deleting
+  // the chat's history. See reconcileChatBindings.
   await bootPhase("chat bindings", () =>
     reconcileChatBindings(config, {
       isBackendAvailable,

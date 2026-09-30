@@ -31,6 +31,8 @@ protects nothing.
 | Manifests are signed (HMAC-SHA256, scrypt-derived key)         | Yes, when a passphrase is configured.                                                                                                                |
 | WhatsApp auth and the userbot's `.user-session` leave the host | **No**, unless `backup.loginSessions: "remote"`.                                                                                                     |
 | The passphrase file is left out of every part                  | Always, even if it sits in a backed-up folder. A warning is logged.                                                                                  |
+| A restore never deletes or overwrites the passphrase file      | Always, even if it sits in a restored folder.                                                                                                        |
+| A missing or unreadable key raises an alert                    | At boot, hourly, and on every `/backup` status. One `backup.key` alert per outage, and a recovery notice once it is readable again.                  |
 | Local snapshot files are owner-only                            | `backups/<id>/` is 0700; parts and `manifest.json` are 0600.                                                                                         |
 | Restored files are owner-only                                  | Files are 0600 (0700 if they were executable), directories 0700.                                                                                     |
 
@@ -51,9 +53,14 @@ An inline passphrase in `config.json` is rejected on purpose, because
 - The default location, `~/.talon/backup.key`, is outside every snapshot
   root. If you point `passphraseFile` somewhere that is backed up
   (`workspace/secrets/`, an `extraPaths` entry), the file is still
-  skipped, but it is better to keep it out.
+  skipped, and a restore leaves it in place, but it is better to keep it
+  out.
 - If `backup.encryption` is set and no passphrase can be found, the
-  snapshot **fails**. It never falls back to plaintext.
+  snapshot **fails**. It never falls back to plaintext. The daemon checks
+  the key at boot and every hour, so a key that goes missing raises the
+  `backup.key` alert straight away instead of at the next scheduled run.
+  `/backup` status shows the problem too. While it lasts, `/update` is
+  refused (its pre-update checkpoint cannot be taken) unless forced.
 - **Rotating the key:** generate a new file, point the config at it and
   take a snapshot. Older snapshots still need the old key, so keep it for
   as long as you keep those snapshots.

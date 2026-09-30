@@ -106,14 +106,11 @@ async function runResetCommand(
   senderName: string,
   deps: ModelCommandDeps,
 ): Promise<string> {
-  // The local history store is WhatsApp's only chat record — a reset
-  // clears the model's session, not the conversation log.
+  // A soft reset: the conversation log is kept (it is WhatsApp's only chat
+  // record), only the bot's context starts fresh.
   await performSessionReset(
     chatId,
     resolveChatBackendPair(chatId, deps).backend,
-    {
-      keepHistory: true,
-    },
   );
   log("whatsapp", `Session reset by ${senderName}`);
   return "Session cleared.";
@@ -135,9 +132,9 @@ export async function executeWhatsAppCommand(
   }
   switch (cmd.name) {
     case "model":
-      // `/reset` keeps history on WhatsApp because the local store is the
-      // only chat record; a backend switch keeps it for the same reason.
-      return modelCommandReply(chatId, cmd.arg, deps, { keepHistory: true });
+      // A backend switch never touches history (the local store is also
+      // WhatsApp's only chat record).
+      return modelCommandReply(chatId, cmd.arg, deps);
     case "effort":
       return effortCommandReply(chatId, cmd.arg, deps);
     case "settings":
