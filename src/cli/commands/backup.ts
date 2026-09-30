@@ -49,7 +49,7 @@ import { pruneLocal, reconcileIndex } from "../../core/backup/store.js";
 import {
   describeRetention,
   localRetention,
-} from "../../core/backup/retention.js";
+} from "../../core/backup/retention/policy.js";
 import { generatePassphraseFile } from "../../core/backup/passphrase.js";
 import { dirs } from "../../util/paths.js";
 import { fetchGateway } from "../daemon-api.js";

@@ -60,7 +60,7 @@ export type RetentionEntry = {
 };
 
 /** Why a snapshot survived, for logs and tests. */
-export type KeepReason =
+type KeepReason =
   "pinned" | "last" | "daily" | "weekly" | "checkpoint" | "verified";
 
 export type RetentionPlan<T> = {
@@ -103,7 +103,7 @@ export function describeRetention(policy: RetentionPolicy): string {
 }
 
 /** A createdAt a snapshot can be ranked by. */
-export function hasUsableTimestamp(entry: { createdAt: unknown }): boolean {
+function hasUsableTimestamp(entry: { createdAt: unknown }): boolean {
   return (
     typeof entry.createdAt === "number" &&
     Number.isFinite(entry.createdAt) &&

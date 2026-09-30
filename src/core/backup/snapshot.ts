@@ -54,7 +54,7 @@ import {
 import { signManifest } from "./archive/manifest-auth.js";
 import { TarWriter } from "./archive/tar.js";
 import { createCompressor } from "./archive/zstd.js";
-import { verifyWrittenParts } from "./verify.js";
+import { verifyWrittenParts } from "./archive/verify.js";
 import {
   collectTree,
   excludeForRoot,

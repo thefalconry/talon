@@ -38,7 +38,7 @@ import {
   describeRetention,
   localRetention,
   remoteRetention,
-} from "./retention.js";
+} from "./retention/policy.js";
 import { discoverTargets, selectTargets } from "./targets.js";
 import { pruneRemote, uploadSnapshot } from "./upload.js";
 import type { BackupSettings, Manifest, SnapshotKind } from "./types.js";

@@ -37,7 +37,7 @@ import {
   describeRetention,
   planRetention,
   type RetentionPolicy,
-} from "./retention.js";
+} from "./retention/policy.js";
 import type {
   Manifest,
   RemoteState,
@@ -252,7 +252,7 @@ async function removeSnapshot(
 }
 
 /**
- * Apply the local retention policy (see retention.ts). Returns the ids
+ * Apply the local retention policy (see retention/policy.ts). Returns the ids
  * removed. A directory whose manifest cannot be read never reaches the
  * listing, so it is never pruned.
  */

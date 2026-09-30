@@ -33,7 +33,7 @@ import {
   describeRetention,
   planRetention,
   type RetentionPolicy,
-} from "./retention.js";
+} from "./retention/policy.js";
 import { partPath, reindexSnapshot, writeManifest } from "./store.js";
 import type { BackupTarget } from "./targets.js";
 import type { Manifest, RemoteState, SnapshotPart } from "./types.js";
@@ -183,7 +183,7 @@ async function uploadToAll(
 
 /**
  * Apply the remote retention policy on each target — the same tiers as
- * local (see retention.ts), with `keepRemote` as the newest-N tier.
+ * local (see retention/policy.ts), with `keepRemote` as the newest-N tier.
  *
  * Two refusals keep a retention pass from turning into data loss:
  *   - A target that cannot list is skipped: deleting on a partial

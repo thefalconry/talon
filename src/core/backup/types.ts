@@ -125,7 +125,7 @@ export type Manifest = {
   remote: Record<string, RemoteState>;
   /**
    * Epoch ms at which every part was read back and matched its digest
-   * (and, when encrypted, decrypted end to end) — see verify.ts. Set
+   * (and, when encrypted, decrypted end to end) — see archive/verify.ts. Set
    * before signing, so the MAC covers it. Absent on snapshots written
    * before verification existed. Retention never prunes the newest
    * verified snapshot.

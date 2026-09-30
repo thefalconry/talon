@@ -1,5 +1,5 @@
 /**
- * Tiered snapshot retention (core/backup/retention.ts).
+ * Tiered snapshot retention (core/backup/retention/policy.ts).
  *
  * The failure this guards against: something silently damages memory,
  * the schedule keeps backing up the damage, and a newest-N policy ages
@@ -15,7 +15,7 @@ import {
   remoteRetention,
   type RetentionEntry,
   type RetentionPolicy,
-} from "../core/backup/retention.js";
+} from "../core/backup/retention/policy.js";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

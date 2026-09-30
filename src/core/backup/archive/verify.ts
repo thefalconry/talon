@@ -7,17 +7,17 @@
  * decrypted end to end (and discarded) so a broken encryptor cannot
  * produce a snapshot nobody can open. The result is `verifiedAt` in the
  * manifest, and retention never prunes the newest snapshot that has one
- * (see retention.ts).
+ * (see retention/policy.ts).
  *
  * Runs before the manifest is signed, so `verifiedAt` is covered by the
  * MAC like every other field written at build time.
  */
 
 import { join } from "node:path";
-import { TalonError } from "../errors.js";
-import { isEncryptedFile, verifyDecryptable } from "./archive/crypt.js";
-import { sha256File } from "./archive/digest.js";
-import type { SnapshotPart } from "./types.js";
+import { TalonError } from "../../errors.js";
+import { isEncryptedFile, verifyDecryptable } from "./crypt.js";
+import { sha256File } from "./digest.js";
+import type { SnapshotPart } from "../types.js";
 
 /**
  * Throws a TalonError naming the first part that does not read back.
