@@ -51,6 +51,8 @@ const {
 } = kiloProfile;
 const { getPluginMcpServerName, getPluginMcpServerPrefix } =
   await import("../backend/remote-server/mcp.js");
+const { ensureRemoteSession, isRemoteSessionNotFound } =
+  await import("../backend/remote-server/sessions.js");
 
 type MockKiloClient = {
   mcp: {
@@ -238,11 +240,97 @@ describe("kilo server helpers", () => {
     expect(oc.session.create).not.toHaveBeenCalled();
 
     getSessionMock.mockReturnValueOnce({ sessionId: "expired-1" });
-    oc.session.get.mockRejectedValueOnce(new Error("expired"));
+    // What the SDK's error interceptor throws for a 404.
+    oc.session.get.mockRejectedValueOnce(
+      new Error("Session not found", {
+        cause: { body: { name: "NotFoundError" }, status: 404 },
+      }),
+    );
     oc.session.create.mockResolvedValueOnce({ data: { id: "new-1" } });
     await expect(ensureSession(oc as never, "chat-a")).resolves.toBe("new-1");
-    expect(resetSessionMock).toHaveBeenCalledWith("chat-a");
+    expect(resetSessionMock).toHaveBeenCalledWith(
+      "chat-a",
+      "remote_session_not_found",
+    );
     expect(setSessionIdMock).toHaveBeenCalledWith("chat-a", "new-1");
+  });
+
+  describe("ensureRemoteSession on a failing session.get", () => {
+    const state = { label: "Kilo" } as never;
+
+    it("keeps the session and fails the turn on a transient error", async () => {
+      const oc = makeClient();
+      getSessionMock.mockReturnValue({ sessionId: "keep-me" });
+      // The server is still starting: connection refused, then a 503.
+      oc.session.get
+        .mockRejectedValueOnce(
+          new TypeError("fetch failed", {
+            cause: Object.assign(new Error("connect ECONNREFUSED"), {
+              code: "ECONNREFUSED",
+            }),
+          }),
+        )
+        .mockRejectedValueOnce(
+          new Error("Service Unavailable", { cause: { status: 503 } }),
+        )
+        .mockRejectedValueOnce(new Error("timeout"));
+
+      await expect(
+        ensureRemoteSession(oc as never, state, "chat-t", [0, 0]),
+      ).rejects.toMatchObject({ reason: "network" });
+      expect(oc.session.get).toHaveBeenCalledTimes(3);
+      expect(resetSessionMock).not.toHaveBeenCalled();
+      expect(oc.session.create).not.toHaveBeenCalled();
+      expect(setSessionIdMock).not.toHaveBeenCalled();
+    });
+
+    it("resumes when a retry after a transient error succeeds", async () => {
+      const oc = makeClient();
+      getSessionMock.mockReturnValue({ sessionId: "keep-me" });
+      oc.session.get
+        .mockRejectedValueOnce(new Error("fetch failed"))
+        .mockResolvedValueOnce({ data: { id: "keep-me" } });
+
+      await expect(
+        ensureRemoteSession(oc as never, state, "chat-t", [0]),
+      ).resolves.toBe("keep-me");
+      expect(resetSessionMock).not.toHaveBeenCalled();
+      expect(oc.session.create).not.toHaveBeenCalled();
+    });
+
+    it("resets on the server's NotFoundError body, with no retry", async () => {
+      const oc = makeClient();
+      getSessionMock.mockReturnValue({ sessionId: "gone" });
+      // Without the error interceptor the client throws the parsed body.
+      oc.session.get.mockRejectedValueOnce({
+        name: "NotFoundError",
+        data: { message: "Resource not found: session gone" },
+      });
+      oc.session.create.mockResolvedValueOnce({ data: { id: "fresh" } });
+
+      await expect(
+        ensureRemoteSession(oc as never, state, "chat-t", [0, 0]),
+      ).resolves.toBe("fresh");
+      expect(oc.session.get).toHaveBeenCalledTimes(1);
+      expect(resetSessionMock).toHaveBeenCalledWith(
+        "chat-t",
+        "remote_session_not_found",
+      );
+    });
+  });
+
+  it("isRemoteSessionNotFound only accepts a definite not-found", () => {
+    expect(isRemoteSessionNotFound({ status: 404 })).toBe(true);
+    expect(
+      isRemoteSessionNotFound(new Error("x", { cause: { status: 404 } })),
+    ).toBe(true);
+    expect(isRemoteSessionNotFound({ name: "NotFoundError" })).toBe(true);
+    expect(isRemoteSessionNotFound(new Error("fetch failed"))).toBe(false);
+    expect(
+      isRemoteSessionNotFound(new Error("x", { cause: { status: 500 } })),
+    ).toBe(false);
+    expect(isRemoteSessionNotFound(new Error("expired"))).toBe(false);
+    expect(isRemoteSessionNotFound(undefined)).toBe(false);
   });
 
   it("ensureSession scopes the new session's permission ruleset to this chat's MCP server", async () => {

@@ -53,6 +53,10 @@ export type BackupStatus = {
 type BackupPolicy = {
   keepLocal: number;
   keepRemote: number;
+  /** Absent on a policy built before tiered retention (older daemons). */
+  keepDaily?: number;
+  keepWeekly?: number;
+  keepCheckpoints?: number;
   /**
    * Snapshots are written encrypted: `backup.encryption` is configured or
    * the passphrase comes from the environment (see passphrase.ts). Off
@@ -69,6 +73,9 @@ function describePolicy(
   return {
     keepLocal: settings.keepLocal,
     keepRemote: settings.keepRemote,
+    keepDaily: settings.keepDaily,
+    keepWeekly: settings.keepWeekly,
+    keepCheckpoints: settings.keepCheckpoints,
     encrypted:
       settings.encryption !== undefined || Boolean(env[PASSPHRASE_ENV]?.trim()),
   };

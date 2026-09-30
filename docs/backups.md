@@ -63,6 +63,51 @@ Chats then restore to session ids that have no transcript behind them.
 everything else. When it is off, the snapshot stays local: remote targets
 refuse plaintext parts.
 
+## Retention
+
+After every run Talon prunes old snapshots, locally and on each remote
+target. Keeping only the newest few is not enough: if something silently
+damages memory, the schedule keeps backing up the damage and every good
+copy ages out within days. Retention is therefore tiered. A snapshot
+survives if **any** rule keeps it:
+
+| Rule          | Config key                 | Default | Keeps                                                                       |
+| ------------- | -------------------------- | ------- | --------------------------------------------------------------------------- |
+| Newest        | `keepLocal` / `keepRemote` | 12 / 30 | the newest N scheduled snapshots (local / per remote target)                |
+| Daily         | `keepDaily`                | 7       | the newest snapshot of each of the last N days that have one (0 = off)      |
+| Weekly        | `keepWeekly`               | 4       | the newest snapshot of each of the last N ISO weeks that have one (0 = off) |
+| Checkpoints   | `keepCheckpoints`          | 10      | the newest N unpinned checkpoints, counted apart from scheduled snapshots   |
+| Pinned        | —                          | —       | every pinned snapshot, always, counted against nothing                      |
+| Last verified | —                          | —       | the newest snapshot whose parts read back correctly after writing           |
+
+At the defaults (every 6 hours) that is about 3 days of every snapshot, one
+a day for a week, and one a week for about a month: roughly 20 scheduled
+snapshots on disk. Days and weeks are counted over snapshots that exist, so
+a machine that was off for a while does not lose its history to the clock.
+Days and weeks are UTC.
+
+- **Checkpoints** (manual, `pre-update`, `pre-upgrade`, `pre-restore`) have
+  their own cap. Taking checkpoints never pushes scheduled snapshots out,
+  and a busy schedule never pushes checkpoints out. The automatic
+  checkpoints are also pinned.
+- **Verification.** Every new snapshot is read back from disk and re-hashed
+  (and, when encrypted, decrypted end to end) before its manifest is
+  written. A snapshot that fails this is deleted and the run fails. The
+  newest snapshot that passed is never pruned. It is recorded as
+  `verifiedAt` in the manifest.
+- **Remote entries Talon cannot read** (no manifest, a partial manifest, no
+  `createdAt`) are never pruned. They are logged as a warning instead. A
+  target that cannot list its snapshots is skipped entirely.
+
+```json
+"backup": { "keepLocal": 12, "keepDaily": 14, "keepWeekly": 8, "keepCheckpoints": 10 }
+```
+
+`talon backup prune` applies the local policy by hand. Everything else Talon
+deletes on its own is listed in docs/data-lifecycle.md. Pin a snapshot
+(`talon backup pin <id>`, or from the `/backup` panel) to keep it past
+every rule.
+
 ## Upgrade checkpoints
 
 The first boot of a new version takes a pinned `pre-upgrade <old>→<new>`

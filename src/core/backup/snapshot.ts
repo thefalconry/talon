@@ -54,6 +54,7 @@ import {
 import { signManifest } from "./archive/manifest-auth.js";
 import { TarWriter } from "./archive/tar.js";
 import { createCompressor } from "./archive/zstd.js";
+import { verifyWrittenParts } from "./archive/verify.js";
 import {
   collectTree,
   excludeForRoot,
@@ -755,6 +756,7 @@ export async function buildSnapshot(options: BuildOptions): Promise<Manifest> {
       }
     }
     await removeScratch(dir);
+    const verifiedAt = await verifyWrittenParts(dir, parts, passphrase);
 
     const gitHead = await readGitHead(process.cwd());
     const manifest: Manifest = {
@@ -776,6 +778,7 @@ export async function buildSnapshot(options: BuildOptions): Promise<Manifest> {
       ...(palaceHash ? { palaceHash } : {}),
       sizeBytes: parts.reduce((sum, part) => sum + part.bytes, 0),
       remote: {},
+      verifiedAt,
     };
     if (passphrase) manifest.auth = await signManifest(manifest, passphrase);
     await writeManifest(manifest, home);

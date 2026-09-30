@@ -180,7 +180,13 @@ function storageLines(f: ReportFormatter, status: BackupStatus): string[] {
   if (policy) {
     lines.push(
       `${f.bold("Retention:")} newest ${policy.keepLocal} kept here, ` +
-        `${policy.keepRemote} per target · pinned ones are never pruned`,
+        `${policy.keepRemote} per target` +
+        (policy.keepDaily ? ` · 1/day for ${policy.keepDaily}d` : "") +
+        (policy.keepWeekly ? ` · 1/week for ${policy.keepWeekly}w` : "") +
+        (policy.keepCheckpoints
+          ? ` · ${policy.keepCheckpoints} checkpoints`
+          : "") +
+        ` · pinned ones and the last verified are never pruned`,
     );
     lines.push(
       policy.encrypted
