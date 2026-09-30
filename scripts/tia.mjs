@@ -69,11 +69,33 @@ const IGNORE = [
   /^docs\//,
   /^apps\/companion\//,
   /^\.github\/(workflows|ISSUE_TEMPLATE)\//,
-  /^\.github\/[^/]+\.(md|ya?ml)$/,
+  /^\.github\/[^/]+\.(md|ya?ml|json)$/,
   /^[^/]+\.md$/,
+  /^src\/(.+\/)?README\.md$/,
   /^(LICENSE|LICENSE-MIT|NOTICE)$/,
   /^release-please-config\.json$/,
   /^\.release-please-manifest\.json$/,
+  // container / OS packaging (no unit test reads these)
+  /^(Dockerfile|\.dockerignore|nfpm\.yaml)$/,
+  /^docker-compose[^/]*\.ya?ml$/,
+  /^(docker|packaging)\//,
+  // lint / format / static-analysis config and ratchet baselines — their
+  // own gates (Code Quality) run on every PR
+  /^\.(editorconfig|gitattributes|gitignore|gitleaks\.toml|gitleaksignore|oxlintrc\.json|prettierignore|dependency-cruiser\.cjs)$/,
+  /^knip\.json$/,
+  /^scripts\/[^/]+-baseline\.json$/,
+];
+
+/**
+ * Non-TS inputs that are compiled into a checked-in TS module. A change to
+ * the input counts as a change to that module; the drift test in SMOKE
+ * (sql-embed) fails if the generated module was not regenerated with it.
+ */
+const ALIASES = [
+  [
+    /^src\/storage\/sql\/[^/]+\.sql$/,
+    "src/storage/sql/statements.generated.ts",
+  ],
 ];
 
 /** The TIA tooling itself: selects only its own tests instead of the full suite. */
@@ -156,7 +178,9 @@ export function selectTests({
       picked.add(f);
       continue;
     }
-    if (/\.[cm]?tsx?$/.test(f)) srcChanged.add(f);
+    const alias = ALIASES.find(([re]) => re.test(f));
+    if (alias) srcChanged.add(alias[1]);
+    else if (/\.[cm]?tsx?$/.test(f)) srcChanged.add(f);
     else unmapped.push(f);
   }
   if (unmapped.length > 0) {

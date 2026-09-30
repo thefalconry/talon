@@ -51,6 +51,7 @@ function writeMap(generatedAt: string, file = "ci/test-impact-map.json") {
     "src/core/beta.ts",
     "src/core/shared.ts",
     "src/storage/gamma.ts",
+    "src/storage/sql/statements.generated.ts",
   ];
   const map = {
     version: 1,
@@ -61,7 +62,7 @@ function writeMap(generatedAt: string, file = "ci/test-impact-map.json") {
     tests: {
       "src/__tests__/alpha.test.ts": [0, 2],
       "src/__tests__/beta.test.ts": [1, 2],
-      "src/__tests__/gamma-store.test.ts": [3],
+      "src/__tests__/gamma-store.test.ts": [3, 4],
       "src/__tests__/delta.test.ts": [],
     },
   };
@@ -176,8 +177,29 @@ describe("tia selection", () => {
   });
 
   it("falls back to the full suite for a non-TS asset under src/", () => {
-    const d = tia(["src/storage/sql/schema.sql"]);
+    const d = tia(["src/core/fixtures/table.json"]);
     expect(d.full).toBe(true);
+  });
+
+  it("treats a .sql change as a change to the generated statements module", () => {
+    const d = tia(["src/storage/sql/cron.sql"]);
+    expect(d.full).toBe(false);
+    expect(d.selected).toContain("src/__tests__/gamma-store.test.ts");
+    expect(d.selected).not.toContain("src/__tests__/alpha.test.ts");
+  });
+
+  it("ignores packaging, lint config and ratchet baselines", () => {
+    const d = tia([
+      "Dockerfile",
+      "docker/entrypoint.sh",
+      "knip.json",
+      ".oxlintrc.json",
+      "scripts/function-size-baseline.json",
+      ".github/branch-protection.json",
+      "src/storage/sql/README.md",
+    ]);
+    expect(d.full).toBe(false);
+    expect(d.selected).toEqual([...SMOKE].sort());
   });
 
   it("falls back to the full suite when the map is stale", () => {
