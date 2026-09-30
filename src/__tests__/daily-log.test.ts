@@ -31,10 +31,14 @@ vi.mock("node:os", async (importOriginal) => {
 
 beforeEach(() => {
   vi.resetModules();
+  // The worker home sets TALON_HOME, which outranks the homedir() mock
+  // below; point it at this suite's root too.
+  vi.stubEnv("TALON_HOME", join(TEST_ROOT, ".talon"));
   if (existsSync(TEST_ROOT)) rmSync(TEST_ROOT, { recursive: true });
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (existsSync(TEST_ROOT)) rmSync(TEST_ROOT, { recursive: true });
 });
 

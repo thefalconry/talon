@@ -32,16 +32,20 @@
  */
 
 import { resolve } from "node:path";
-import { homedir } from "node:os";
+import { assertNotRealHome, userHome } from "./fs-path.js";
 
 /**
  * Root of the Talon data directory: ~/.talon/, relocatable via the
  * TALON_HOME environment variable (containers, systemd units, tests).
  * Resolved once at import time — a mid-process override does nothing.
+ * Under vitest, resolving to the real ~/.talon throws (util/fs-path.ts):
+ * the check runs on every evaluation of this module, so a suite that
+ * re-imports it after changing the env is checked again.
  */
 const TALON_ROOT = resolve(
-  process.env.TALON_HOME || resolve(homedir(), ".talon"),
+  process.env.TALON_HOME || resolve(userHome(), ".talon"),
 );
+assertNotRealHome(TALON_ROOT, "dirs.root (TALON_HOME / ~/.talon)");
 
 // ── Directories ────────────────────────────────────────────────────────────
 

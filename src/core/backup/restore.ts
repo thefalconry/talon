@@ -36,7 +36,6 @@ import {
   unlink,
   copyFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { dirs } from "../../util/paths.js";
@@ -73,6 +72,7 @@ import {
 } from "./store.js";
 import type { BackupTarget } from "./targets.js";
 import type { BackupSettings, Manifest, SnapshotPart } from "./types.js";
+import { userHome } from "../../util/fs-path.js";
 
 /** A staged request older than this is stale and ignored. */
 export const RESTORE_PENDING_MAX_AGE_MS = 10 * 60_000;
@@ -571,7 +571,7 @@ export async function restoreSnapshot(
   const realHome = options.home === undefined;
   const cloneTarget: CloneTarget = {
     home,
-    userHome: options.userHome ?? homedir(),
+    userHome: options.userHome ?? userHome(),
     env: options.env ?? (realHome ? process.env : {}),
   };
   const missing = await missingParts(manifest, home);
@@ -597,7 +597,7 @@ export async function restoreSnapshot(
       pinned: true,
       settings: options.settings,
       home,
-      userHome: options.userHome ?? (realHome ? homedir() : null),
+      userHome: options.userHome ?? (realHome ? userHome() : null),
       env: cloneTarget.env,
     });
     checkpointId = checkpoint.id;

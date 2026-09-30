@@ -29,7 +29,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { dirs } from "../../util/paths.js";
@@ -89,6 +89,7 @@ import type {
   SnapshotKind,
   SnapshotPart,
 } from "./types.js";
+import { userHome } from "../../util/fs-path.js";
 
 /** The part that holds WhatsApp auth and the userbot session. */
 const LOGINS_PART = "logins.tar.zst";
@@ -467,7 +468,7 @@ async function sourceContext(
       options.userHome !== undefined
         ? options.userHome
         : realHome
-          ? homedir()
+          ? userHome()
           : null,
     env: options.env ?? (realHome ? process.env : {}),
     config: await readConfigJson(home),

@@ -13,13 +13,13 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { logWarn } from "../../../util/log.js";
 import type {
   PlanUsage,
   PlanWindow,
 } from "../../../core/agent-runtime/capabilities.js";
+import { userHome } from "../../../util/fs-path.js";
 
 // `cedar_ember=1` asks the endpoint to include banked limit resets (the
 // claude.ai "Reset for free" grants); `skip_spend=1` drops the spend block we
@@ -38,7 +38,7 @@ let inFlight: Promise<PlanUsage | undefined> | undefined;
 function credentialsPath(): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
   return join(
-    configDir && configDir.length > 0 ? configDir : join(homedir(), ".claude"),
+    configDir && configDir.length > 0 ? configDir : join(userHome(), ".claude"),
     ".credentials.json",
   );
 }

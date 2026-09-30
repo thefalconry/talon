@@ -3,12 +3,23 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.ts"],
-    // Per-worker throwaway SQLite path — keeps suites away from the
-    // real ~/.talon/data/talon.db (see src/__tests__/setup/test-db.ts).
-    setupFiles: ["src/__tests__/setup/test-db.ts"],
-    // Reaps mkdtemp scratch dirs left behind by suites that never clean up
-    // (~33 MB per run from native-tools alone). See setup/tmp-reaper.ts.
-    globalSetup: ["src/__tests__/setup/tmp-reaper.ts"],
+    // Per-worker throwaway home (HOME, USERPROFILE, TALON_HOME, Claude/
+    // Codex/XDG store dirs) — no suite can reach the real ~/.talon; see
+    // src/__tests__/setup/home-isolation.ts and util/fs-path.ts. Must
+    // stay first so nothing is imported before the override. Then a
+    // per-worker throwaway SQLite path (setup/test-db.ts).
+    setupFiles: [
+      "src/__tests__/setup/home-isolation.ts",
+      "src/__tests__/setup/test-db.ts",
+    ],
+    // tmp-reaper gives the run a private temp root and reaps it (with every
+    // worker home in it) afterwards; home-global records the real home and
+    // points the workers' inherited env at a run-wide fallback home. Order
+    // matters: the home is created inside the reaper's root.
+    globalSetup: [
+      "src/__tests__/setup/tmp-reaper.ts",
+      "src/__tests__/setup/home-global.ts",
+    ],
     // The codex-handler integration tests drive a full
     // initCodexAgent + handleMessage flow per case; some retry-path
     // tests do 2-3 round trips through the SDK mock and hit the real
