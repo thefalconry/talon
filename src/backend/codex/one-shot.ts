@@ -189,39 +189,7 @@ export async function runOneShotAgent(
       return;
     }
     const msg = failure.describe(thrown);
-
-    // Learn only from EXPLICIT mismatches in one-shot context.
-    // Silent-exit failures are ambiguous (transient outage vs real
-    // model-incompat) and persisting them would over-poison the
-    // learning store with the result that one bad heartbeat
-    // permanently downgrades the model. Explicit mismatches (the 400
-    // "not supported … ChatGPT account" and the 404 "model … does not
-    // exist") carry the unambiguous server message so they're safe to
-    // mark.
-    //
-    // Unlike the interactive handler, heartbeat/dream can't recurse for
-    // a retry (would mess with the timing contract and lock
-    // semantics), so the failure is surfaced to the caller — the task
-    // settles as failed — and the next scheduled run takes a fresh
-    // swing on the learned fallback.
-    const authInfo = getCodexAuthInfo();
-    const fallback = getCodexChatGptDefaultModel();
-    if (
-      authInfo?.mode === "chatgpt" &&
-      activeModel !== fallback &&
-      isChatGptModelMismatchError(msg)
-    ) {
-      const recorded = await markOAuthIncompat(activeModel);
-      if (recorded) {
-        logWarn(
-          "agent",
-          `[${contextLabel}] Codex one-shot: recorded ${activeModel} as ` +
-            `OAuth-incompat (explicit mismatch) — next ${contextLabel} run ` +
-            `will pre-emptively swap to ${fallback}`,
-        );
-      }
-    }
-
+    await learnFromMismatch(activeModel, msg, contextLabel);
     logWarn("agent", `Codex one-shot run failed: ${msg}`);
     const ts = new Date().toISOString().slice(11, 19);
     await appendLog(`\n### [${ts}] Error\n${msg}\n`);
@@ -232,12 +200,55 @@ export async function runOneShotAgent(
 }
 
 /**
+ * Record a model as OAuth-incompat when a one-shot failed on it with an
+ * explicit server mismatch, so the next run pre-emptively swaps.
+ */
+async function learnFromMismatch(
+  activeModel: string,
+  msg: string,
+  contextLabel: string,
+): Promise<void> {
+  // Learn only from EXPLICIT mismatches in one-shot context.
+  // Silent-exit failures are ambiguous (transient outage vs real
+  // model-incompat) and persisting them would over-poison the
+  // learning store with the result that one bad heartbeat
+  // permanently downgrades the model. Explicit mismatches (the 400
+  // "not supported … ChatGPT account" and the 404 "model … does not
+  // exist") carry the unambiguous server message so they're safe to
+  // mark.
+  //
+  // Unlike the interactive handler, heartbeat/dream can't recurse for
+  // a retry (would mess with the timing contract and lock
+  // semantics), so the failure is surfaced to the caller — the task
+  // settles as failed — and the next scheduled run takes a fresh
+  // swing on the learned fallback.
+  const authInfo = getCodexAuthInfo();
+  const fallback = getCodexChatGptDefaultModel();
+  if (
+    authInfo?.mode !== "chatgpt" ||
+    activeModel === fallback ||
+    !isChatGptModelMismatchError(msg)
+  ) {
+    return;
+  }
+  const recorded = await markOAuthIncompat(activeModel);
+  if (recorded) {
+    logWarn(
+      "agent",
+      `[${contextLabel}] Codex one-shot: recorded ${activeModel} as ` +
+        `OAuth-incompat (explicit mismatch) — next ${contextLabel} run ` +
+        `will pre-emptively swap to ${fallback}`,
+    );
+  }
+}
+
+/**
  * A Codex one-shot that failed upstream. The message is the most specific
  * reason the stream carried (the `turn.failed` text when there was one),
  * so task tables, cron run records and the backend router see the cause
  * rather than the SDK's generic exit wrapper.
  */
-export class CodexOneShotError extends Error {
+class CodexOneShotError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "CodexOneShotError";

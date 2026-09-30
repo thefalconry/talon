@@ -353,6 +353,33 @@ export async function fetchOpenAiModels(
  * Non-existent cache file throws so the caller's catch path logs it
  * at debug level and the picker falls back to curated.
  */
+/**
+ * The Codex CLI's own default for the account: the listed, API-callable
+ * entry with the lowest `priority`. First entry wins ties, matching the
+ * CLI's stable sort. `null` when nothing qualifies.
+ */
+function cliDefaultModel(
+  data: ReadonlyArray<CodexCacheModelEntry | null | undefined>,
+): string | null {
+  let best: string | null = null;
+  let bestPriority = Number.POSITIVE_INFINITY;
+  for (const entry of data) {
+    if (!entry || typeof entry.slug !== "string" || !entry.slug) continue;
+    if (entry.visibility === "hide" || entry.supported_in_api === false) {
+      continue;
+    }
+    const priority =
+      typeof entry.priority === "number" && Number.isFinite(entry.priority)
+        ? entry.priority
+        : Number.MAX_SAFE_INTEGER;
+    if (priority < bestPriority) {
+      bestPriority = priority;
+      best = entry.slug;
+    }
+  }
+  return best;
+}
+
 export async function loadCodexCacheModels(): Promise<void> {
   const path = getCodexCachePath();
   let raw: string;
@@ -383,8 +410,7 @@ export async function loadCodexCacheModels(): Promise<void> {
   const state = getState();
   state.discoveredModels.clear();
   state.discoveredModelMetadata.clear();
-  state.discoveredDefaultModel = null;
-  let bestPriority = Number.POSITIVE_INFINITY;
+  state.discoveredDefaultModel = cliDefaultModel(data);
   let kept = 0;
   let dropped = 0;
   for (const entry of data) {
@@ -401,15 +427,6 @@ export async function loadCodexCacheModels(): Promise<void> {
       continue;
     }
     state.discoveredModels.add(entry.slug);
-    // First entry wins ties, matching the CLI's stable sort.
-    const priority =
-      typeof entry.priority === "number" && Number.isFinite(entry.priority)
-        ? entry.priority
-        : Number.MAX_SAFE_INTEGER;
-    if (priority < bestPriority) {
-      bestPriority = priority;
-      state.discoveredDefaultModel = entry.slug;
-    }
     const supportedReasoningLevels = normalizeReasoningLevels(
       entry.supported_reasoning_levels
         ?.map((level) => level.effort)

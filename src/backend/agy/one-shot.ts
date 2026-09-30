@@ -280,7 +280,7 @@ export async function runOneShotAgent(
  * An agy one-shot that failed: no result, a non-SUCCESS turn, or a spawn
  * error. Thrown so callers record the run as failed rather than ok.
  */
-export class AgyOneShotError extends Error {
+class AgyOneShotError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "AgyOneShotError";
