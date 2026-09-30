@@ -92,15 +92,31 @@ export function loadCronJobs(): void {
     });
 
     let invalidTz = 0;
-    for (const job of repo.listAll()) {
+    let retired = 0;
+    for (let job of repo.listAll()) {
       if (job.timezone && !isValidTimezone(job.timezone)) {
         log(
           "cron",
           `Job "${job.name}" has invalid timezone "${job.timezone}" — clearing`,
         );
-        repo.upsert({ ...job, timezone: undefined });
+        job = { ...job, timezone: undefined };
+        repo.upsert(job);
         invalidTz++;
       }
+      if (isStrandedOneShot(job)) {
+        logWarn(
+          "cron",
+          `One-shot job "${job.name}" [${job.id}] already ran and failed — disabling (last error: ${job.lastError ?? "unknown"})`,
+        );
+        repo.upsert({ ...job, enabled: false, runCount: 1 });
+        retired++;
+      }
+    }
+    if (retired > 0) {
+      logWarn(
+        "cron",
+        `Retired ${retired} one-shot job(s) left enabled by a failed run`,
+      );
     }
 
     const count = repo.count();
@@ -113,6 +129,22 @@ export function loadCronJobs(): void {
   } catch (err) {
     logError("cron", "Failed to load cron jobs", err);
   }
+}
+
+/**
+ * A one-shot whose only run failed before failed runs counted toward the cap:
+ * still enabled with runCount 0, but lastStatus says it ran. Left alone it
+ * fires again at the next matching time — a year later for a date-pinned
+ * expression.
+ */
+function isStrandedOneShot(job: CronJob): boolean {
+  return (
+    job.enabled &&
+    job.maxRuns === 1 &&
+    (job.runCount || 0) === 0 &&
+    job.lastStatus === "error" &&
+    job.lastRunAt !== undefined
+  );
 }
 
 /** Check if an IANA timezone string is valid using the Intl API. */

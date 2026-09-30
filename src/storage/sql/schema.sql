@@ -270,7 +270,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   run_count        INTEGER NOT NULL DEFAULT 0,
   last_status      TEXT,
   last_error       TEXT,
-  last_duration_ms INTEGER
+  last_duration_ms INTEGER,
+  timeout_ms       INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cron_chat ON cron_jobs(chat_id);
 

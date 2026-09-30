@@ -45,6 +45,9 @@ Lifecycle (all optional):
   • max_runs: N       — auto-disable after N runs.
   • start_at / end_at — ISO-8601 timestamp (or epoch ms). Don't fire before start_at; auto-disable after end_at.
   • catchup           — what to do with runs missed while Talon was down: "once" (default — one catch-up run), "skip" (drop missed runs), or "all" (replay each missed run, capped).
+  • timeout_seconds   — hard time limit for one run of a "query" job (default 600, max 14400). Raise it for long tasks such as waiting on CI before merging.
+
+A failed run counts toward max_runs, so a one-shot that fails is retired (with an alert) rather than left to fire again at the next matching time.
 
 Model: leave "model"/"provider" unset to use this chat's model. Set "model" for a valid model on this chat's backend, or set both "provider" and "model" for another backend that supports isolated jobs. "instructions" can provide a short system brief for query jobs.`,
     schema: {
@@ -115,6 +118,12 @@ Model: leave "model"/"provider" unset to use this chat's model. Set "model" for 
         .describe(
           "Optional short brief for the isolated run — what the job is and how to do it. Becomes the run's system prompt; recommended when using a cheaper override model.",
         ),
+      timeout_seconds: z
+        .number()
+        .optional()
+        .describe(
+          "Hard time limit for one run of a 'query' job, in seconds (60–14400). Unset = 600.",
+        ),
     },
     execute: (params, bridge) => bridge("create_cron_job", params),
     tag: "scheduling",
@@ -180,6 +189,12 @@ Model: leave "model"/"provider" unset to use this chat's model. Set "model" for 
         .string()
         .optional()
         .describe("New isolated-run system brief (empty string clears it)."),
+      timeout_seconds: z
+        .number()
+        .optional()
+        .describe(
+          "New per-run time limit for a 'query' job, in seconds (60–14400).",
+        ),
     },
     execute: (params, bridge) => bridge("edit_cron_job", params),
     tag: "scheduling",

@@ -175,6 +175,20 @@ describe("executeJob — isolated query runtime", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("honours a per-job timeout instead of the 10-minute default", async () => {
+    await executeJob(
+      makeJob({
+        type: "query",
+        content: "wait for CI",
+        timeoutMs: 45 * 60_000,
+      }),
+    );
+
+    expect(mocks.runJobOneShot.mock.calls[0]?.[0]).toMatchObject({
+      timeoutMs: 45 * 60_000,
+    });
+  });
+
   it("hands the role backend to jobs that inherited the chat's backend", async () => {
     await executeJob(makeJob({ type: "query", chatId: "42" }));
 
@@ -438,13 +452,17 @@ describe("runJobNow — failure bookkeeping", () => {
     expect(typeof after.lastDurationMs).toBe("number");
   });
 
-  it("a failure does not bump runCount", async () => {
+  it("a failure still counts as a run (bumps runCount and lastRunAt)", async () => {
     mocks.runJobOneShot.mockRejectedValueOnce(new Error("nope"));
     const job = seed({ type: "query", content: "x", runCount: 5 });
 
+    const before = Date.now();
     await runJobNow(job.id);
 
-    expect(getCronJob(job.id)!.runCount).toBe(5);
+    const after = getCronJob(job.id)!;
+    expect(after.runCount).toBe(6);
+    expect(after.lastRunAt).toBeGreaterThanOrEqual(before);
+    expect(after.enabled).toBe(true); // uncapped: a failure never retires it
   });
 
   it("a message job whose sendMessage throws is reported as an error", async () => {
@@ -522,15 +540,51 @@ describe("runJobNow — maxRuns retirement", () => {
     expect(getCronJob(job.id)!.enabled).toBe(false);
   });
 
-  it("a failed run does not retire a one-shot job", async () => {
+  it("a failed run retires a one-shot job instead of leaving it to re-fire next year", async () => {
+    const { resetAlertsForTest, activeAlerts } =
+      await import("../core/frontend-runtime/alerts.js");
+    const sent: string[] = [];
+    resetAlertsForTest(async (text) => {
+      sent.push(text);
+    });
     mocks.runJobOneShot.mockRejectedValueOnce(new Error("fail"));
-    const job = seed({ type: "query", content: "x", maxRuns: 1, runCount: 0 });
+    const job = seed({
+      type: "query",
+      content: "x",
+      name: "Merge PR",
+      // Date-pinned: the next match after a failure is a year away.
+      schedule: "30 14 1 10 *",
+      maxRuns: 1,
+      runCount: 0,
+    });
+
+    const res = await runJobNow(job.id);
+
+    expect(res.ok).toBe(false);
+    const after = getCronJob(job.id)!;
+    expect(after.runCount).toBe(1);
+    expect(after.enabled).toBe(false);
+    expect(after.lastStatus).toBe("error");
+    expect(after.lastError).toBe("fail");
+    // Nothing retries a retired job, so the operator hears about it.
+    expect(activeAlerts().map((a) => a.key)).toContain(`cron.job.${job.id}`);
+    expect(sent.at(-1)).toMatch(
+      /Cron job "Merge PR" failed on its final run and was disabled: fail/,
+    );
+  });
+
+  it("a failed run consumes one slot of a larger cap but keeps the job enabled", async () => {
+    mocks.runJobOneShot.mockRejectedValueOnce(new Error("flaky"));
+    const job = seed({ type: "query", content: "x", maxRuns: 3, runCount: 0 });
 
     await runJobNow(job.id);
+    expect(getCronJob(job.id)!.runCount).toBe(1);
+    expect(getCronJob(job.id)!.enabled).toBe(true);
 
-    const after = getCronJob(job.id)!;
-    expect(after.runCount).toBe(0);
-    expect(after.enabled).toBe(true);
+    await runJobNow(job.id); // succeeds
+    await runJobNow(job.id); // succeeds — third run hits the cap
+    expect(getCronJob(job.id)!.runCount).toBe(3);
+    expect(getCronJob(job.id)!.enabled).toBe(false);
   });
 });
 

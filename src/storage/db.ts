@@ -93,6 +93,7 @@ function ensureSchema(database: SqlDatabase): void {
     dbSql.addSessionsMetricsColumn,
     dbSql.addHistoryAttachmentsColumn,
     dbSql.addSessionsLastTurnEndedAtColumn,
+    dbSql.addCronTimeoutMsColumn,
   ]) {
     try {
       database.exec(addColumn);

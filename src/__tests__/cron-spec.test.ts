@@ -136,9 +136,48 @@ describe("parseCronSpec — create", () => {
       ),
     ).toBe("A 'provider' override also requires a 'model'.");
   });
+
+  it("parses timeout_seconds into timeoutMs for query jobs, within bounds", () => {
+    const ok = okOf(
+      parseCronSpec({
+        content: "wait for CI then merge",
+        schedule: "0 9 * * *",
+        type: "query",
+        timeout_seconds: 2700,
+      }),
+    );
+    expect(ok.updates.timeoutMs).toBe(2_700_000);
+
+    const base = { content: "x", schedule: "0 9 * * *", type: "query" };
+    expect(errorOf(parseCronSpec({ ...base, timeout_seconds: 10 }))).toBe(
+      "'timeout_seconds' must be a number between 60 and 14400.",
+    );
+    expect(errorOf(parseCronSpec({ ...base, timeout_seconds: 99_999 }))).toBe(
+      "'timeout_seconds' must be a number between 60 and 14400.",
+    );
+    expect(
+      errorOf(
+        parseCronSpec({
+          content: "hi",
+          schedule: "0 9 * * *",
+          timeout_seconds: 600,
+        }),
+      ),
+    ).toBe("'timeout_seconds' only applies to 'query' jobs.");
+  });
 });
 
 describe("parseCronSpec — edit", () => {
+  it("sets and clears a query job's timeout", () => {
+    const job = stored({ type: "query", timeoutMs: 1_200_000 });
+    expect(okOf(parseCronSpec({ timeout_seconds: 3600 }, job)).updates).toEqual(
+      { timeoutMs: 3_600_000 },
+    );
+    const cleared = okOf(parseCronSpec({ timeout_seconds: null }, job));
+    expect("timeoutMs" in cleared.updates).toBe(true);
+    expect(cleared.updates.timeoutMs).toBeUndefined();
+  });
+
   it("emits only the touched fields, in body order", () => {
     const r = okOf(
       parseCronSpec(

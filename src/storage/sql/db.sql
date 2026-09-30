@@ -31,6 +31,11 @@ ALTER TABLE history_messages ADD COLUMN attachments TEXT
 -- signal existed. Fresh databases get the column via schema.sql.
 ALTER TABLE sessions ADD COLUMN last_turn_ended_at INTEGER
 
+-- name: addCronTimeoutMsColumn
+-- Column reconciliation for databases that shipped before a cron job could
+-- carry its own run timeout. Fresh databases get the column via schema.sql.
+ALTER TABLE cron_jobs ADD COLUMN timeout_ms INTEGER
+
 -- name: vacuumInto
 -- Transactionally consistent copy of the whole database into a new file,
 -- produced by SQLite itself (storage/db.ts snapshotDatabase). A backup
