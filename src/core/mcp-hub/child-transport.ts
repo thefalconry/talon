@@ -11,21 +11,28 @@
  *
  * This transport owns the spawn so the hub can record the cause: exit
  * code + signal, and the last few stderr lines in a bounded ring
- * buffer. Wire behaviour matches the SDK transport exactly —
- * newline-delimited JSON-RPC over stdin/stdout; `close()` ends stdin,
- * then escalates SIGTERM → SIGKILL. Children still run under the
- * supervisor wrap (the spec's command IS the supervisor), so orphan
- * cleanup and stdout filtering are untouched.
+ * buffer. Wire behaviour matches the SDK transport —
+ * newline-delimited JSON-RPC over stdin/stdout; `close()` ends stdin and
+ * sends SIGTERM, then SIGKILL after a grace period.
+ *
+ * It also applies the MCP stdout filter in-process (the rule the
+ * per-child supervisor used to apply, shared via parseJsonRpcLine):
+ * only lines that are JSON objects reach the MCP client; banners and log
+ * lines some servers print on stdout are re-routed into the stderr tail,
+ * tagged, instead of surfacing as protocol parse errors. Orphan cleanup
+ * is the child guard's job (child-guard.ts), fed by onSpawned/onExited.
  */
 
 import crossSpawn from "cross-spawn";
 import type { ChildProcess } from "node:child_process";
-import {
-  ReadBuffer,
-  serializeMessage,
-} from "@modelcontextprotocol/sdk/shared/stdio.js";
+import { StringDecoder } from "node:string_decoder";
+import { serializeMessage } from "@modelcontextprotocol/sdk/shared/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+import {
+  JSONRPCMessageSchema,
+  type JSONRPCMessage,
+} from "@modelcontextprotocol/sdk/types.js";
+import { parseJsonRpcLine, STDOUT_REROUTE_TAG } from "./launcher.js";
 
 /** How many trailing stderr lines a child keeps for its exit report. */
 export const STDERR_TAIL_LINES = 20;
@@ -78,7 +85,50 @@ export type HubChildTransportOptions = {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** Called with the pid once the process has spawned (orphan guard). */
+  onSpawned?: (pid: number) => void;
+  /** Called with the pid once the process has exited (orphan guard). */
+  onExited?: (pid: number) => void;
 };
+
+/**
+ * Splits child stdout into lines and applies the MCP stdout filter:
+ * JSON-object lines go to `onLine` (already parsed, so each line is
+ * parsed once), everything else non-blank to `onReject`. A trailing
+ * fragment without a newline is held until more data arrives or
+ * `flush()` runs at end of stream.
+ */
+export class StdoutLineFilter {
+  private buf = "";
+  private readonly decoder = new StringDecoder("utf8");
+
+  constructor(
+    private readonly onLine: (parsed: object) => void,
+    private readonly onReject: (line: string) => void,
+  ) {}
+
+  push(chunk: Buffer | string): void {
+    this.buf += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
+    let nl;
+    while ((nl = this.buf.indexOf("\n")) !== -1) {
+      const line = this.buf.slice(0, nl);
+      this.buf = this.buf.slice(nl + 1);
+      this.emit(line);
+    }
+  }
+
+  flush(): void {
+    const rest = this.buf + this.decoder.end();
+    this.buf = "";
+    if (rest.length > 0) this.emit(rest);
+  }
+
+  private emit(line: string): void {
+    const parsed = parseJsonRpcLine(line);
+    if (parsed !== null) this.onLine(parsed);
+    else if (line.trim().length > 0) this.onReject(line.replace(/\r$/, ""));
+  }
+}
 
 const CLOSE_GRACE_MS = 2_000;
 
@@ -94,8 +144,12 @@ export class HubChildTransport implements Transport {
   private child: ChildProcess | null = null;
   /** Kept past exit so the exit report can name the process. */
   private spawnedPid: number | null = null;
-  private readonly readBuffer = new ReadBuffer();
   private readonly stderrTail = new StderrTail();
+  private readonly stdoutFilter = new StdoutLineFilter(
+    (parsed) => this.deliver(parsed),
+    // Not protocol: keep it visible where a failure report will look.
+    (line) => this.stderrTail.push(`${STDOUT_REROUTE_TAG}${line}\n`),
+  );
   private exitInfo: ChildExit | null = null;
   private closeRequested = false;
 
@@ -133,11 +187,18 @@ export class HubChildTransport implements Transport {
       });
       this.child = child;
       this.spawnedPid = child.pid ?? null;
+      const pid = child.pid;
+      if (pid !== undefined) this.opts.onSpawned?.(pid);
       child.once("spawn", () => resolve());
       child.on("error", (err) => {
         reject(err);
         this.onerror?.(err);
       });
+      // The guard forgets the pid as soon as the process is gone, so a
+      // recycled pid is never reaped on the daemon's behalf.
+      if (pid !== undefined) {
+        child.once("exit", () => this.opts.onExited?.(pid));
+      }
       // `close` (not `exit`) so the stderr tail is complete when the
       // exit report is read.
       child.on("close", (code, signal) => {
@@ -147,35 +208,24 @@ export class HubChildTransport implements Transport {
       });
       child.stdin?.on("error", (err) => this.onerror?.(err));
       child.stdout?.on("error", (err) => this.onerror?.(err));
-      child.stdout?.on("data", (chunk: Buffer) => {
-        try {
-          this.readBuffer.append(chunk);
-          this.drainMessages();
-        } catch (err) {
-          this.onerror?.(err as Error);
-          void this.close();
-        }
-      });
+      child.stdout?.on("data", (chunk: Buffer) =>
+        this.stdoutFilter.push(chunk),
+      );
+      child.stdout?.on("end", () => this.stdoutFilter.flush());
       child.stderr?.setEncoding("utf-8");
       child.stderr?.on("data", (chunk: string) => this.stderrTail.push(chunk));
       child.stderr?.on("error", () => {});
     });
   }
 
-  private drainMessages(): void {
-    for (;;) {
-      let message: JSONRPCMessage | null;
-      try {
-        // readMessage consumes the line before parsing, so a malformed
-        // line is skipped rather than re-read forever.
-        message = this.readBuffer.readMessage();
-      } catch (err) {
-        this.onerror?.(err as Error);
-        continue;
-      }
-      if (message === null) return;
-      this.onmessage?.(message);
-    }
+  /** Validate one parsed stdout line as JSON-RPC and hand it on. */
+  private deliver(parsed: object): void {
+    const result = JSONRPCMessageSchema.safeParse(parsed);
+    if (result.success) this.onmessage?.(result.data);
+    else
+      this.onerror?.(
+        new Error(`Invalid JSON-RPC message: ${result.error.message}`),
+      );
   }
 
   async close(): Promise<void> {
@@ -187,15 +237,15 @@ export class HubChildTransport implements Transport {
         child.once("close", () => resolve());
       });
       const alive = () => child.exitCode === null && child.signalCode === null;
+      // EOF and SIGTERM together, SIGKILL after the grace — what the
+      // per-child supervisor did when its stdin closed, so a child sees
+      // the same shutdown whether or not a supervisor sits in between
+      // (with one, it escalates within its own 1s, inside our grace).
       child.stdin?.end();
+      if (alive()) child.kill("SIGTERM");
       await Promise.race([closed, delay(CLOSE_GRACE_MS)]);
-      if (alive()) {
-        child.kill("SIGTERM");
-        await Promise.race([closed, delay(CLOSE_GRACE_MS)]);
-      }
       if (alive()) child.kill("SIGKILL");
     }
-    this.readBuffer.clear();
   }
 
   send(message: JSONRPCMessage): Promise<void> {

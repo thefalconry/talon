@@ -11,9 +11,12 @@
  * With the hub, backends never see commands at all — they emit hub
  * URLs (pinned by codex-backend.test.ts). The pass-through contract
  * now lives in ONE place: the hub's child spawner must consume the
- * launcher-ready spec unchanged. This test pins that: the spec the
- * hub would spawn for a plugin server is byte-identical to what
- * `getPluginMcpServers()` returned.
+ * spec unchanged. This test pins that: the spec the hub would spawn for
+ * a plugin server is byte-identical to what `getPluginMcpServers()`
+ * returned. (Specs are raw commands now — orphan protection is applied
+ * at spawn time by the child guard, which wraps in supervisor mode
+ * only; see mcp-hub-inprocess.test.ts. The fixture below is an
+ * already-wrapped command, which must still pass through untouched.)
  */
 
 import { describe, it, expect, vi } from "vitest";
