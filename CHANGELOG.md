@@ -1,5 +1,19 @@
 # Changelog
 
+## [5.25.0](https://github.com/thefalconry/talon/compare/v5.24.1...v5.25.0) (2026-09-30)
+
+
+### Features
+
+* **agents:** pre-flight lane — run the light CI suite before every push ([#1187](https://github.com/thefalconry/talon/issues/1187)) ([ed828a5](https://github.com/thefalconry/talon/commit/ed828a5d30fa22f377d2d19dac6183ce5d3fdd22))
+* **companion:** settings sub-pages and a screenshot-blocking setting ([#1185](https://github.com/thefalconry/talon/issues/1185)) ([7357aa9](https://github.com/thefalconry/talon/commit/7357aa960d64d353c9fd32da86854a97733d4e6d))
+
+
+### Continuous Integration
+
+* no macOS/Windows legs on pull requests in companion + native-provision ([#1189](https://github.com/thefalconry/talon/issues/1189)) ([2285fcb](https://github.com/thefalconry/talon/commit/2285fcb91ddb54ace736688c54a4e3bdcd61d57f))
+* test-impact analysis — run only affected unit tests on PRs ([#1188](https://github.com/thefalconry/talon/issues/1188)) ([4e72187](https://github.com/thefalconry/talon/commit/4e72187f2fe743610905eab090f51d35ab8d6ff5))
+
 ## [5.24.1](https://github.com/thefalconry/talon/compare/v5.24.0...v5.24.1) (2026-09-30)
 
 
