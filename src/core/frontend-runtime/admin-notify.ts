@@ -7,7 +7,10 @@
  * wiring, which does the same thing privately). Alerts raised before that
  * — early boot is exactly when restore reports and security alerts fire —
  * are held in a small bounded queue and flushed, oldest first, the moment
- * a notifier is wired. With nothing ever wired (tests, terminal mode with
+ * a notifier is wired. An alert carrying a key (operator alerts do) is
+ * deduplicated while it waits: a re-raise replaces the queued copy instead
+ * of queueing another, and a key that resolves before anyone could hear it
+ * is withdrawn outright. With nothing ever wired (tests, terminal mode with
  * no admin) they stay a log line; nothing throws.
  *
  * First consumer: WhatsApp pairing. When WhatsApp unlinks the device,
@@ -25,7 +28,14 @@ let deliver: Deliver | null = null;
 /** Most alerts held while no notifier is wired; the oldest are dropped past it. */
 export const ADMIN_NOTIFY_QUEUE_MAX = 20;
 
-type Pending = { text: string; at: number };
+type Pending = {
+  text: string;
+  at: number;
+  /** Dedup key (operator alert key); unkeyed alerts never coalesce. */
+  key?: string;
+  /** Re-raises folded into this entry while it waited. */
+  repeats: number;
+};
 const pending: Pending[] = [];
 let droppedWhileUnwired = 0;
 let flushing: Promise<void> | null = null;
@@ -68,6 +78,7 @@ async function flushPending(fn: Deliver): Promise<void> {
     batch.unshift({
       text: `${dropped} earlier admin alert(s) were dropped before a notifier was wired (queue holds ${ADMIN_NOTIFY_QUEUE_MAX}); see the daemon log.`,
       at: Date.now(),
+      repeats: 0,
     });
   }
   log("notify", `Flushing ${batch.length} queued admin alert(s)`);
@@ -79,7 +90,10 @@ async function flushPending(fn: Deliver): Promise<void> {
       continue;
     }
     const ageS = Math.round((Date.now() - item.at) / 1000);
-    const text = ageS >= 5 ? `(delayed ${ageS}s) ${item.text}` : item.text;
+    const repeated =
+      item.repeats > 0 ? `\n(raised ${item.repeats + 1}× while starting)` : "";
+    const text =
+      (ageS >= 5 ? `(delayed ${ageS}s) ${item.text}` : item.text) + repeated;
     try {
       await fn(text);
       log("notify", `Admin notified (queued): ${preview(item.text)}`);
@@ -95,6 +109,17 @@ async function flushPending(fn: Deliver): Promise<void> {
 }
 
 function enqueue(item: Pending): void {
+  if (item.key !== undefined) {
+    const i = pending.findIndex((p) => p.key === item.key);
+    if (i >= 0) {
+      // Same fault raised again while waiting: keep one entry, newest text,
+      // original timestamp (so the "delayed" note stays honest).
+      const prior = pending[i];
+      prior.text = item.text;
+      prior.repeats += item.repeats + 1;
+      return;
+    }
+  }
   pending.push(item);
   while (pending.length > ADMIN_NOTIFY_QUEUE_MAX) {
     const lost = pending.shift();
@@ -112,13 +137,28 @@ function preview(text: string): string {
 }
 
 /**
+ * Withdraw a queued, not-yet-delivered alert by key (its fault cleared
+ * before a notifier was wired). Returns whether one was withdrawn.
+ */
+export function withdrawAdminNotification(key: string): boolean {
+  const i = pending.findIndex((p) => p.key === key);
+  if (i < 0) return false;
+  const [gone] = pending.splice(i, 1);
+  log("notify", `Withdrew queued admin alert ${key}: ${preview(gone.text)}`);
+  return true;
+}
+
+/**
  * Send `text` to the admin chat. Never throws; returns whether it was
  * delivered now (false = failed, or queued because no notifier is wired
- * yet — it is sent when one is).
+ * yet — it is sent when one is). `key` deduplicates while queued.
  */
-export async function notifyAdmin(text: string): Promise<boolean> {
+export async function notifyAdmin(
+  text: string,
+  key?: string,
+): Promise<boolean> {
   if (!deliver) {
-    enqueue({ text, at: Date.now() });
+    enqueue({ text, at: Date.now(), key, repeats: 0 });
     logWarn(
       "notify",
       `No admin notifier wired yet; queued (${pending.length}/${ADMIN_NOTIFY_QUEUE_MAX}): ${text.slice(0, 120)}`,

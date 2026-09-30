@@ -14,6 +14,7 @@ import {
   notifyAdmin,
   pendingAdminNotificationCount,
   setAdminNotifier,
+  withdrawAdminNotification,
 } from "../core/frontend-runtime/admin-notify.js";
 
 afterEach(() => {
@@ -86,5 +87,40 @@ describe("admin notify queue (alerts raised before a notifier is wired)", () => 
     setAdminNotifier(null);
     await adminNotifyFlushed();
     expect(pendingAdminNotificationCount()).toBe(1);
+  });
+
+  it("dedups a keyed alert re-raised while queued", async () => {
+    await notifyAdmin("🔴 playwright init timed out", "plugin.playwright");
+    await notifyAdmin("unkeyed");
+    await notifyAdmin(
+      "🔴 playwright init timed out again",
+      "plugin.playwright",
+    );
+    await notifyAdmin("unkeyed");
+    expect(pendingAdminNotificationCount()).toBe(3);
+
+    const delivered: string[] = [];
+    setAdminNotifier(async (text) => {
+      delivered.push(text);
+    });
+    await adminNotifyFlushed();
+    expect(delivered).toEqual([
+      "🔴 playwright init timed out again\n(raised 2× while starting)",
+      "unkeyed",
+      "unkeyed",
+    ]);
+  });
+
+  it("withdraws a keyed alert that resolved before anyone could hear it", async () => {
+    await notifyAdmin("🔴 down", "k");
+    await notifyAdmin("other");
+    expect(withdrawAdminNotification("k")).toBe(true);
+    expect(withdrawAdminNotification("k")).toBe(false);
+    const delivered: string[] = [];
+    setAdminNotifier(async (text) => {
+      delivered.push(text);
+    });
+    await adminNotifyFlushed();
+    expect(delivered).toEqual(["other"]);
   });
 });
