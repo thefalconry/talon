@@ -43,9 +43,6 @@ async function tempStore(now?: () => number): Promise<{
   return { store: new DeviceCredentialStore(file, now), file };
 }
 
-/** Let fire-and-forget persistence settle. */
-const settle = () => new Promise((r) => setTimeout(r, 30));
-
 describe("DeviceCredentialStore", () => {
   it("mints a tdc1 token, stores only its hash, and authenticates it", async () => {
     const { store, file } = await tempStore();
@@ -173,8 +170,8 @@ describe("DeviceCredentialStore", () => {
     ]);
     expect(store.authenticate(pair.token)?.deviceId).toBe("mac");
 
-    // ...and stays dead across a reload.
-    await settle();
+    // ...and stays dead across a reload, once the background writes land.
+    await store.flush();
     const reloaded = new DeviceCredentialStore(file);
     await reloaded.load();
     expect(reloaded.authenticate(old.token)).toBeNull();
@@ -265,7 +262,7 @@ describe("DeviceCredentialStore", () => {
     const revoked: string[] = [];
     store.onRevoked((ids) => revoked.push(...ids));
     expect(store.authenticate(next.token)).not.toBeNull();
-    await settle();
+    await store.flush();
     expect(revoked).toEqual([old.credential.id]);
     expect(store.authenticate(old.token)).toBeNull();
   });

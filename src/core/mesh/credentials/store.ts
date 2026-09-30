@@ -23,7 +23,7 @@ import { resolve } from "node:path";
 import { dirs } from "../../../util/paths.js";
 import { log, logWarn } from "../../../util/log.js";
 import { TalonError } from "../../errors.js";
-import { readArray, writePrivateJson } from "../persist.js";
+import { readArray, writePrivateJson, writesSettled } from "../persist.js";
 import { faultText } from "../../engine/fault-text.js";
 import { raiseAlert, resolveAlert } from "../../frontend-runtime/alerts.js";
 import {
@@ -504,6 +504,14 @@ export class DeviceCredentialStore {
       const endedAt = record.revokedAt ?? record.expiresAt;
       if (endedAt !== undefined && endedAt < cutoff) this.records.delete(id);
     }
+  }
+
+  /**
+   * Wait for every background write queued so far (mintNow, bind, re-pair
+   * revocation, lastUsedAt touches) to reach disk or fail.
+   */
+  flush(): Promise<void> {
+    return writesSettled(this.file);
   }
 
   private persistSoon(): void {
