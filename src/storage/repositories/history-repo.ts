@@ -131,11 +131,19 @@ export function insertMany(
   });
 }
 
-/** Most-recent `limit` messages, in chronological order. */
-export function recent(chatId: string, limit: number): HistoryMessage[] {
+/**
+ * Most-recent `limit` messages, in chronological order. `floorId` is the
+ * chat's context-reset marker: only rows with a larger id are returned
+ * (0 = every row).
+ */
+export function recent(
+  chatId: string,
+  limit: number,
+  floorId = 0,
+): HistoryMessage[] {
   const rows = getDatabase()
     .prepare(historySql.recent)
-    .all(chatId, limit) as Row[];
+    .all(chatId, floorId, limit) as Row[];
   return rows.reverse().map(rowToMessage);
 }
 
@@ -147,10 +155,11 @@ export function recentBefore(
   chatId: string,
   beforeMsgId: number,
   limit: number,
+  floorId = 0,
 ): HistoryMessage[] {
   const rows = getDatabase()
     .prepare(historySql.recentBefore)
-    .all(chatId, beforeMsgId, limit) as Row[];
+    .all(chatId, beforeMsgId, floorId, limit) as Row[];
   return rows.reverse().map(rowToMessage);
 }
 
@@ -158,10 +167,11 @@ export function recentBeforeTime(
   chatId: string,
   beforeTs: number,
   limit: number,
+  floorId = 0,
 ): HistoryMessage[] {
   const rows = getDatabase()
     .prepare(historySql.recentBeforeTime)
-    .all(chatId, beforeTs, limit) as Row[];
+    .all(chatId, beforeTs, floorId, limit) as Row[];
   return rows.reverse().map(rowToMessage);
 }
 
@@ -173,8 +183,66 @@ export function setFilePath(
   getDatabase().prepare(historySql.setFilePath).run(filePath, chatId, msgId);
 }
 
-export function deleteChat(chatId: string): void {
-  getDatabase().prepare(historySql.deleteChat).run(chatId);
+/**
+ * Hard-delete a chat's rows and its state. Only the operator's explicit
+ * purge reaches this (history.ts purgeChatHistory). Returns rows deleted.
+ */
+export function purgeChat(chatId: string): number {
+  return inTransaction(() => {
+    const db = getDatabase();
+    const result = db.prepare(historySql.purgeChat).run(chatId) as {
+      changes: number | bigint;
+    };
+    db.prepare(historySql.purgeChatState).run(chatId);
+    return Number(result.changes);
+  });
+}
+
+/** A chat's soft-reset / soft-delete state. */
+export type ChatHistoryState = {
+  /** Rows with an id at or under this predate the last context reset. */
+  clearedThroughId: number;
+  clearedAt?: number;
+  hiddenAt?: number;
+};
+
+export function chatState(chatId: string): ChatHistoryState | undefined {
+  const row = getDatabase().prepare(historySql.chatState).get(chatId) as
+    | {
+        cleared_through_id: number;
+        cleared_at: number | null;
+        hidden_at: number | null;
+      }
+    | undefined;
+  if (!row) return undefined;
+  return {
+    clearedThroughId: row.cleared_through_id,
+    clearedAt: row.cleared_at ?? undefined,
+    hiddenAt: row.hidden_at ?? undefined,
+  };
+}
+
+export function markCleared(chatId: string, at: number): void {
+  getDatabase().prepare(historySql.markCleared).run(chatId, chatId, at);
+}
+
+export function markHidden(chatId: string, at: number): void {
+  getDatabase().prepare(historySql.markHidden).run(chatId, chatId, at, at);
+}
+
+export type HiddenChat = { chatId: string; hiddenAt: number; total: number };
+
+export function hiddenChats(): HiddenChat[] {
+  const rows = getDatabase().prepare(historySql.hiddenChats).all() as Array<{
+    chat_id: string;
+    hidden_at: number;
+    total: number;
+  }>;
+  return rows.map((r) => ({
+    chatId: r.chat_id,
+    hiddenAt: r.hidden_at,
+    total: r.total,
+  }));
 }
 
 /**

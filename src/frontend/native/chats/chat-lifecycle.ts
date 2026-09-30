@@ -6,7 +6,6 @@
 import { toClientChat } from "./chat-wire.js";
 import type { ClientChat } from "../protocol.js";
 import type { NativeRuntime } from "../runtime.js";
-import { clearTurnMeta } from "../turn/turn-meta.js";
 
 export function createChat(runtime: NativeRuntime, title?: string): ClientChat {
   const entry = runtime.chats.create(title);
@@ -27,10 +26,14 @@ export function renameChat(
   return chat;
 }
 
+/**
+ * Soft delete (see NativeChats.remove): the chat disappears from every
+ * client, but its history rows and their turn meta are kept for the
+ * operator — `talon history purge` is the only hard delete.
+ */
 export function deleteChat(runtime: NativeRuntime, chatId: string): boolean {
   const ok = runtime.chats.remove(chatId);
   if (ok) {
-    clearTurnMeta(chatId);
     runtime.contextByChat.delete(chatId);
     runtime.queuedByChat.delete(chatId);
     runtime.broadcast({ kind: "chat_deleted", chatId });

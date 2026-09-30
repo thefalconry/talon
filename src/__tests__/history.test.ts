@@ -10,7 +10,7 @@ import {
   getRecentFormatted,
   getMessageById,
   getHistoryStats,
-  clearHistory,
+  purgeChatHistory,
   setMessageFilePath,
   type HistoryMessage,
 } from "../storage/history.js";
@@ -233,14 +233,14 @@ describe("history", () => {
     });
   });
 
-  describe("clearHistory", () => {
+  describe("purgeChatHistory", () => {
     it("empties the history buffer for a chat", () => {
       const id = chatId();
       pushMessage(id, makeMsg({ msgId: 1 }));
       pushMessage(id, makeMsg({ msgId: 2 }));
       expect(getRecentHistory(id)).toHaveLength(2);
 
-      clearHistory(id);
+      purgeChatHistory(id);
       expect(getRecentHistory(id)).toEqual([]);
     });
 
@@ -250,7 +250,7 @@ describe("history", () => {
       pushMessage(id1, makeMsg({ msgId: 1 }));
       pushMessage(id2, makeMsg({ msgId: 2 }));
 
-      clearHistory(id1);
+      purgeChatHistory(id1);
       expect(getRecentHistory(id1)).toEqual([]);
       expect(getRecentHistory(id2)).toHaveLength(1);
     });
@@ -258,7 +258,7 @@ describe("history", () => {
     it("subsequent operations on cleared chat work correctly", () => {
       const id = chatId();
       pushMessage(id, makeMsg({ msgId: 1 }));
-      clearHistory(id);
+      purgeChatHistory(id);
 
       // Search returns "No messages"
       expect(searchHistory(id, "anything")).toContain("No messages in history");

@@ -32,7 +32,6 @@ import {
   resolveChatBackend,
 } from "../../core/engine/backend-controller/index.js";
 import { resetSession } from "../../storage/sessions.js";
-import { clearHistory } from "../../storage/history.js";
 import { resetPulseCheckpoint } from "../../core/background/pulse/pulse.js";
 import { logWarn } from "../../util/log.js";
 import {
@@ -240,18 +239,18 @@ export function matchBackendArg(
 
 /**
  * Drop the session state a backend switch invalidates. Session ids are
- * not portable across backends; each backend's remembered model pick IS
- * kept, so switching back restores it. `keepHistory` is for frontends
- * whose local history store is the only record of the chat.
+ * not portable across backends (the replaced id is archived by
+ * resetSession); each backend's remembered model pick IS kept, so
+ * switching back restores it. Chat history is never touched: a switch
+ * changes who answers, not what was said, and the new backend reads the
+ * same stored conversation through its history tools.
  */
 function handOffChatSession(
   chatId: string,
   previous: Backend | null,
   deps: ModelCommandDeps,
-  keepHistory: boolean,
 ): void {
-  resetSession(chatId);
-  if (!keepHistory) clearHistory(chatId);
+  resetSession(chatId, "backend-switch");
   resetPulseCheckpoint(chatId);
   previous?.sessions?.resetChat?.(chatId);
   const next = resolveChatBackend(chatId, deps.gateway?.backend ?? null);
@@ -290,7 +289,6 @@ export async function switchChatBackend(
   chatId: string,
   target: { id: string; label: string },
   deps: ModelCommandDeps,
-  opts: { keepHistory?: boolean } = {},
 ): Promise<CommandOutcome> {
   const { backend: previous, backendId: previousId } = resolveChatBackendPair(
     chatId,
@@ -311,7 +309,7 @@ export async function switchChatBackend(
     };
   }
   setChatBackend(chatId, target.id);
-  handOffChatSession(chatId, previous, deps, opts.keepHistory === true);
+  handOffChatSession(chatId, previous, deps);
   return {
     ok: true,
     text: `Backend: ${target.label} (${await describeModelAfterSwitch(chatId, target.id, deps)}). Session started fresh.`,
@@ -322,12 +320,11 @@ export async function switchChatBackend(
 export async function resetChatBackend(
   chatId: string,
   deps: ModelCommandDeps,
-  opts: { keepHistory?: boolean } = {},
 ): Promise<CommandOutcome> {
   const { backend: previous } = resolveChatBackendPair(chatId, deps);
   await releaseChat(chatId);
   setChatBackend(chatId, undefined);
-  handOffChatSession(chatId, previous, deps, opts.keepHistory === true);
+  handOffChatSession(chatId, previous, deps);
   const { backendId } = resolveChatBackendPair(chatId, deps);
   return {
     ok: true,
