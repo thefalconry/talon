@@ -1288,7 +1288,8 @@ jobs:
           set -eux
           data="$(mktemp -d)"
           sudo chown 1000:1000 "$data"
-          test "$(docker run --rm -v "$data:/data" talon:ci sh -c 'echo $HOME:$TALON_CONTAINER')" = "/data:1"
+          # (seed-config prints its own line first on a fresh data root)
+          test "$(docker run --rm -v "$data:/data" talon:ci sh -c 'echo $HOME:$TALON_CONTAINER' | tail -n1)" = "/data:1"
           sudo test -f "$data/.talon/config.json"
           legacy="$(mktemp -d)"
           echo '{}' > "$legacy/config.json"
