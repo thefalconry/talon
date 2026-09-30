@@ -113,6 +113,85 @@ describe("probeEndpoint", () => {
     });
   });
 
+  it("settles on the 101 at once while the server holds the socket open", async () => {
+    // The Bun regression: its http client only surfaced the 101 when the
+    // connection finally closed, so a live endpoint (which keeps the
+    // WebSocket open) read as unreachable after the full timeout.
+    server = createServer();
+    const held: import("node:stream").Duplex[] = [];
+    server.on("upgrade", (_req, socket) => {
+      held.push(socket);
+      socket.on("error", () => socket.destroy());
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\n" +
+          "Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+      );
+    });
+    const endpoint = await listen(server);
+    const started = Date.now();
+    await expect(probeEndpoint(endpoint, "1.58.0", 10_000)).resolves.toEqual({
+      state: "match",
+      client: "1.58.0",
+    });
+    expect(Date.now() - started).toBeLessThan(2000);
+    for (const s of held) s.destroy();
+  });
+
+  it("reads a chunked 428 body", async () => {
+    server = createServer();
+    server.on("upgrade", (_req, socket) => {
+      socket.on("error", () => socket.destroy());
+      const half = Math.floor(BOX.length / 2);
+      const a = Buffer.from(BOX.slice(0, half));
+      const b = Buffer.from(BOX.slice(half));
+      socket.end(
+        "HTTP/1.1 428 Precondition Required\r\n" +
+          "Transfer-Encoding: chunked\r\n\r\n" +
+          `${a.length.toString(16)}\r\n${a}\r\n` +
+          `${b.length.toString(16)}\r\n${b}\r\n0\r\n\r\n`,
+      );
+    });
+    const endpoint = await listen(server);
+    await expect(probeEndpoint(endpoint, "1.64.0")).resolves.toEqual({
+      state: "mismatch",
+      client: "1.64.0",
+      server: "1.58",
+    });
+  });
+
+  it("names a non-upgrade status", async () => {
+    server = createServer((_req, res) => {
+      res.writeHead(404);
+      res.end("nope");
+    });
+    const endpoint = await listen(server);
+    await expect(probeEndpoint(endpoint, "1.58.0")).resolves.toMatchObject({
+      state: "unreachable",
+      reason: "HTTP 404 instead of an upgrade",
+    });
+  });
+
+  it("settles on a hard deadline even when the socket never goes idle", async () => {
+    // A server that trickles header bytes forever defeats the socket idle
+    // timer; the wall-clock guard must still settle the probe.
+    const timers: NodeJS.Timeout[] = [];
+    server = createServer();
+    server.on("connection", (socket) => {
+      socket.write("HTTP/1.1 200 OK\r\n");
+      const t = setInterval(() => socket.write("X-Trickle: 1\r\n"), 50);
+      timers.push(t);
+      socket.on("close", () => clearInterval(t));
+      socket.on("error", () => clearInterval(t));
+    });
+    const endpoint = await listen(server);
+    const started = Date.now();
+    const result = await probeEndpoint(endpoint, "1.58.0", 400);
+    for (const t of timers) clearInterval(t);
+    expect(result).toMatchObject({ state: "unreachable" });
+    expect(Date.now() - started).toBeLessThan(2000);
+    server.closeAllConnections();
+  });
+
   it("reports unreachable instead of throwing", async () => {
     server = createServer();
     const endpoint = await listen(server);
