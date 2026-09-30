@@ -141,6 +141,47 @@ void main() {
     });
   });
 
+  group('BridgeClient connection reuse', () {
+    test('idle connections outlive the mesh heartbeat', () {
+      // MeshService re-registers every 60 s; a pool that drops idle
+      // connections sooner opens a fresh TCP + TLS connection every time.
+      expect(
+        BridgeClient.restIdleTimeout,
+        greaterThan(const Duration(seconds: 60)),
+      );
+    });
+
+    test('back-to-back REST calls share one connection', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final ports = <int>{};
+      unawaited(
+        server.listen((req) async {
+          ports.add(req.connectionInfo!.remotePort);
+          req.response
+            ..statusCode = 200
+            ..headers.contentType = ContentType.json
+            ..write('{}');
+          await req.response.close();
+        }).asFuture<void>(),
+      );
+      final client = BridgeClient(
+        ConnectionConfig(
+          host: '127.0.0.1',
+          port: server.port,
+          manageLocalDaemon: false,
+          localAutoDiscover: false,
+        ),
+      );
+      addTearDown(client.dispose);
+
+      await client.registerDevice({'id': 'd1'});
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await client.registerDevice({'id': 'd1'});
+      expect(ports, hasLength(1));
+    });
+  });
+
   group('BridgeClient SSE', () {
     test(
       'parses retry, hello, comments, multi-line data, and later frames',
