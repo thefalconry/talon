@@ -48,6 +48,49 @@ void main() {
     expect(find.text('GENERAL'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
+
+  testWidgets('the phone column runs connection first, danger zone last', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await Prefs.load();
+    final state = _DelayedSettingsState(prefs);
+    addTearDown(state.dispose);
+    state.configResult.complete(_config);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildTalonTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(disableAnimations: true),
+          child: child!,
+        ),
+        home: SettingsScreen(state: state),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    double y(String eyebrow) => tester.getTopLeft(find.text(eyebrow)).dy;
+    final order = [
+      'CONNECTION',
+      'GENERAL',
+      'MESH & DEVICE CONTROL',
+      'APPEARANCE',
+      'DIAGNOSTICS',
+      'ABOUT',
+      'DANGER ZONE',
+    ];
+    for (var i = 1; i < order.length; i++) {
+      expect(y(order[i]), greaterThan(y(order[i - 1])),
+          reason: '${order[i]} should follow ${order[i - 1]}');
+    }
+    expect(find.byKey(const Key('settings-version-footer')), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(const Key('settings-version-footer'))).dy,
+      greaterThan(y('DANGER ZONE')),
+    );
+  });
 }
 
 class _DelayedSettingsState extends AppState {

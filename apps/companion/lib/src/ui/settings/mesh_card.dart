@@ -176,7 +176,7 @@ class _MeshCardState extends State<MeshCard> {
       for (final loc in widget.state.meshLocations) loc.deviceId: loc,
     };
     return SettingsSection(
-      title: 'Mesh',
+      title: 'Mesh & device control',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
