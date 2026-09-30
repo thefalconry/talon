@@ -21,7 +21,15 @@ vi.mock("undici", () => ({
     (globalThis.fetch as (...a: unknown[]) => unknown)(...args),
 }));
 
+vi.mock("../util/log.js", () => ({
+  log: vi.fn(),
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logDebug: vi.fn(),
+}));
+
 import { createBridge } from "../core/tools/bridge.js";
+import { logWarn } from "../util/log.js";
 
 describe("createBridge", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -122,6 +130,54 @@ describe("createBridge", () => {
     await expect(bridge("device_pull_file", { path: "/x" })).rejects.toThrow(
       /"device_pull_file" did not complete within 3600s/,
     );
+  });
+
+  it("an early AbortError is not reported as a timeout", async () => {
+    // A socket drop / cancelled request surfaces as AbortError long before
+    // the budget runs out; it must not be labelled "did not complete within".
+    const abortErr = new Error("This operation was aborted");
+    abortErr.name = "AbortError";
+    (abortErr as Error & { cause?: unknown }).cause = new Error(
+      "other side closed",
+    );
+    fetchMock.mockImplementationOnce(async () => {
+      throw abortErr;
+    });
+
+    const bridge = createBridge("http://test/", "123");
+    const err = await bridge("device_pull_file", { path: "/x" }).catch(
+      (e: Error) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    expect(msg).not.toMatch(/did not complete within/);
+    expect(msg).toMatch(/"device_pull_file" was aborted after \d+s \(\d+ms;/);
+    expect(msg).toContain("before its 3600s budget");
+    expect(msg).toContain("other side closed");
+    expect(vi.mocked(logWarn)).toHaveBeenCalledWith(
+      "bridge",
+      expect.stringMatching(
+        /"device_pull_file" aborted after \d+ms \(budget 3600000ms\).*other side closed/,
+      ),
+    );
+  });
+
+  it("an AbortError once the budget has elapsed is still a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(120_001);
+        const e = new Error("aborted");
+        e.name = "AbortError";
+        throw e;
+      });
+      const bridge = createBridge("http://test/", "123");
+      await expect(bridge("send_message", { text: "x" })).rejects.toThrow(
+        /"send_message" did not complete within 120s/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("network failure throws a message naming the action", async () => {

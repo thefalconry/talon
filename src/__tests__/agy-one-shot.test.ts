@@ -15,6 +15,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { RunKilledError } from "../core/agents/abort-reason.js";
+import { IsolatedAgentTimeoutError } from "../core/background/isolated-agent.js";
 
 interface SpawnRecord {
   command: string;
@@ -339,6 +341,21 @@ describe("agy one-shot — failure paths", () => {
     await runOneShotAgent(params({ abortController }));
     expect(logged).toContain("Aborted");
     expect(spawned).toHaveLength(0);
+  });
+
+  it("says 'killed', not 'timeout', for a deliberate kill", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new RunKilledError());
+    await runOneShotAgent(params({ abortController }));
+    expect(logged).toContain("Run killed on request.");
+    expect(logged).not.toContain("timeout");
+  });
+
+  it("still says 'timeout' when the timeout is the reason", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new IsolatedAgentTimeoutError(1000));
+    await runOneShotAgent(params({ abortController }));
+    expect(logged).toContain("Run aborted by timeout.");
   });
 
   it("kills the child when the abort fires mid-run", async () => {

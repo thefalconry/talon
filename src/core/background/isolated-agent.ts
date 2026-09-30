@@ -94,7 +94,7 @@ export async function runIsolatedAgent(
     timer = setTimeout(() => {
       timeoutError = new IsolatedAgentTimeoutError(timeoutMs);
       try {
-        params.abortController.abort();
+        params.abortController.abort(timeoutError);
       } catch {
         /* ignore */
       }
