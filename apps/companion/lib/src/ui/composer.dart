@@ -42,6 +42,12 @@ class Composer extends StatefulWidget {
   /// send slot while the input is empty, WhatsApp-style.
   final VoidCallback? onVoice;
 
+  /// Optional externally owned text controller and focus node, so the chat
+  /// view can put text in the field (Reply quotes a message into it). The
+  /// composer creates and disposes its own when these are null.
+  final TextEditingController? controller;
+  final FocusNode? focusNode;
+
   const Composer({
     super.key,
     required this.onSend,
@@ -50,6 +56,8 @@ class Composer extends StatefulWidget {
     this.running = false,
     this.onStop,
     this.onVoice,
+    this.controller,
+    this.focusNode,
   });
 
   @override
@@ -57,8 +65,9 @@ class Composer extends StatefulWidget {
 }
 
 class _ComposerState extends State<Composer> {
-  final _controller = TextEditingController();
-  final _focus = FocusNode();
+  late final TextEditingController _controller =
+      widget.controller ?? TextEditingController();
+  late final FocusNode _focus = widget.focusNode ?? FocusNode();
   bool _canSend = false;
   bool _focused = false;
 
@@ -70,11 +79,13 @@ class _ComposerState extends State<Composer> {
     // Files can already be staged at mount — dropped onto the pane while the
     // composer was rebuilding, or handed back by a failed send.
     _canSend = widget.attachments.isNotEmpty;
-    _focus.addListener(() {
-      if (_focused != _focus.hasFocus) {
-        setState(() => _focused = _focus.hasFocus);
-      }
-    });
+    _focus.addListener(_onFocus);
+  }
+
+  void _onFocus() {
+    if (mounted && _focused != _focus.hasFocus) {
+      setState(() => _focused = _focus.hasFocus);
+    }
   }
 
   @override
@@ -90,8 +101,10 @@ class _ComposerState extends State<Composer> {
   @override
   void dispose() {
     widget.attachments.removeListener(_onAttachmentsChanged);
-    _controller.dispose();
-    _focus.dispose();
+    _controller.removeListener(_recomputeCanSend);
+    _focus.removeListener(_onFocus);
+    if (widget.controller == null) _controller.dispose();
+    if (widget.focusNode == null) _focus.dispose();
     super.dispose();
   }
 
