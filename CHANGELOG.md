@@ -1,5 +1,42 @@
 # Changelog
 
+## [5.23.0](https://github.com/thefalconry/talon/compare/v5.22.0...v5.23.0) (2026-09-30)
+
+
+### Features
+
+* **companion:** save attachments to Downloads by default ([6e50616](https://github.com/thefalconry/talon/commit/6e5061698b286584e603d024f558e380800d3bb5))
+
+
+### Bug Fixes
+
+* **companion:** clean linux shutdown and optimize android background battery ([2ef8950](https://github.com/thefalconry/talon/commit/2ef89505326bdfa6f9d81fad817ebe1b3e86613f))
+* **companion:** downloaded file naming, snackbar timeout, and linux appimage/deb/rpm packages ([df220bf](https://github.com/thefalconry/talon/commit/df220bf8b4b99975da78f2eed1313d3101599e82))
+* **companion:** drop [@visible](https://github.com/visible)ForTesting where it now trips analyze ([30a2e64](https://github.com/thefalconry/talon/commit/30a2e64b6a4c022552943791b5bb794f45278eab))
+* **companion:** keep chat history in order across reconnects ([1a7e6bf](https://github.com/thefalconry/talon/commit/1a7e6bf64f48f596ce7a44f6da95e19e04e027d4))
+* **companion:** keep the UI stream paused through network changes ([b4b0641](https://github.com/thefalconry/talon/commit/b4b06412ddafd5b860e7cf1ccbb7481d87fe45ec))
+* **companion:** keep unversioned release assets; cap the scroll settle loop ([e7aa677](https://github.com/thefalconry/talon/commit/e7aa67792dd16aebd01aa5058676b2661ebdf4a7))
+* **companion:** make the shutdown and battery changes compile ([eda7327](https://github.com/thefalconry/talon/commit/eda7327ecfe300b93e9b4cf9c82d22b5b5948a2e))
+* **companion:** scroll to bottom reliably, combine queued messages, and theme top menu ([b18010f](https://github.com/thefalconry/talon/commit/b18010fff64b49abc813ab448f07e7e4103576a8))
+* **companion:** versioned release artifact names and multi-frame scroll settling ([de68a76](https://github.com/thefalconry/talon/commit/de68a766c94d6e7989800707caa4105f8a9a1b7a))
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump the production-dependencies group with 2 updates ([#1148](https://github.com/thefalconry/talon/issues/1148)) ([e77f3ab](https://github.com/thefalconry/talon/commit/e77f3ab3589416315f5da282fd812d420c718cdc))
+
+
+### Tests
+
+* **native:** drive the real /send handler for combined follow-ups ([f229c5d](https://github.com/thefalconry/talon/commit/f229c5dd30b44465b4c19dee2233a05565cce675))
+
+
+### Continuous Integration
+
+* **companion:** drop the Linux debug bundle ([0f1f1b0](https://github.com/thefalconry/talon/commit/0f1f1b0818edcf2938a38d64457598020deb2815))
+* **companion:** pin and digest-check nfpm and appimagetool ([b4e3450](https://github.com/thefalconry/talon/commit/b4e3450e4eea9051c30e42f9709dc33e97999e58))
+* **companion:** upload a Linux debug bundle on PRs and manual runs ([807b68b](https://github.com/thefalconry/talon/commit/807b68bf781dac497dedd35b1752496d59597cfe))
+
 ## [5.22.0](https://github.com/thefalconry/talon/compare/v5.21.0...v5.22.0) (2026-09-29)
 
 
