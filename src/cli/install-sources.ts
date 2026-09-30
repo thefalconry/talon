@@ -178,6 +178,15 @@ function dashRefusal(url: string): CloneOutcome | undefined {
     : undefined;
 }
 
+/**
+ * Check out bytes exactly as committed. Windows git defaults to
+ * core.autocrlf=true, which rewrites LF to CRLF on checkout — a pinned
+ * install would then differ from the commit it names, and CRLF frontmatter
+ * fails to parse as a skill. `clone -c` writes this into the new repo's
+ * config, so the later `checkout` honours it too.
+ */
+const EXACT_BYTES = ["-c", "core.autocrlf=false"];
+
 function tempCloneDir(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "talon-install-"));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -188,7 +197,14 @@ export function cloneShallow(url: string): CloneOutcome {
   const refused = dashRefusal(url);
   if (refused) return refused;
   const { dir, cleanup } = tempCloneDir();
-  const outcome = runTool("git", ["clone", "--depth=1", "--", url, dir]);
+  const outcome = runTool("git", [
+    "clone",
+    ...EXACT_BYTES,
+    "--depth=1",
+    "--",
+    url,
+    dir,
+  ]);
   if (!outcome.ok) {
     cleanup();
     return { ok: false, error: `Clone failed: ${outcome.error}` };
@@ -211,6 +227,7 @@ export function cloneAtCommit(url: string, commit: string): CloneOutcome {
   };
   const cloned = runTool("git", [
     "clone",
+    ...EXACT_BYTES,
     "--filter=blob:none",
     "--no-checkout",
     "--",
