@@ -275,6 +275,11 @@ export class Gateway {
     return this.port;
   }
 
+  /** True while the tool bridge's HTTP server is bound and accepting. */
+  isListening(): boolean {
+    return this.server?.listening === true;
+  }
+
   getActiveChats(): number {
     return this.loom.activeContextCount();
   }

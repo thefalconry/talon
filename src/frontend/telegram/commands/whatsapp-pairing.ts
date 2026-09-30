@@ -33,23 +33,27 @@ export function whatsAppPanel(): WhatsAppPanel {
   if (!provider) {
     return { text: WHATSAPP_NOT_ENABLED, keyboard: [] };
   }
-  const linked = provider.isLinked();
-  const text = linked
-    ? "<b>WhatsApp</b>\n✅ Linked and connected.\n\n" +
-      "Re-link only if the phone has unlinked this device."
-    : "<b>WhatsApp</b>\n📴 Not linked.\n\n" +
-      "Tap <b>Pair device</b> when you're holding the phone — I'll reply " +
-      "with a QR to scan (WhatsApp → ⋮ → Linked devices → Link a device).";
+  const refresh = { text: "🔄 Refresh", callback_data: "whatsapp:refresh" };
+  // No pair button while linked: pairing refuses on a linked account, and
+  // unlinking from here would drop a working link. When the phone unlinks
+  // this device the connection loop parks, isLinked() turns false, and
+  // the button comes back on the next refresh.
+  if (provider.isLinked()) {
+    return {
+      text:
+        "<b>WhatsApp</b>\n✅ Linked and connected.\n\n" +
+        "To link a different phone, unlink this device on the phone " +
+        "first, then pair here.",
+      keyboard: [[refresh]],
+    };
+  }
   return {
-    text,
+    text:
+      "<b>WhatsApp</b>\n📴 Not linked.\n\n" +
+      "Tap <b>Pair device</b> when you're holding the phone — I'll reply " +
+      "with a QR to scan (WhatsApp → ⋮ → Linked devices → Link a device).",
     keyboard: [
-      [
-        {
-          text: linked ? "🔗 Re-pair" : "🔗 Pair device",
-          callback_data: "whatsapp:pair",
-        },
-        { text: "🔄 Refresh", callback_data: "whatsapp:refresh" },
-      ],
+      [{ text: "🔗 Pair device", callback_data: "whatsapp:pair" }, refresh],
     ],
   };
 }

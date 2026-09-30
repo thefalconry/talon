@@ -5,8 +5,11 @@ import { resolveModelId as resolveModelName } from "../../../core/models/catalog
 import {
   getChatSettings,
   setChatModel,
-  setChatEffort,
 } from "../../../storage/chat-settings.js";
+import {
+  describeChatEffort,
+  setChatEffortLevel,
+} from "../../presentation/model-commands.js";
 import type { Command, CommandContext } from "../command-registry.js";
 
 type BackendRef = CommandContext["backend"];
@@ -178,20 +181,26 @@ export const modelCommand: Command = {
 export const effortCommand: Command = {
   name: "effort",
   argHint: "[lvl]",
-  description: "Thinking effort (off/low/medium/high/max)",
+  description: "Thinking effort for the active model",
   async handler(args, ctx) {
-    if (!args) {
+    // Same resolution and validation as every chat frontend: the levels
+    // the active model registers, plus adaptive/reset/default.
+    const deps = {
+      config: ctx.config,
+      gateway: { backend: ctx.backend ?? null },
+    };
+    const arg = args.trim();
+    if (!arg) {
+      const { current, levels } = await describeChatEffort(ctx.chatId(), deps);
       ctx.renderer.writeSystem(
-        `Effort: ${getChatSettings(ctx.chatId()).effort ?? "adaptive"}`,
+        levels.length
+          ? `Effort: ${current} (${levels.join(", ")}, adaptive)`
+          : `Effort: ${current}`,
       );
     } else {
-      setChatEffort(
-        ctx.chatId(),
-        args === "adaptive"
-          ? undefined
-          : (args as "off" | "low" | "medium" | "high" | "max"),
-      );
-      ctx.renderer.writeSystem(`Effort → ${args}`);
+      const outcome = await setChatEffortLevel(ctx.chatId(), arg, deps);
+      if (outcome.ok) ctx.renderer.writeSystem(outcome.text);
+      else ctx.renderer.writeError(outcome.text);
     }
     ctx.reprompt();
   },

@@ -36,13 +36,16 @@ import { getTodayMetrics } from "../../../storage/metrics.js";
 import { isAuthorizedAdmin, type RegisterDeps } from "./state.js";
 import { telegramCommandMenu } from "./definitions.js";
 
-function registerAdminCommand(bot: Bot, config: TalonConfig): void {
+function registerAdminCommand(
+  bot: Bot,
+  { config, gateway }: RegisterDeps,
+): void {
   bot.command("admin", async (ctx) => {
     if (!isAuthorizedAdmin(ctx)) {
       await ctx.reply("Not authorized.");
       return;
     }
-    await handleAdminCommand(ctx, bot, config);
+    await handleAdminCommand(ctx, bot, config, gateway);
   });
 }
 
@@ -258,11 +261,9 @@ function registerUnknownCommandSuggester(bot: Bot, config: TalonConfig): void {
   });
 }
 
-export function registerAdminCommands(
-  bot: Bot,
-  { config }: RegisterDeps,
-): void {
-  registerAdminCommand(bot, config);
+export function registerAdminCommands(bot: Bot, deps: RegisterDeps): void {
+  const { config } = deps;
+  registerAdminCommand(bot, deps);
   registerMetricsCommand(bot);
   registerUsageCommand(bot, config);
   registerDoctorCommand(bot, config);
