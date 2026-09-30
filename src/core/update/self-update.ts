@@ -27,10 +27,19 @@
  * can never leave the deployment un-updatable, which is what the old
  * `pull --ff-only` did (it aborts on any dirty/diverged tree). `.gitignore`
  * is respected (no `-x`), so node_modules, secrets and local config survive.
+ *
+ * Before anything in the checkout moves, a pinned pre-update checkpoint is
+ * taken. If it fails, the update is refused. An update with no way back is
+ * when data goes missing, so the operator must say `force` to go on
+ * without one. Opting out in config (`backup.checkpointBeforeUpdate:
+ * false`) is the only way to skip it without being asked.
  */
 
 import { execFile } from "node:child_process";
-import { checkpointBeforeUpdate } from "../backup/index.js";
+import {
+  checkpointBeforeUpdate,
+  type UpdateCheckpoint,
+} from "../backup/index.js";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -60,6 +69,13 @@ export interface UpdateOptions {
   entry?: { cmd: string; args: readonly string[] };
   /** Injectable command runner (tests). */
   runner?: CommandRunner;
+  /**
+   * Go on even when the pre-update checkpoint fails (`/update force`).
+   * The result still says the checkpoint failed.
+   */
+  force?: boolean;
+  /** Injectable pre-update checkpoint (tests). */
+  checkpoint?: (from: string, to: string) => Promise<UpdateCheckpoint>;
 }
 
 /** One executed step in an update run. */
@@ -82,6 +98,13 @@ export interface UpdateResult {
   changed: boolean;
   /** Human-readable failure reason when `ok` is false. */
   error?: string;
+  /** The pre-update checkpoint, when the update got far enough to take one. */
+  checkpoint?: UpdateCheckpoint;
+  /**
+   * True when the update was refused because the checkpoint failed. Nothing
+   * in the checkout was touched; `force` would have gone on.
+   */
+  checkpointRefused?: boolean;
 }
 
 export type CommandRunner = (
@@ -171,12 +194,7 @@ export async function runSelfUpdate(
   const branch = opts.branch?.trim() || "main";
   const run = opts.runner ?? defaultRunner;
 
-  const record = async (
-    label: string,
-    cmd: string,
-    args: readonly string[],
-    timeoutMs: number,
-  ): Promise<UpdateStep> => {
+  const record: Recorder = async (label, cmd, args, timeoutMs) => {
     const { ok, output } = await run(cmd, args, repoRoot, timeoutMs);
     const step: UpdateStep = { label, ok, output };
     steps.push(step);
@@ -210,22 +228,58 @@ export async function runSelfUpdate(
   );
   if (!fetch.ok) return fail(`git fetch failed: ${fetch.output}`, before);
 
+  // Where the update is going, read before the tree moves: the checkpoint
+  // is labelled with it, and "already up to date" needs no checkpoint.
+  const targetRef = `${remote}/${branch}`;
+  const target = await record(
+    `rev-parse ${targetRef}`,
+    "git",
+    ["rev-parse", targetRef],
+    GIT_TIMEOUT_MS,
+  );
+  if (!target.ok) {
+    return fail(`Failed to read ${targetRef}: ${target.output}`, before);
+  }
+  const upcoming = shortSha(target.output);
+
+  // The safety net goes up before anything is destroyed: the reset and
+  // clean below discard local state, and the new code may migrate data.
+  let checkpoint: UpdateCheckpoint | undefined;
+  if (upcoming !== before) {
+    checkpoint = await (opts.checkpoint ?? checkpointBeforeUpdate)(
+      before,
+      upcoming,
+    );
+    steps.push({
+      label: "pre-update checkpoint",
+      ok: checkpoint.status !== "failed",
+      output: describeCheckpoint(checkpoint),
+    });
+    if (checkpoint.status === "failed" && !opts.force) {
+      return {
+        ...fail(refusal(checkpoint.error), before),
+        checkpoint,
+        checkpointRefused: true,
+      };
+    }
+  }
+
   // Force the checkout to exactly match the freshly-fetched remote
   // branch, discarding ANY local edits or diverged commits. The old
   // `pull --ff-only` aborted here whenever the tree was dirty, leaving the
   // deployment stuck; a bot host is meant to mirror the remote, so resetting
   // to it is both correct and reliable.
   const reset = await record(
-    `reset --hard ${remote}/${branch}`,
+    `reset --hard ${targetRef}`,
     "git",
-    ["reset", "--hard", `${remote}/${branch}`],
+    ["reset", "--hard", targetRef],
     GIT_TIMEOUT_MS,
   );
   if (!reset.ok) {
-    return fail(
-      `git reset --hard ${remote}/${branch} failed: ${reset.output}`,
-      before,
-    );
+    return {
+      ...fail(`git reset --hard ${targetRef} failed: ${reset.output}`, before),
+      checkpoint,
+    };
   }
 
   // Drop untracked files too so the tree is pristine and a future update
@@ -246,28 +300,62 @@ export async function runSelfUpdate(
   // Nothing moved — skip the expensive install/setup and tell the
   // caller no restart is needed.
   if (!changed) {
-    return { ok: true, repoRoot, steps, before, after, changed: false };
+    return {
+      ok: true,
+      repoRoot,
+      steps,
+      before,
+      after,
+      changed: false,
+      checkpoint,
+    };
   }
 
-  await checkpointBeforeUpdate(before, after);
+  const error = await installAndVerify(record, opts, before, after);
+  return {
+    ok: !error,
+    repoRoot,
+    steps,
+    before,
+    after,
+    changed: true,
+    checkpoint,
+    ...(error ? { error } : {}),
+  };
+}
 
+type Recorder = (
+  label: string,
+  cmd: string,
+  args: readonly string[],
+  timeoutMs: number,
+) => Promise<UpdateStep>;
+
+function refusal(error: string): string {
+  return (
+    `the pre-update checkpoint failed (${error}). ` +
+    `Nothing was changed. Fix the backup problem, or run the update ` +
+    `with "force" to go on without a checkpoint.`
+  );
+}
+
+/**
+ * Reinstall, run setup, and prove the new tree imports. Returns the
+ * failure reason, or null when the tree is ready to restart into.
+ */
+async function installAndVerify(
+  record: Recorder,
+  opts: UpdateOptions,
+  before: string,
+  after: string,
+): Promise<string | null> {
   const install = await record(
     "npm install",
     "npm",
     ["install"],
     INSTALL_TIMEOUT_MS,
   );
-  if (!install.ok) {
-    return {
-      ok: false,
-      repoRoot,
-      steps,
-      before,
-      after,
-      changed,
-      error: `npm install failed: ${install.output}`,
-    };
-  }
+  if (!install.ok) return `npm install failed: ${install.output}`;
 
   for (const cmd of opts.setup ?? []) {
     const trimmed = cmd.trim();
@@ -279,15 +367,7 @@ export async function runSelfUpdate(
       SETUP_TIMEOUT_MS,
     );
     if (!setup.ok) {
-      return {
-        ok: false,
-        repoRoot,
-        steps,
-        before,
-        after,
-        changed,
-        error: `setup command failed (${trimmed}): ${setup.output}`,
-      };
+      return `setup command failed (${trimmed}): ${setup.output}`;
     }
   }
 
@@ -299,18 +379,35 @@ export async function runSelfUpdate(
     VERIFY_TIMEOUT_MS,
   );
   if (!verify.ok || !verify.output.includes(BOOT_SMOKE_OK)) {
-    return {
-      ok: false,
-      repoRoot,
-      steps,
-      before,
-      after,
-      changed,
-      error:
-        `the updated tree does not import — not restarting into it. ` +
-        `Still running ${before}; the checkout is at ${after}.`,
-    };
+    return (
+      `the updated tree does not import — not restarting into it. ` +
+      `Still running ${before}; the checkout is at ${after}.`
+    );
   }
+  return null;
+}
 
-  return { ok: true, repoRoot, steps, before, after, changed: true };
+/** One line for the step log and the chat reply. */
+export function describeCheckpoint(checkpoint: UpdateCheckpoint): string {
+  switch (checkpoint.status) {
+    case "taken":
+      return `checkpoint ${checkpoint.id} taken`;
+    case "disabled":
+      return "no checkpoint (backup.checkpointBeforeUpdate is off)";
+    case "failed":
+      return `checkpoint failed: ${checkpoint.error}`;
+  }
+}
+
+/**
+ * Whether the arguments to `/update` ask to go on without a checkpoint.
+ * `force` and `--force` both work, so the chat command and a CLI habit
+ * read the same.
+ */
+export function wantsForce(args: string | undefined | null): boolean {
+  return (args ?? "")
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .some((token) => token === "force" || token === "--force");
 }

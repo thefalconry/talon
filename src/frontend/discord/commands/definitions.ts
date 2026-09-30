@@ -156,6 +156,13 @@ function buildCommandDefinitions(devBuild = false): unknown[] {
           new SlashCommandBuilder()
             .setName("update")
             .setDescription("Pull latest, reinstall, restart (admin)")
+            .addBooleanOption((o) =>
+              o
+                .setName("force")
+                .setDescription(
+                  "Update even if the pre-update checkpoint fails",
+                ),
+            )
             .toJSON(),
         ]
       : []),

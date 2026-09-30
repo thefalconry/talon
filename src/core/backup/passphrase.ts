@@ -45,7 +45,10 @@ function checked(passphrase: string, source: string): string {
   return passphrase;
 }
 
-async function readPassphraseFile(raw: string): Promise<string> {
+async function readPassphraseFile(
+  raw: string,
+  warnOnMode = true,
+): Promise<string> {
   const path = expandUserPath(raw);
   let text: string;
   try {
@@ -56,7 +59,7 @@ async function readPassphraseFile(raw: string): Promise<string> {
     );
   }
   const mode = (await stat(path)).mode;
-  if (process.platform !== "win32" && (mode & 0o077) !== 0) {
+  if (warnOnMode && process.platform !== "win32" && (mode & 0o077) !== 0) {
     logWarn("backup", `${path} is readable by other users — chmod 600 it`);
   }
   return checked(text.trim(), path);
@@ -89,6 +92,56 @@ export async function resolvePassphrase(
     throw passphraseError(
       `backup.encryption is set but no passphrase was found: set backup.encryption.passphraseFile or ${PASSPHRASE_ENV}`,
     );
+  }
+  return null;
+}
+
+/**
+ * What is wrong with the configured key, or null when nothing is. Unlike
+ * `resolvePassphrase` this looks at every configured source: a
+ * `passphraseFile` that has gone missing is reported even while
+ * `TALON_BACKUP_PASSPHRASE` keeps snapshots running, because restoring
+ * anywhere without that variable needs the file. `blocking` says whether
+ * snapshots fail because of it. Never throws.
+ */
+export async function passphraseProblem(
+  settings: Pick<BackupSettings, "encryption">,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ message: string; blocking: boolean } | null> {
+  const fromEnv = env[PASSPHRASE_ENV]?.trim();
+  let envProblem: string | null = null;
+  if (fromEnv) {
+    try {
+      checked(fromEnv, PASSPHRASE_ENV);
+    } catch (err) {
+      envProblem = (err as Error).message;
+    }
+  }
+  const file = settings.encryption?.passphraseFile;
+  if (file) {
+    try {
+      await readPassphraseFile(file, false);
+    } catch (err) {
+      const message = (err as Error).message;
+      // A usable environment passphrase wins, so snapshots still run.
+      if (fromEnv && !envProblem) {
+        return {
+          message: `${message} (snapshots still run on ${PASSPHRASE_ENV}, but a restore without it needs this file)`,
+          blocking: false,
+        };
+      }
+      return {
+        message: envProblem ? `${envProblem}; ${message}` : message,
+        blocking: true,
+      };
+    }
+  }
+  if (envProblem) return { message: envProblem, blocking: true };
+  if (settings.encryption && !file && !fromEnv) {
+    return {
+      message: `backup.encryption is set but no passphrase was found: set backup.encryption.passphraseFile or ${PASSPHRASE_ENV}`,
+      blocking: true,
+    };
   }
   return null;
 }

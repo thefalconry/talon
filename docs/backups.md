@@ -86,6 +86,23 @@ confirmed restore is staged to `~/.talon/restore-pending.json`, Talon
 restarts, and the next boot applies it before the database opens. Chat
 restores use the local copy — fetch a remote-only snapshot with the CLI.
 
+## Before a self-update
+
+On a git-checkout deployment, `/update` takes a pinned `pre-update
+<from>→<to>` checkpoint after fetching and before anything in the checkout
+changes (`git reset --hard`, `git clean`, `npm install`). If the checkpoint
+fails (the passphrase file is missing, the disk is full, the backup
+subsystem is not running) the update is **refused** and nothing is
+touched. The reply says why.
+
+- `/update force` on Telegram, or `/update force:true` on Discord, goes on
+  without a checkpoint. The reply still says the checkpoint failed.
+- `"backup": { "checkpointBeforeUpdate": false }` turns the checkpoint off.
+  Updates then go ahead without one and without asking.
+- `"backup": { "enabled": false }` only stops the schedule. Checkpoints
+  still work, so `/update` still takes one and still refuses when it fails.
+- When the checkout is already at the remote commit, no checkpoint is taken.
+
 ## Cloning onto a new machine
 
 1. Install Talon on the new machine (docs/server-install.md). Don't start it.
