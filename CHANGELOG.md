@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.26.6](https://github.com/thefalconry/talon/compare/v5.26.5...v5.26.6) (2026-09-30)
+
+
+### Tests
+
+* route the storage-layout user home through the home guard ([#1218](https://github.com/thefalconry/talon/issues/1218)) ([6b3db84](https://github.com/thefalconry/talon/commit/6b3db8445a9bc10c17c31c5035d4490a30045bbd))
+
 ## [5.26.5](https://github.com/thefalconry/talon/compare/v5.26.4...v5.26.5) (2026-09-30)
 
 
