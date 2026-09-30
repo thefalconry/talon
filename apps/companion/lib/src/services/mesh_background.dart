@@ -82,6 +82,7 @@ class MeshTaskHandler extends TaskHandler {
     AppLog.info('mesh_bg', 'foreground mesh stopping (timeout=$isTimeout)');
     await _runner?.dispose();
     _runner = null;
+    if (isTimeout) await MeshForegroundController.noteServiceTimedOut();
   }
 }
 
@@ -634,11 +635,36 @@ class MeshForegroundController {
     );
     switch (result) {
       case ServiceRequestSuccess():
+        // Running again: any "paused by Android" notice is now stale.
+        unawaited(
+          MessageNotifications.clearNotice(MessageNotifications.meshPausedId),
+        );
         return true;
       case ServiceRequestFailure(:final error):
         AppLog.warn('mesh_bg', 'foreground service start failed', error);
         return false;
     }
+  }
+
+  /// Android 15+ caps a `dataSync` foreground service at 6 hours per 24 and
+  /// then stops it (Service.onTimeout; the plugin stops the service and
+  /// reports `isTimeout`). It may not be restarted from the background until
+  /// the app next comes to the foreground — where [syncFromPrefs] restarts
+  /// it on the next connect. Until then the mesh is down, so say so rather
+  /// than leave a silently dead device: one notice, tapping it opens the app
+  /// (which restarts the service and withdraws the notice).
+  static Future<void> noteServiceTimedOut() async {
+    AppLog.warn(
+      'mesh_bg',
+      'Android stopped the mesh service at its background time limit; '
+          'it resumes when Talon is next opened',
+    );
+    await MessageNotifications.showNotice(
+      id: MessageNotifications.meshPausedId,
+      title: 'Talon mesh paused',
+      body: "Android paused Talon's background connection after its daily "
+          'time limit. Open Talon to reconnect this device.',
+    );
   }
 
   static Future<bool> stop() async {

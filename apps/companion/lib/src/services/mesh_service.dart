@@ -137,6 +137,31 @@ class MeshService {
   Timer? _periodic;
   bool _running = false;
 
+  /// Registrations that have failed in a row. Drives the heartbeat's backoff
+  /// and keeps an outage to one warning in the log instead of one a minute.
+  int _registerFailures = 0;
+
+  /// How often a healthy mesh re-registers (the daemon's online signal).
+  static const Duration heartbeatInterval = Duration(seconds: 60);
+
+  /// The heartbeat's retry delay never grows past this while the bridge is
+  /// unreachable.
+  static const Duration maxRegisterBackoff = Duration(minutes: 5);
+
+  /// Delay before the next heartbeat after [failures] consecutive failed
+  /// registrations: the normal [heartbeatInterval] when healthy, then 30 s,
+  /// 60 s, 2 min, 4 min, capped at [maxRegisterBackoff].
+  static Duration heartbeatDelay(int failures) {
+    if (failures <= 0) return heartbeatInterval;
+    final shift = failures - 1 > 10 ? 10 : failures - 1;
+    final ms = 30000 * (1 << shift);
+    final cap = maxRegisterBackoff.inMilliseconds;
+    return Duration(milliseconds: ms > cap ? cap : ms);
+  }
+
+  @visibleForTesting
+  int get registerFailures => _registerFailures;
+
   MeshService(
     this.prefs,
     this.client, {
@@ -218,11 +243,7 @@ class MeshService {
       );
     }
     await _foregroundStarter();
-    try {
-      await register();
-    } catch (e) {
-      AppLog.warn('mesh', 'initial mesh registration failed', e);
-    }
+    await tryRegister();
     _events = client.events.listen(
       (event) {
         // Each command holds the device awake only while it runs (#1060).
@@ -237,10 +258,53 @@ class MeshService {
       // subscription.
       onError: (Object e) => AppLog.debug('mesh', 'event stream error', e),
     );
-    _heartbeat = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (prefs.meshSharing) unawaited(register());
-    });
+    _scheduleHeartbeat(heartbeatDelay(_registerFailures));
     _configurePeriodic();
+  }
+
+  /// One-shot timer chain rather than Timer.periodic, so a failing bridge
+  /// backs the heartbeat off and a recovered one snaps it back to a minute.
+  void _scheduleHeartbeat(Duration delay) {
+    _heartbeat?.cancel();
+    if (!_running) return;
+    _heartbeat = Timer(delay, () => unawaited(_heartbeatTick()));
+  }
+
+  Future<void> _heartbeatTick() async {
+    if (!_running) return;
+    if (prefs.meshSharing) await tryRegister();
+    if (!_running) return;
+    _scheduleHeartbeat(heartbeatDelay(_registerFailures));
+  }
+
+  /// [register], never throwing: a timed-out or refused registration is
+  /// logged (once per outage) and counted for the heartbeat's backoff. Every
+  /// timer- and event-driven registration goes through here — an exception
+  /// escaping an `unawaited` call is an unhandled zone error.
+  Future<bool> tryRegister() async {
+    try {
+      await register();
+      return true;
+    } catch (e) {
+      _registerFailures++;
+      final next = heartbeatDelay(_registerFailures);
+      if (_registerFailures == 1) {
+        AppLog.warn(
+          'mesh',
+          'mesh registration failed; retrying with backoff '
+              '(next in ${next.inSeconds}s)',
+          e,
+        );
+      } else {
+        AppLog.debug(
+          'mesh',
+          'mesh registration failed again ($_registerFailures in a row; '
+              'next in ${next.inSeconds}s)',
+          e,
+        );
+      }
+      return false;
+    }
   }
 
   Future<void> stop() async {
@@ -256,7 +320,7 @@ class MeshService {
   void reconfigure() {
     if (!_running) return;
     _configurePeriodic();
-    if (prefs.meshSharing) unawaited(register());
+    if (prefs.meshSharing) unawaited(tryRegister());
   }
 
   Future<void> register() async {
@@ -272,6 +336,16 @@ class MeshService {
       if (battery.charging != null) 'charging': battery.charging,
       'capabilities': capabilitiesFor(prefs),
     });
+    if (_registerFailures > 0) {
+      AppLog.info(
+        'mesh',
+        'mesh registration recovered after $_registerFailures failures',
+      );
+      _registerFailures = 0;
+      // A success from outside the heartbeat (a reconnect, the watchdog)
+      // ends the backoff too: back to the normal cadence.
+      if (_heartbeat != null) _scheduleHeartbeat(heartbeatInterval);
+    }
     await _onRegistered?.call();
   }
 
