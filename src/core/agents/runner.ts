@@ -78,8 +78,8 @@ import {
   buildRebriefPrompt,
   buildResumePrompt,
 } from "./prompt.js";
-import * as agentsRepo from "../../storage/repositories/agents-repo.js";
-import type { PersistedAgent } from "../../storage/repositories/agents-repo.js";
+import * as agentsRepo from "../../storage/agents/repo.js";
+import type { PersistedAgent } from "../../storage/agents/repo.js";
 import { agentRegistry } from "./registry.js";
 import type {
   AgentCaps,

@@ -1,7 +1,8 @@
 /**
  * Agents repository — executes the statements in sql/agents.sql against
  * the `agents` table; no SQL text lives here. The domain side (what gets
- * written when, and the boot-time resume) is core/agents/persistence.ts.
+ * written when, and the boot-time resume) is core/agents/registry.ts and
+ * core/agents/runner.ts.
  */
 
 import { getDatabase } from "../db.js";

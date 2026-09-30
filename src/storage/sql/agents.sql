@@ -1,4 +1,4 @@
--- Statements for the agents table (see repositories/agents-repo.ts for
+-- Statements for the agents table (see storage/agents/repo.ts for
 -- the parameter order and row↔domain mapping).
 
 -- name: upsert

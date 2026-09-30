@@ -8,7 +8,7 @@
  *
  * The live map is in memory, but every lifecycle change is mirrored to the
  * `agents` table through the `persist` hook (the singleton wires
- * `core/agents/persistence.ts`), so a daemon restart no longer kills an
+ * `storage/agents/repo.ts`), so a daemon restart no longer kills an
  * agent: the next boot finds its row still `running` and resumes it —
  * `restore()` is the re-entry point. Tests constructing their own registry
  * pass no hook and stay purely in memory.
@@ -26,8 +26,8 @@ import type {
 import type { TaskUsage } from "../tasks/types.js";
 import type { AgentSettledEvent, AgentSpawnedEvent } from "../bus/events.js";
 import type { ReasoningEffortLevel } from "../types.js";
-import type { PersistedAgent } from "../../storage/repositories/agents-repo.js";
-import * as agentsRepo from "../../storage/repositories/agents-repo.js";
+import type { PersistedAgent } from "../../storage/agents/repo.js";
+import * as agentsRepo from "../../storage/agents/repo.js";
 import { bus } from "../bus/index.js";
 import { logWarn } from "../../util/log.js";
 import { RunKilledError } from "./abort-reason.js";
@@ -148,6 +148,17 @@ function snapshot(entry: LiveAgent): AgentRecord {
     children: [...entry.record.children],
     inboxDepth: entry.mailbox.length,
   };
+}
+
+/**
+ * The abort reason for a kill. A daemon shutdown parks the run rather than
+ * killing it (it resumes on the next boot), so its abort must not carry
+ * `RunKilledError` — the run log would say "killed on request".
+ */
+function killReason(entry: LiveAgent, id: string): Error {
+  return entry.interrupted
+    ? new Error(`agent ${id} interrupted by a daemon shutdown`)
+    : new RunKilledError(`agent ${id} killed`);
 }
 
 /** The durable shape of one live entry. */
@@ -491,7 +502,7 @@ export class AgentRegistry {
     // right after start() and settles the run as "killed".
     if (entry.killRequested) {
       try {
-        binding.abort.abort(new RunKilledError(`agent ${id} killed`));
+        binding.abort.abort(killReason(entry, id));
       } catch (err) {
         logWarn(
           "agents",
@@ -582,7 +593,7 @@ export class AgentRegistry {
     if (!entry.killRequested) {
       entry.killRequested = true;
       try {
-        entry.abort?.abort(new RunKilledError(`agent ${id} killed`));
+        entry.abort?.abort(killReason(entry, id));
       } catch (err) {
         // An abort hook must not be able to break the kill path — but a
         // throwing one may leave the agent running, so say so.

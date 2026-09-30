@@ -399,7 +399,7 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
 -- change (start, SDK session id, mailbox, report, settle). On boot, every
 -- row still 'queued' or 'running' was interrupted by the restart and is
 -- respawned — resuming its backend session when the backend can. See
--- core/agents/persistence.ts.
+-- resumeAgentsAfterRestart in core/agents/runner.ts.
 CREATE TABLE IF NOT EXISTS agents (
   id               TEXT PRIMARY KEY,
   label            TEXT    NOT NULL,

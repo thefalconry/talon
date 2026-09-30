@@ -135,23 +135,16 @@ export async function runOneShotAgent(
     );
   }
 
-  const threadOptions = {
-    model: activeModel,
-    skipGitRepoCheck: true,
-    ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
-    ...CODEX_THREAD_PERMISSIONS,
-  };
-  // A sub-agent interrupted by a daemon restart continues its own thread.
-  const thread = resumeSessionId
-    ? codex.resumeThread(resumeSessionId, threadOptions)
-    : codex.startThread(threadOptions);
-  if (resumeSessionId) {
-    log(
-      "agent",
-      `[${contextLabel}] Codex one-shot resuming thread ${resumeSessionId}`,
-    );
-    emitSessionId(onSessionId, resumeSessionId);
-  }
+  const thread = openThread(
+    codex,
+    {
+      model: activeModel,
+      skipGitRepoCheck: true,
+      ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
+      ...CODEX_THREAD_PERMISSIONS,
+    },
+    params,
+  );
 
   // The real reason a run failed lives in the stream, not in whatever the
   // SDK throws afterwards: a model the account can't use yields
@@ -175,25 +168,10 @@ export async function runOneShotAgent(
     let usage: OneShotUsage | undefined;
     for await (const event of events) {
       if (abortController.signal.aborted) break;
-      if (
-        event.type === "thread.started" &&
-        typeof (event as { thread_id?: unknown }).thread_id === "string"
-      ) {
-        emitSessionId(onSessionId, (event as { thread_id: string }).thread_id);
-      }
+      reportThreadStarted(event, onSessionId);
       await appendCodexEvent(appendLog, event, onAssistantText);
       failure.observe(event);
-      if (event.type === "turn.completed") {
-        const u = (event as { usage?: Record<string, number> }).usage;
-        if (u) {
-          usage = {
-            inputTokens: u.input_tokens ?? 0,
-            outputTokens: u.output_tokens ?? 0,
-            cacheRead: u.cached_input_tokens ?? 0,
-            cacheWrite: 0, // Codex doesn't report cache writes
-          };
-        }
-      }
+      usage = turnUsage(event) ?? usage;
     }
     // A stream that ends cleanly after `turn.failed` is still a failed run
     // — returning here is how 26/26 Codex cron runs were stored as "ok".
@@ -222,6 +200,55 @@ export async function runOneShotAgent(
       ? err
       : new CodexOneShotError(msg, { cause: err });
   }
+}
+
+type CodexClient = ReturnType<typeof ensureCodex>;
+type CodexThreadOptions = Parameters<CodexClient["startThread"]>[0];
+
+/**
+ * Start the run's thread — or, for a sub-agent interrupted by a daemon
+ * restart, continue its own thread and re-report the handle.
+ */
+function openThread(
+  codex: CodexClient,
+  options: CodexThreadOptions,
+  params: Pick<
+    OneShotAgentParams,
+    "resumeSessionId" | "onSessionId" | "contextLabel"
+  >,
+): ReturnType<CodexClient["startThread"]> {
+  const { resumeSessionId, onSessionId, contextLabel } = params;
+  if (!resumeSessionId) return codex.startThread(options);
+  log(
+    "agent",
+    `[${contextLabel}] Codex one-shot resuming thread ${resumeSessionId}`,
+  );
+  const thread = codex.resumeThread(resumeSessionId, options);
+  emitSessionId(onSessionId, resumeSessionId);
+  return thread;
+}
+
+/** Report the thread id from `thread.started` so a restart can resume it. */
+function reportThreadStarted(
+  event: { type: string },
+  onSessionId: OneShotAgentParams["onSessionId"],
+): void {
+  if (event.type !== "thread.started") return;
+  const threadId = (event as { thread_id?: unknown }).thread_id;
+  if (typeof threadId === "string") emitSessionId(onSessionId, threadId);
+}
+
+/** The cumulative usage a `turn.completed` event carries, if any. */
+function turnUsage(event: { type: string }): OneShotUsage | undefined {
+  if (event.type !== "turn.completed") return undefined;
+  const u = (event as { usage?: Record<string, number> }).usage;
+  if (!u) return undefined;
+  return {
+    inputTokens: u.input_tokens ?? 0,
+    outputTokens: u.output_tokens ?? 0,
+    cacheRead: u.cached_input_tokens ?? 0,
+    cacheWrite: 0, // Codex doesn't report cache writes
+  };
 }
 
 /**

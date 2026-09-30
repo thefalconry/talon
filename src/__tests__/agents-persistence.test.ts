@@ -37,7 +37,8 @@ import {
   type AgentParent,
 } from "../core/agents/index.js";
 import { MAX_AGENT_RESUMES } from "../core/agents/runner.js";
-import * as agentsRepo from "../storage/repositories/agents-repo.js";
+import { abortKind } from "../core/agents/abort-reason.js";
+import * as agentsRepo from "../storage/agents/repo.js";
 
 vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend: vi.fn(async (request: { chatBackendId: string }) => ({
@@ -213,6 +214,24 @@ describe("sub-agent persistence", () => {
     expect(row.sessionId).toBe("sess-1");
     // The parent is not woken with a death notice.
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("a shutdown abort does not read as a kill", async () => {
+    const run = blockingRun("sess-1");
+    await boot(run, true);
+    const outcome = await spawnAgent({
+      brief: "port the widget to the new API",
+      label: "porter",
+      parent: CHAT,
+      backendId: "codex",
+    });
+    if (!outcome.ok) throw new Error(outcome.error);
+    await until(() => agentsRepo.get(outcome.agentId)?.sessionId === "sess-1");
+    const signal = run.mock.calls[0]![0].abortController.signal;
+    shutdownAgents();
+    await until(() => !agentRegistry.isLive(outcome.agentId));
+    expect(signal.aborted).toBe(true);
+    expect(abortKind(signal)).not.toBe("killed");
   });
 
   it("resumes the backend session on boot and delivers the report", async () => {
