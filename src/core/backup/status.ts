@@ -16,7 +16,8 @@ import {
   type BackupTarget,
 } from "./targets.js";
 import { backupSettings, schedulerStatus } from "./scheduler.js";
-import type { SnapshotSummary } from "./types.js";
+import { PASSPHRASE_ENV } from "./passphrase.js";
+import type { BackupSettings, SnapshotSummary } from "./types.js";
 
 type TargetStatus = {
   id: string;
@@ -38,7 +39,34 @@ export type BackupStatus = {
   };
   targets: TargetStatus[];
   snapshots: SnapshotSummary[];
+  /** Retention and encryption, when the subsystem is initialised. */
+  policy?: BackupPolicy;
 };
+
+/** The settings a status panel renders alongside the numbers. */
+type BackupPolicy = {
+  keepLocal: number;
+  keepRemote: number;
+  /**
+   * Snapshots are written encrypted: `backup.encryption` is configured or
+   * the passphrase comes from the environment (see passphrase.ts). Off
+   * means they stay on this machine — upload refuses plaintext.
+   */
+  encrypted: boolean;
+};
+
+function describePolicy(
+  settings: BackupSettings | null,
+  env: NodeJS.ProcessEnv = process.env,
+): BackupPolicy | undefined {
+  if (!settings) return undefined;
+  return {
+    keepLocal: settings.keepLocal,
+    keepRemote: settings.keepRemote,
+    encrypted:
+      settings.encryption !== undefined || Boolean(env[PASSPHRASE_ENV]?.trim()),
+  };
+}
 
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -119,6 +147,7 @@ export async function collectBackupStatus(
     },
     targets,
     snapshots,
+    policy: describePolicy(settings),
   };
 }
 

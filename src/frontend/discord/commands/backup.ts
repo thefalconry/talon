@@ -1,8 +1,9 @@
 /**
  * /backup — snapshots and checkpoints (admin only), the Discord half.
  *
- * Same surface as Telegram's /backup: status, now, checkpoint, list,
- * pin/unpin, restore. Restore is behind a button (`backup:restore:<id>`)
+ * Same surface as Telegram's /backup: the panel (bare `/backup` — status
+ * with Back up now / Snapshots / How restore works / Refresh buttons, see
+ * backup-panel.ts), now, checkpoint, list, pin/unpin, restore. Restore is behind a button (`backup:restore:<id>`)
  * because it replaces the database, memory and identity of a running
  * agent — and even then it does not restore in place: the request is
  * staged to ~/.talon/restore-pending.json and applied by the next boot,
@@ -21,16 +22,23 @@ import {
   type ChatInputCommandInteraction,
 } from "discord.js";
 import {
-  collectBackupStatus,
-  formatBackupStatus,
   formatSnapshotList,
   isSnapshotId,
   listSnapshots,
   readManifest,
-  runBackup,
   setSnapshotPinned,
   writeRestorePending,
 } from "../../../core/backup/index.js";
+import {
+  parseBackupAction,
+  renderRestoreConfirm,
+} from "../../presentation/backup-panel.js";
+import { DISCORD_REPORTS } from "../render.js";
+import {
+  handleBackupPanelAction,
+  replyWithPanel,
+  runSnapshotLine,
+} from "./backup-panel.js";
 import { respawnSelf } from "../../../core/daemon/respawn.js";
 import { logError } from "../../../util/log.js";
 import { escapeForCodeBlock } from "../formatting.js";
@@ -60,24 +68,7 @@ async function takeSnapshot(
   label?: string,
 ): Promise<void> {
   await i.deferReply({ flags: MessageFlags.Ephemeral });
-  try {
-    const manifest = await runBackup({
-      kind: label ? "checkpoint" : "backup",
-      label,
-      pinned: Boolean(label),
-      trigger: "command",
-    });
-    await i.editReply(
-      `✅ \`${manifest.id}\` — ${manifest.parts.length} part(s), ` +
-        `${(manifest.sizeBytes / 1024 / 1024).toFixed(1)} MB` +
-        (label ? " (pinned)" : ""),
-    );
-  } catch (err) {
-    logError("backup", "/backup now failed", err);
-    await i.editReply(
-      `⚠️ Backup failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+  await i.editReply(await runSnapshotLine(label));
 }
 
 async function askToRestore(
@@ -94,12 +85,7 @@ async function askToRestore(
     return;
   }
   await i.reply({
-    content:
-      `♻️ **Restore \`${id}\`?**\n` +
-      (manifest.label ? `“${manifest.label}”\n` : "") +
-      `Taken ${new Date(manifest.createdAt).toISOString()}\n\n` +
-      "This replaces config, prompts, keys, sessions, the database and memory, " +
-      "then restarts. A pinned checkpoint of the current state is taken first.",
+    content: renderRestoreConfirm(DISCORD_REPORTS, manifest),
     components: [confirmRow(id).toJSON()],
     flags: MessageFlags.Ephemeral,
   });
@@ -149,11 +135,7 @@ export async function handleBackup(
       await askToRestore(i, argument);
       return;
     default:
-      await reply(
-        i,
-        block(formatBackupStatus(await collectBackupStatus())),
-        true,
-      );
+      await replyWithPanel(i);
   }
 }
 
@@ -172,6 +154,15 @@ export async function handleBackupComponent(
   }
   if (action === "cancel") {
     await interaction.update({ content: "Restore cancelled.", components: [] });
+    return true;
+  }
+  const panelAction = parseBackupAction(interaction.customId);
+  if (
+    panelAction &&
+    panelAction.kind !== "restore" &&
+    panelAction.kind !== "cancel"
+  ) {
+    await handleBackupPanelAction(interaction, panelAction);
     return true;
   }
   if (action !== "restore" || !id || !isSnapshotId(id)) return false;
