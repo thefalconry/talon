@@ -302,7 +302,7 @@ describe("setBackend", () => {
     expect(rebindChat).not.toHaveBeenCalled();
   });
 
-  it("wipes the conversation when the chat moves to another backend", async () => {
+  it("keeps the conversation when the chat moves to another backend", async () => {
     const { runtime } = harness;
     const entry = runtime.chats.create();
     pushMessage(entry.id, {
@@ -315,7 +315,10 @@ describe("setBackend", () => {
 
     await setBackend(runtime, entry.id, "kilo");
 
-    expect(getRecentHistory(entry.id, 10)).toHaveLength(0);
+    // A switch changes who answers, not what was said: history stays.
+    expect(getRecentHistory(entry.id, 10).map((m) => m.text)).toEqual([
+      "on claude",
+    ]);
     expect(getChatSettings(entry.id).backend).toBe("kilo");
   });
 
@@ -328,7 +331,7 @@ describe("setBackend", () => {
       {
         message: {
           role: "system",
-          text: "Switched to kilo — starting a fresh conversation.",
+          text: "Switched to kilo — new session, chat history kept.",
         },
       },
     ]);

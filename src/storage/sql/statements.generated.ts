@@ -57,6 +57,19 @@ CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE OF text, sender_name ON his
   VALUES (new.id, new.text, new.sender_name);
 END;
 
+-- Per-chat history state. Chat history is never deleted by a reset, a
+-- backend switch or a chat deletion: a reset records a context floor
+-- (\`cleared_through_id\`, the newest history_messages.id at reset time) so
+-- the bot's context starts fresh after it while every row stays stored
+-- and searchable; deleting a chat in a client sets \`hidden_at\`. Only the
+-- operator's explicit \`talon history purge\` removes rows.
+CREATE TABLE IF NOT EXISTS history_chat_state (
+  chat_id            TEXT    PRIMARY KEY,
+  cleared_through_id INTEGER NOT NULL DEFAULT 0,
+  cleared_at         INTEGER,
+  hidden_at          INTEGER
+);
+
 -- Typed memory: one row per claim, with an FTS5 index over subject +
 -- text. Kinds are lifecycles, not labels (docs/memory-persona-plan.md
 -- §3.1): \`directive\` is durable human intent, \`fact\` is durable and
@@ -518,24 +531,55 @@ export const historySql = {
    reply_to_msg_id, timestamp, media_type, sticker_file_id, file_path,
    attachments)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  recent: `SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
+  recent: `-- The \`id > ?\` floor is the chat's context-reset marker (0 for none; see
+-- chatState below): rows at or under it stay stored and searchable but
+-- are no longer the chat's current conversation.
+SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
        timestamp, media_type, sticker_file_id, file_path, attachments
 FROM history_messages
-WHERE chat_id = ? ORDER BY id DESC LIMIT ?`,
+WHERE chat_id = ? AND id > ? ORDER BY id DESC LIMIT ?`,
   recentBefore: `-- Scroll-back pagination: the window of messages strictly older than a
 -- given msg_id, newest-first (the repository reverses to chronological).
 SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
        timestamp, media_type, sticker_file_id, file_path, attachments
 FROM history_messages
-WHERE chat_id = ? AND msg_id < ? ORDER BY id DESC LIMIT ?`,
+WHERE chat_id = ? AND msg_id < ? AND id > ? ORDER BY id DESC LIMIT ?`,
   recentBeforeTime: `-- Time-cursor variant of recentBefore for the read_history \`before\` date
 -- parameter: the newest \`limit\` messages strictly older than a timestamp.
 SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
        timestamp, media_type, sticker_file_id, file_path, attachments
 FROM history_messages
-WHERE chat_id = ? AND timestamp < ? ORDER BY id DESC LIMIT ?`,
+WHERE chat_id = ? AND timestamp < ? AND id > ? ORDER BY id DESC LIMIT ?`,
   setFilePath: `UPDATE history_messages SET file_path = ? WHERE chat_id = ? AND msg_id = ?`,
-  deleteChat: `DELETE FROM history_messages WHERE chat_id = ?`,
+  purgeChat: `-- The ONLY statement that deletes history rows. Reached solely through the
+-- operator's explicit \`talon history purge\` (history.ts purgeChatHistory);
+-- resets, backend switches and chat deletion never delete rows.
+DELETE FROM history_messages WHERE chat_id = ?`,
+  purgeChatState: `DELETE FROM history_chat_state WHERE chat_id = ?`,
+  chatState: `SELECT cleared_through_id, cleared_at, hidden_at
+FROM history_chat_state WHERE chat_id = ?`,
+  markCleared: `-- Soft reset: move the chat's context floor to its newest stored row. The
+-- rows stay; readers that build the bot's context skip everything at or
+-- under the floor. Parameters: chat_id, chat_id, cleared_at.
+INSERT INTO history_chat_state (chat_id, cleared_through_id, cleared_at)
+VALUES (?, (SELECT COALESCE(MAX(id), 0) FROM history_messages WHERE chat_id = ?), ?)
+ON CONFLICT(chat_id) DO UPDATE SET
+  cleared_through_id = excluded.cleared_through_id,
+  cleared_at = excluded.cleared_at`,
+  markHidden: `-- Soft delete: a chat the user deleted is hidden (and its context floor
+-- moved, so a chat that reappears under the same id starts fresh). The
+-- rows stay. Parameters: chat_id, chat_id, cleared_at, hidden_at.
+INSERT INTO history_chat_state (chat_id, cleared_through_id, cleared_at, hidden_at)
+VALUES (?, (SELECT COALESCE(MAX(id), 0) FROM history_messages WHERE chat_id = ?), ?, ?)
+ON CONFLICT(chat_id) DO UPDATE SET
+  cleared_through_id = excluded.cleared_through_id,
+  cleared_at = excluded.cleared_at,
+  hidden_at = excluded.hidden_at`,
+  hiddenChats: `SELECT s.chat_id, s.hidden_at,
+       (SELECT COUNT(*) FROM history_messages h WHERE h.chat_id = s.chat_id) AS total
+FROM history_chat_state s
+WHERE s.hidden_at IS NOT NULL
+ORDER BY s.hidden_at DESC`,
   searchFts: `-- The match param must already be a valid FTS5 expression
 -- (see history.ts ftsQuery).
 SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,

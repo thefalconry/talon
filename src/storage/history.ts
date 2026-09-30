@@ -13,6 +13,16 @@
  *     `includes()` scan over the tail
  *   - writes are transactional rows, not rewrite-the-file-on-flush
  *
+ * Rows are never deleted by normal operation. A /reset (or admin kill,
+ * or a native chat reset) records a per-chat context floor
+ * ({@link markContextCleared}); a native chat delete hides the chat
+ * ({@link hideChatHistory}). Readers that build the bot's context —
+ * getRecentHistory, the read_history tool, the pulse, the native
+ * transcript — start after the floor; explicit search sees every row,
+ * labelling the ones from before the reset. {@link purgeChatHistory},
+ * reached only from the operator's `talon history purge`, is the one
+ * path that deletes rows.
+ *
  * The legacy ~/.talon/data/history.json (JsonStore envelope or bare
  * pre-envelope shape) is imported once on first load, then renamed to
  * history.json.imported.
@@ -94,21 +104,133 @@ export function maxMsgIdForChatPrefix(prefix: string): number | undefined {
   return repo.maxMsgIdForPrefix(prefix);
 }
 
-export function getRecentHistory(chatId: string, limit = 50): HistoryMessage[] {
-  return repo.recent(chatId, limit);
+// ── Soft reset / soft delete ────────────────────────────────────────────────
+
+/** Reader options: `includeCleared` also returns rows from before a reset. */
+export type HistoryReadOptions = { includeCleared?: boolean };
+
+/** The chat's reset/hidden state, or undefined when it has none. */
+export function getChatHistoryState(
+  chatId: string,
+): repo.ChatHistoryState | undefined {
+  try {
+    return repo.chatState(chatId);
+  } catch (err) {
+    logError("history", `Failed to read history state chat=${chatId}`, err);
+    return undefined;
+  }
+}
+
+/** Row-id floor for context readers: 0 when the chat was never reset. */
+function contextFloor(chatId: string, opts: HistoryReadOptions = {}): number {
+  if (opts.includeCleared) return 0;
+  return getChatHistoryState(chatId)?.clearedThroughId ?? 0;
+}
+
+/**
+ * Soft reset: the chat's context starts fresh from here. Every stored row
+ * stays — searchable, recoverable — but context readers skip rows stored
+ * before this call. Replaces the old hard delete on /reset, /new and
+ * admin kill. Never throws.
+ */
+export function markContextCleared(chatId: string, at = Date.now()): void {
+  try {
+    repo.markCleared(chatId, at);
+  } catch (err) {
+    logError("history", `Failed to mark context reset chat=${chatId}`, err);
+  }
+}
+
+/**
+ * Soft delete: the user deleted this chat in a client. The rows stay (the
+ * operator can still recover or purge them); the chat is flagged hidden
+ * and its context floor moves, so it no longer restores and a chat that
+ * reappears under the same id starts fresh. Never throws.
+ */
+export function hideChatHistory(chatId: string, at = Date.now()): void {
+  try {
+    repo.markHidden(chatId, at);
+  } catch (err) {
+    logError("history", `Failed to hide chat history chat=${chatId}`, err);
+  }
+}
+
+/** True when the chat was deleted in a client (its rows are kept). */
+export function isChatHistoryHidden(chatId: string): boolean {
+  return getChatHistoryState(chatId)?.hiddenAt !== undefined;
+}
+
+/** Chats deleted in a client, newest first, with their kept row counts. */
+export function listHiddenChats(): repo.HiddenChat[] {
+  return repo.hiddenChats();
+}
+
+/**
+ * Permanently delete a chat's history rows and state. The ONLY hard delete
+ * of history: reached solely from the operator's `talon history purge`
+ * (which confirms first). Returns the number of rows deleted.
+ */
+export function purgeChatHistory(chatId: string): number {
+  const deleted = repo.purgeChat(chatId);
+  log("history", `Purged ${deleted} history row(s) for chat=${chatId}`);
+  return deleted;
+}
+
+// ── Reads ───────────────────────────────────────────────────────────────────
+
+/**
+ * The chat's current conversation: its most recent `limit` messages after
+ * the last context reset, chronological. `includeCleared` reads across it.
+ */
+export function getRecentHistory(
+  chatId: string,
+  limit = 50,
+  opts: HistoryReadOptions = {},
+): HistoryMessage[] {
+  return repo.recent(chatId, limit, contextFloor(chatId, opts));
 }
 
 /**
  * Scroll-back pagination: the `limit` messages strictly older than
  * `beforeMsgId`, chronological. Used by the bridge's /history endpoint so
  * clients can walk long histories page by page instead of one giant fetch.
+ * Stops at the context-reset floor unless `includeCleared`.
  */
 export function getHistoryBefore(
   chatId: string,
   beforeMsgId: number,
   limit = 50,
+  opts: HistoryReadOptions = {},
 ): HistoryMessage[] {
-  return repo.recentBefore(chatId, beforeMsgId, limit);
+  return repo.recentBefore(
+    chatId,
+    beforeMsgId,
+    limit,
+    contextFloor(chatId, opts),
+  );
+}
+
+/**
+ * A note for the read_history tool when the chat's context was reset: the
+ * older rows are kept, only out of the default view. Empty when there is
+ * nothing hidden behind the floor.
+ */
+function clearedNote(chatId: string): string {
+  const state = getChatHistoryState(chatId);
+  if (!state || state.clearedThroughId <= 0) return "";
+  const when = state.clearedAt
+    ? ` on ${new Date(state.clearedAt).toISOString()}`
+    : "";
+  return (
+    `[Context was reset${when}. Messages from before the reset are kept ` +
+    "but not shown here; search_history can still find them.]"
+  );
+}
+
+function withClearedNote(chatId: string, body: string, empty: string): string {
+  const note = clearedNote(chatId);
+  if (!note) return body || empty;
+  return body ? `${note}\n${body}` : `${empty}\n${note}`;
 }
 
 /** Formatted page of the messages strictly older than `beforeMsgId`. */
@@ -117,9 +239,13 @@ export function getFormattedBefore(
   beforeMsgId: number,
   limit = 30,
 ): string {
-  const messages = repo.recentBefore(chatId, beforeMsgId, limit);
-  if (messages.length === 0) return "No messages before that point.";
-  return messages.map(formatMessage).join("\n");
+  const floor = contextFloor(chatId);
+  const messages = repo.recentBefore(chatId, beforeMsgId, limit, floor);
+  const body = messages.map(formatMessage).join("\n");
+  if (floor > 0 && messages.length < limit) {
+    return withClearedNote(chatId, body, "No messages before that point.");
+  }
+  return body || "No messages before that point.";
 }
 
 /** Formatted page of the messages strictly older than a timestamp (ms). */
@@ -128,9 +254,13 @@ export function getFormattedBeforeTime(
   beforeTs: number,
   limit = 30,
 ): string {
-  const messages = repo.recentBeforeTime(chatId, beforeTs, limit);
-  if (messages.length === 0) return "No messages before that date.";
-  return messages.map(formatMessage).join("\n");
+  const floor = contextFloor(chatId);
+  const messages = repo.recentBeforeTime(chatId, beforeTs, limit, floor);
+  const body = messages.map(formatMessage).join("\n");
+  if (floor > 0 && messages.length < limit) {
+    return withClearedNote(chatId, body, "No messages before that date.");
+  }
+  return body || "No messages before that date.";
 }
 
 /**
@@ -163,10 +293,6 @@ export function setMessageFilePath(
   repo.setFilePath(chatId, msgId, filePath);
 }
 
-export function clearHistory(chatId: string): void {
-  repo.deleteChat(chatId);
-}
-
 // ── Formatted queries ───────────────────────────────────────────────────────
 
 function formatMessage(m: HistoryMessage): string {
@@ -186,10 +312,34 @@ function formatMessage(m: HistoryMessage): string {
   return `[msg:${m.msgId} ${time}] ${who}${replyTag}${mediaTag}${stickerTag}${fileTag}: ${m.text}`;
 }
 
+/**
+ * The read_history tool's default view: the conversation since the last
+ * context reset, with a note saying older rows exist when the page reaches
+ * the reset.
+ */
 export function getRecentFormatted(chatId: string, limit = 20): string {
   const messages = getRecentHistory(chatId, limit);
-  if (messages.length === 0) return "No messages in history.";
-  return messages.map(formatMessage).join("\n");
+  const body = messages.map(formatMessage).join("\n");
+  if (messages.length < limit) {
+    return withClearedNote(chatId, body, "No messages in history.");
+  }
+  return body || "No messages in history.";
+}
+
+/**
+ * Formatter for explicit lookups that read across a context reset (search,
+ * by-user): rows from before the reset carry a label so the reader knows
+ * they are no longer part of the current conversation. The label is by
+ * timestamp — rows have no id on the domain type — so a message stamped
+ * just before the reset but stored after it reads as older.
+ */
+function labelledFormatter(chatId: string): (m: HistoryMessage) => string {
+  const clearedAt = getChatHistoryState(chatId)?.clearedAt;
+  if (clearedAt === undefined) return formatMessage;
+  return (m) =>
+    m.timestamp <= clearedAt
+      ? `[before context reset] ${formatMessage(m)}`
+      : formatMessage(m);
 }
 
 /**
@@ -236,7 +386,7 @@ export function searchHistory(
     return `No messages matching "${query}".`;
   }
   if (messages.length === 0) return `No messages matching "${query}".`;
-  return messages.map(formatMessage).join("\n");
+  return messages.map(labelledFormatter(chatId)).join("\n");
 }
 
 export function getMessagesByUser(
@@ -247,7 +397,7 @@ export function getMessagesByUser(
   if (chatIsEmpty(chatId)) return "No messages in history.";
   const messages = repo.bySenderName(chatId, userName, limit);
   if (messages.length === 0) return `No messages from "${userName}".`;
-  return messages.map(formatMessage).join("\n");
+  return messages.map(labelledFormatter(chatId)).join("\n");
 }
 
 /** The stored row for one message, or undefined. */

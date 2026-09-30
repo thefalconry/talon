@@ -21,7 +21,7 @@ vi.mock("../storage/sessions.js", () => ({
   getAllSessions,
   resetSession: vi.fn(),
 }));
-vi.mock("../storage/history.js", () => ({ clearHistory: vi.fn() }));
+vi.mock("../storage/history.js", () => ({ markContextCleared: vi.fn() }));
 vi.mock("../storage/daily-log.js", () => ({
   todayLogDate: vi.fn(() => "2026-01-01"),
 }));

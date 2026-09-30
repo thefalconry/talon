@@ -47,7 +47,7 @@ import { handleInbound } from "../frontend/whatsapp/messages/inbound.js";
 import { resetMessageStore } from "../frontend/whatsapp/messages/message-store.js";
 import { resetWhatsAppRegistry } from "../frontend/whatsapp/registry.js";
 import { getRecentHistory } from "../storage/history.js";
-import { deleteChat } from "../storage/repositories/history-repo.js";
+import { purgeChat as deleteChat } from "../storage/repositories/history-repo.js";
 
 const CHAT = "wa_dm_100";
 

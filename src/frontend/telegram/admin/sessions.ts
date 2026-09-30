@@ -100,7 +100,8 @@ export type AdminGateway = { backend: Backend | null };
 
 /**
  * `/admin kill <chatId>` — the same reset /reset performs in that chat:
- * session + history stores, pulse checkpoint, and the backend's own
+ * session store, a soft context reset (history rows are kept), pulse
+ * checkpoint, and the backend's own
  * per-chat session (resolved through the chat's backend override).
  */
 export async function killSession(

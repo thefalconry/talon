@@ -7,7 +7,6 @@
 import type { Context } from "grammy";
 import { setChatBackend } from "../../../../storage/chat-settings.js";
 import { resetSession } from "../../../../storage/sessions.js";
-import { clearHistory } from "../../../../storage/history.js";
 import {
   getBackendIdForChat,
   listAvailableBackends,
@@ -96,9 +95,9 @@ export async function handleBackendSelect(
   // NOT clear `modelByBackend` — keeping each backend's prior
   // pick means switching back-and-forth restores each side's
   // last choice automatically (Codex chat keeps gpt-5.5,
-  // OpenRouter chat keeps owl-alpha, etc).
-  resetSession(cid);
-  clearHistory(cid);
+  // OpenRouter chat keeps owl-alpha, etc). Chat history is never
+  // touched: a switch changes who answers, not what was said.
+  resetSession(cid, "backend-switch");
   resetPulseCheckpoint(cid);
   handOffBackendSession(cid, previousBackend, gateway);
   const label =
@@ -134,8 +133,8 @@ export async function handleBackendDefault(
   const previousBackend = resolveBackendForChat(cid, gateway);
   await releaseChat(cid);
   setChatBackend(cid, undefined);
-  resetSession(cid);
-  clearHistory(cid);
+  // History stays — see handleBackendSelect.
+  resetSession(cid, "backend-switch");
   resetPulseCheckpoint(cid);
   handOffBackendSession(cid, previousBackend, gateway);
   // Resolve the now-default backend's model for the toast.

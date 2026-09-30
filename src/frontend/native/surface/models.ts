@@ -25,7 +25,7 @@ import { getActiveReasoningLevels } from "../../presentation/reasoning-levels.js
 import { broadcastChatUpdated } from "../chats/chat-wire.js";
 import { emitSystem } from "../turn/emit.js";
 import type { BackendOption, ModelOption } from "../protocol.js";
-import { wipeChatConversation } from "../chats/reset.js";
+import { handOffChatBackend } from "../chats/reset.js";
 import type { NativeRuntime } from "../runtime.js";
 import { broadcastStatus } from "./status.js";
 
@@ -182,11 +182,11 @@ export async function setBackend(
   }
 
   setChatBackend(chatId, target);
-  wipeChatConversation(runtime, chatId);
+  handOffChatBackend(runtime, chatId);
   emitSystem(
     runtime,
     entry,
-    `Switched to ${target} — starting a fresh conversation.`,
+    `Switched to ${target} — new session, chat history kept.`,
   );
   broadcastChatUpdated(runtime, entry);
   broadcastStatus(runtime);
