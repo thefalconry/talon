@@ -231,6 +231,51 @@ describe("auth guard", () => {
     expect(loggedText()).toMatch(/event=global_cooldown_end/);
   });
 
+  it("backs off per credential id across addresses", () => {
+    const { guard } = guardAt();
+    const cred = "device-one";
+    // A fresh address per guess: per-address backoff never engages, the
+    // credential's does.
+    const delays = Array.from({ length: 8 }, (_, i) =>
+      delayOf(guard.check(`10.3.0.${i}`, "bad", cred)),
+    );
+    expect(delays).toEqual([0, 0, 250, 500, 1000, 2000, 4000, 8000]);
+    expect(loggedText()).toMatch(
+      /event=failure addr=10\.3\.0\.7 reason=bad_token failures=1 credential=device-one credentialFailures=8/,
+    );
+    // Another credential, and guesses naming no credential, are unaffected.
+    expect(delayOf(guard.check("10.3.1.0", "bad", "device-two"))).toBe(0);
+    expect(delayOf(guard.check("10.3.1.1", "bad"))).toBe(0);
+  });
+
+  it("never locks a credential out: the real one is never delayed or refused", () => {
+    const { guard } = guardAt({ lockoutMaxFailures: 3 });
+    const cred = "device-one";
+    for (let i = 0; i < 50; i++) guard.check(`10.4.0.${i}`, "bad", cred);
+    expect(guard.check("10.4.9.9", "ok")).toEqual({ kind: "allow" });
+    // ...and its success doesn't hand the guesser a fresh budget.
+    expect(delayOf(guard.check("10.4.1.0", "bad", cred))).toBe(8000);
+  });
+
+  it("forgets a credential's failures once the window lapses", () => {
+    const { guard, advance } = guardAt();
+    const cred = "device-one";
+    for (let i = 0; i < 6; i++) guard.check(`10.5.0.${i}`, "bad", cred);
+    advance(15 * 60_000);
+    expect(delayOf(guard.check("10.5.1.0", "bad", cred))).toBe(0);
+  });
+
+  it("caps the number of tracked credential ids", () => {
+    const { guard } = guardAt({ maxTracked: 3, globalMaxFailures: 1_000 });
+    for (let i = 0; i < 20; i++) {
+      guard.check("10.6.0.1", "bad", `${i}`.padStart(16, "0"));
+    }
+    expect(guard.trackedCredentialCount()).toBe(3);
+    expect(loggedText()).toMatch(
+      /event=tracking_saturated reason=credential_cap/,
+    );
+  });
+
   it("refuses to hold more than maxPendingDelays responses at once", async () => {
     const guard = new AuthGuard({ maxPendingDelays: 1 });
     const first = guard.hold(50);
@@ -350,6 +395,47 @@ describe("bridge server auth hardening", () => {
     const [anon, anonMs] = await timed(() => get(port, "/health"));
     expect(anon.status).toBe(200);
     expect(anonMs).toBeGreaterThanOrEqual(250);
+  });
+
+  it("takes ?token= only on GET /events and GET /media", async () => {
+    const port = await start();
+    const q = `token=${encodeURIComponent(token)}`;
+    // Elsewhere a query token is ignored: the request reads as tokenless.
+    expect((await get(port, `/chats?${q}`)).status).toBe(401);
+    expect((await get(port, `/devices?${q}`)).status).toBe(401);
+    expect((await get(port, `/logs?${q}`)).status).toBe(401);
+    // ...while the header works everywhere.
+    expect((await get(port, "/chats", token)).status).toBe(200);
+    // /health answers, but only its public (pre-token) view.
+    const health = (await (await get(port, `/health?${q}`)).json()) as Record<
+      string,
+      unknown
+    >;
+    const authed = (await (await get(port, "/health", token)).json()) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(health).length).toBeLessThan(Object.keys(authed).length);
+
+    // Media authorizes (404: no such id, not 401).
+    expect((await get(port, `/media?id=x&${q}`)).status).toBe(404);
+    expect((await get(port, "/media?id=x")).status).toBe(401);
+    // The event stream authorizes.
+    const controller = new AbortController();
+    const events = await fetch(`http://127.0.0.1:${port}/events?${q}`, {
+      signal: controller.signal,
+    });
+    expect(events.status).toBe(200);
+    controller.abort();
+  });
+
+  it("counts a refused per-device credential against its id", async () => {
+    const port = await start();
+    const cred = "0123456789abcdef";
+    const wrong = `tdc1.${cred}.${randomBytes(32).toString("base64url")}`;
+    expect((await get(port, "/chats", wrong)).status).toBe(401);
+    expect(loggedText()).toContain(`credential=${cred} credentialFailures=1`);
+    expect(loggedText()).not.toContain(wrong);
   });
 
   it("closes the connection on an auth refusal", async () => {

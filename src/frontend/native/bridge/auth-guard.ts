@@ -5,8 +5,8 @@
  * module decides how a wrong one is answered so an internet-facing bridge
  * can't be hammered for free, and so the operator hears about it.
  *
- * Three layers, all keyed on the remote address (behind a reverse proxy that
- * is the proxy):
+ * Four layers. The first three key on the remote address (behind a reverse
+ * proxy that is the proxy):
  *
  *   1. Progressive backoff: the first few wrong tokens from an address get an
  *      immediate 401; after that each 401 waits longer (base doubling to a
@@ -18,6 +18,14 @@
  *      dodging (1) and (2). The bridge enters a cooldown: wrong tokens get
  *      429 at once, tokenless requests are slowed, the operator is alerted
  *      once. Authenticated traffic keeps working throughout.
+ *   4. Per-credential backoff: a wrong secret presented under a per-device
+ *      credential id (`tdc1.<id>.…` names its id) also counts against that
+ *      id, whatever the address, so guessing one device's credential from
+ *      many addresses backs off as if from one. Backoff only, never a
+ *      lockout: credential ids are safe to log and so knowable, and a
+ *      lockout would let anyone lock a device out. The real credential is
+ *      never delayed, and its successes don't reset the count (they come
+ *      from the device, not from whoever is guessing); the window does.
  *
  * Only presented-and-wrong tokens count as failures. Tokenless probes are
  * scanners finding a locked door. Waits are timers, never a blocked event
@@ -34,8 +42,12 @@ import type { AuthState } from "./routes/table.js";
 export type AuthGuardPolicy = {
   /** Wrong tokens from one address inside the window before 429s. */
   lockoutMaxFailures: number;
+  /** How long an address's (or a credential id's) failures are remembered. */
   lockoutWindowMs: number;
-  /** Hard cap on tracked addresses so the map can't become a memory lever. */
+  /**
+   * Hard cap on tracked addresses, and separately on tracked credential ids,
+   * so neither map can become a memory lever.
+   */
   maxTracked: number;
   /** Wrong tokens answered without delay (typos happen). */
   freeFailures: number;
@@ -77,17 +89,76 @@ export type AuthVerdict =
 
 type Entry = { count: number; resetAt: number };
 
+/**
+ * Failure counts per key (an address or a credential id) inside a window,
+ * capped at `maxTracked` keys.
+ */
+class FailureCounter {
+  private readonly entries = new Map<string, Entry>();
+  private saturatedLogged = false;
+
+  constructor(
+    private readonly what: "address" | "credential",
+    private readonly windowMs: number,
+    private readonly maxTracked: number,
+  ) {}
+
+  get size(): number {
+    return this.entries.size;
+  }
+
+  live(key: string, now: number): Entry | undefined {
+    const entry = this.entries.get(key);
+    if (entry && now >= entry.resetAt) {
+      this.entries.delete(key);
+      return undefined;
+    }
+    return entry;
+  }
+
+  clear(key: string): void {
+    this.entries.delete(key);
+  }
+
+  /** Bump the key's count; null when the key couldn't be tracked. */
+  record(key: string, now: number): number | null {
+    const entry = this.live(key, now);
+    if (entry) return ++entry.count;
+    if (this.entries.size >= this.maxTracked) {
+      for (const [k, e] of this.entries) {
+        if (now >= e.resetAt) this.entries.delete(k);
+      }
+      // Still saturated after pruning live entries — under that much churn
+      // dropping the newest key beats unbounded growth. The global budget
+      // still counts it.
+      if (this.entries.size >= this.maxTracked) {
+        if (!this.saturatedLogged) {
+          this.saturatedLogged = true;
+          logWarn(
+            "native",
+            `bridge.auth event=tracking_saturated reason=${this.what}_cap tracked=${this.entries.size}`,
+          );
+        }
+        return null;
+      }
+    }
+    this.saturatedLogged = false;
+    this.entries.set(key, { count: 1, resetAt: now + this.windowMs });
+    return 1;
+  }
+}
+
 export class AuthGuard {
   private readonly policy: AuthGuardPolicy;
   private readonly now: () => number;
   private readonly onAlert: ((message: string) => void) | undefined;
-  private readonly failures = new Map<string, Entry>();
+  private readonly failures: FailureCounter;
+  private readonly credentialFailures: FailureCounter;
   private globalCount = 0;
   private globalWindowStart = 0;
   private cooldownUntil = 0;
   private cooling = false;
   private suppressed = 0;
-  private saturatedLogged = false;
   private pending = 0;
 
   constructor(
@@ -97,11 +168,23 @@ export class AuthGuard {
     this.policy = { ...DEFAULT_AUTH_GUARD_POLICY, ...policy };
     this.now = deps.now ?? Date.now;
     this.onAlert = deps.onAlert;
+    const { lockoutWindowMs, maxTracked } = this.policy;
+    this.failures = new FailureCounter("address", lockoutWindowMs, maxTracked);
+    this.credentialFailures = new FailureCounter(
+      "credential",
+      lockoutWindowMs,
+      maxTracked,
+    );
   }
 
   /** Addresses currently tracked (tests and diagnostics). */
   trackedCount(): number {
     return this.failures.size;
+  }
+
+  /** Credential ids currently tracked (tests and diagnostics). */
+  trackedCredentialCount(): number {
+    return this.credentialFailures.size;
   }
 
   /** True while the global failure budget is exhausted. */
@@ -112,12 +195,18 @@ export class AuthGuard {
 
   /**
    * Decide how to answer a request whose credential has been evaluated.
-   * Called once per request, before routing.
+   * Called once per request, before routing. `credentialId` is the id a
+   * refused per-device credential named (null for the shared token or
+   * anything malformed) — an identifier, never secret material.
    */
-  check(remote: string, auth: AuthState): AuthVerdict {
+  check(
+    remote: string,
+    auth: AuthState,
+    credentialId: string | null = null,
+  ): AuthVerdict {
     const now = this.now();
     this.refreshCooldown(now);
-    const entry = this.liveEntry(remote, now);
+    const entry = this.failures.live(remote, now);
     if (entry && entry.count >= this.policy.lockoutMaxFailures) {
       return {
         kind: "reject",
@@ -126,7 +215,7 @@ export class AuthGuard {
       };
     }
     if (auth === "ok") {
-      this.failures.delete(remote);
+      this.failures.clear(remote);
       return { kind: "allow" };
     }
     if (auth === "anonymous") {
@@ -134,7 +223,7 @@ export class AuthGuard {
         ? { kind: "delay", ms: this.policy.cooldownAnonDelayMs }
         : { kind: "allow" };
     }
-    return this.fail(remote, now);
+    return this.fail(remote, credentialId, now);
   }
 
   /**
@@ -156,8 +245,16 @@ export class AuthGuard {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  private fail(remote: string, now: number): AuthVerdict {
-    const count = this.recordFailure(remote, now);
+  private fail(
+    remote: string,
+    credentialId: string | null,
+    now: number,
+  ): AuthVerdict {
+    const count = this.failures.record(remote, now);
+    const credCount =
+      credentialId === null
+        ? null
+        : this.credentialFailures.record(credentialId, now);
     this.recordGlobalFailure(now);
     if (this.cooling) {
       this.suppressed++;
@@ -170,11 +267,15 @@ export class AuthGuard {
         ),
       };
     }
-    const delay = count === null ? 0 : this.backoffFor(count);
+    // Whichever key has seen more failures sets the wait.
+    const delay = Math.max(this.backoffFor(count), this.backoffFor(credCount));
     logWarn(
       "native",
       `bridge.auth event=failure addr=${remote} reason=bad_token` +
         (count === null ? " tracked=no" : ` failures=${count}`) +
+        (credentialId === null
+          ? ""
+          : ` credential=${credentialId} credentialFailures=${credCount ?? "untracked"}`) +
         ` delayMs=${delay}`,
     );
     if (count === this.policy.lockoutMaxFailures) {
@@ -186,7 +287,9 @@ export class AuthGuard {
     return delay > 0 ? { kind: "delay", ms: delay } : { kind: "allow" };
   }
 
-  private backoffFor(count: number): number {
+  /** The wait after the `count`th failure; an untracked key never waits. */
+  private backoffFor(count: number | null): number {
+    if (count === null) return 0;
     const n = count - this.policy.freeFailures;
     if (n <= 0) return 0;
     // 2^(n-1) overflows nothing useful past ~30 doublings; clamp first.
@@ -195,45 +298,6 @@ export class AuthGuard {
       this.policy.backoffMaxMs,
       this.policy.backoffBaseMs * factor,
     );
-  }
-
-  private liveEntry(remote: string, now: number): Entry | undefined {
-    const entry = this.failures.get(remote);
-    if (entry && now >= entry.resetAt) {
-      this.failures.delete(remote);
-      return undefined;
-    }
-    return entry;
-  }
-
-  /** Bump the address's count; null when the address couldn't be tracked. */
-  private recordFailure(remote: string, now: number): number | null {
-    const entry = this.liveEntry(remote, now);
-    if (entry) return ++entry.count;
-    if (this.failures.size >= this.policy.maxTracked) {
-      for (const [ip, e] of this.failures) {
-        if (now >= e.resetAt) this.failures.delete(ip);
-      }
-      // Still saturated after pruning live entries — under that much churn
-      // dropping the newest address beats unbounded growth. The global
-      // budget still counts it.
-      if (this.failures.size >= this.policy.maxTracked) {
-        if (!this.saturatedLogged) {
-          this.saturatedLogged = true;
-          logWarn(
-            "native",
-            `bridge.auth event=tracking_saturated reason=address_cap tracked=${this.failures.size}`,
-          );
-        }
-        return null;
-      }
-    }
-    this.saturatedLogged = false;
-    this.failures.set(remote, {
-      count: 1,
-      resetAt: now + this.policy.lockoutWindowMs,
-    });
-    return 1;
   }
 
   private recordGlobalFailure(now: number): void {
