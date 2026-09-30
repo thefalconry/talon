@@ -67,7 +67,14 @@ else
   NFPM_CACHE="${RUNNER_TEMP:-/tmp}/nfpm-bin-$NFPM_VER"
   if [[ ! -x "$NFPM_CACHE/nfpm" ]]; then
     mkdir -p "$NFPM_CACHE"
-    curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" | tar -xz -C "$NFPM_CACHE" nfpm
+    # Pinned and digest-checked: this runs in the release job, which can
+    # write release assets — an unverified download there is a supply-chain
+    # hole.
+    NFPM_SHA256="22aa6d3bc2ec239d62d3d190bcb036a47f2b24e0c3c6edfccebb6a55fbb2078e"
+    NFPM_TGZ="$NFPM_CACHE/nfpm.tar.gz"
+    curl -fsSL -o "$NFPM_TGZ" "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz"
+    echo "$NFPM_SHA256  $NFPM_TGZ" | sha256sum -c -
+    tar -xzf "$NFPM_TGZ" -C "$NFPM_CACHE" nfpm
   fi
   NFPM_BIN="$NFPM_CACHE/nfpm"
 fi
@@ -150,9 +157,13 @@ APPIMAGETOOL=""
 if command -v appimagetool >/dev/null 2>&1; then
   APPIMAGETOOL="appimagetool"
 else
-  TOOL_CACHE="${RUNNER_TEMP:-/tmp}/appimagetool-x86_64.AppImage"
+  # A numbered release, digest-checked — never the mutable "continuous" tag.
+  APPIMAGETOOL_VER="1.9.1"
+  APPIMAGETOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+  TOOL_CACHE="${RUNNER_TEMP:-/tmp}/appimagetool-${APPIMAGETOOL_VER}-x86_64.AppImage"
   if [[ ! -x "$TOOL_CACHE" ]]; then
-    curl -fsSL -o "$TOOL_CACHE" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+    curl -fsSL -o "$TOOL_CACHE" "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VER}/appimagetool-x86_64.AppImage"
+    echo "$APPIMAGETOOL_SHA256  $TOOL_CACHE" | sha256sum -c -
     chmod +x "$TOOL_CACHE"
   fi
   APPIMAGETOOL="$TOOL_CACHE"
