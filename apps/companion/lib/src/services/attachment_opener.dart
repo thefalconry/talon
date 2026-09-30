@@ -87,12 +87,14 @@ class AttachmentOpener {
   }
 
   /// [save] for a bare `/media?id=…` link: name and MIME come from the
-  /// response, as in [openLink].
+  /// response, as in [openLink], or from [name] if declared.
   Future<SavedAttachment> saveLink({
     required String url,
     Map<String, String> headers = const {},
+    String? name,
   }) async {
-    final (file, mimeType) = await _fetch(url: url, headers: headers);
+    final (file, mimeType) =
+        await _fetch(url: url, headers: headers, name: name);
     return _saveFetched(file, _basename(file.path), mimeType);
   }
 
@@ -167,8 +169,10 @@ class AttachmentOpener {
   Future<File> openLink({
     required String url,
     Map<String, String> headers = const {},
+    String? name,
   }) async {
-    final (file, mimeType) = await _fetch(url: url, headers: headers);
+    final (file, mimeType) =
+        await _fetch(url: url, headers: headers, name: name);
     if (!await _launch(file, mimeType)) {
       throw AttachmentException('No app could open ${_basename(file.path)}.');
     }
@@ -289,6 +293,12 @@ class AttachmentOpener {
     var base = match?.group(1)?.trim() ?? '';
     if (base.isEmpty) {
       final uri = Uri.tryParse(url);
+      base = uri?.queryParameters['filename'] ??
+          uri?.queryParameters['name'] ??
+          '';
+    }
+    if (base.isEmpty) {
+      final uri = Uri.tryParse(url);
       base = uri?.queryParameters['id'] ??
           (uri != null && uri.pathSegments.isNotEmpty
               ? uri.pathSegments.last
@@ -296,8 +306,37 @@ class AttachmentOpener {
     }
     if (base.isEmpty) base = 'attachment';
     final ext = _extForMime(contentType);
-    if (ext.isNotEmpty && !base.toLowerCase().endsWith(ext)) base = '$base$ext';
+    if (ext.isNotEmpty && !_hasCompatibleExtension(base, contentType, ext)) {
+      base = '$base$ext';
+    }
     return base;
+  }
+
+  static bool _hasCompatibleExtension(
+    String filename,
+    String contentType,
+    String defaultExt,
+  ) {
+    final lower = filename.toLowerCase();
+    if (lower.endsWith(defaultExt)) return true;
+    final dot = lower.lastIndexOf('.');
+    if (dot <= 0 || dot >= lower.length - 1) return false;
+    final existingExt = lower.substring(dot);
+    final ct = contentType.toLowerCase();
+    if (_mimeExt[ct] == existingExt) return true;
+    if ((ct == 'text/x-diff' || ct == 'text/x-patch') &&
+        (existingExt == '.patch' || existingExt == '.diff')) {
+      return true;
+    }
+    if (ct == 'image/jpeg' &&
+        (existingExt == '.jpg' || existingExt == '.jpeg')) {
+      return true;
+    }
+    if (ct == 'application/gzip' &&
+        (existingExt == '.gz' || existingExt == '.tgz')) {
+      return true;
+    }
+    return false;
   }
 
   static String _basename(String path) =>
@@ -307,6 +346,7 @@ class AttachmentOpener {
     final dot = path.lastIndexOf('.');
     if (dot < 0) return 'application/octet-stream';
     final ext = path.substring(dot).toLowerCase();
+    if (ext == '.patch' || ext == '.diff') return 'text/x-patch';
     for (final e in _mimeExt.entries) {
       if (e.value == ext) return e.key;
     }
@@ -328,10 +368,14 @@ class AttachmentOpener {
     'text/markdown': '.md',
     'text/csv': '.csv',
     'text/html': '.html',
+    'text/x-diff': '.diff',
+    'text/x-patch': '.patch',
     'application/json': '.json',
     'application/zip': '.zip',
     'application/gzip': '.gz',
     'application/x-tar': '.tar',
+    'application/x-sh': '.sh',
+    'text/x-shellscript': '.sh',
     'audio/mpeg': '.mp3',
     'audio/ogg': '.ogg',
     'video/mp4': '.mp4',

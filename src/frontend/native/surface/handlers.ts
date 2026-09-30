@@ -192,6 +192,7 @@ export function buildBridgeHandlers(
       readLogEntries(files.log, { limit: lines, minLevel, component }),
     liveTurnEvents: () => liveTurnEvents(runtime),
     mediaPath: (id) => runtime.media.get(id) ?? null,
+    mediaName: (id) => runtime.uploads.get(id)?.name ?? null,
     // Mesh routes are thin transport shims over the shared core service —
     // storeLocation wakes any pending fresh-fix waiters inside the service.
     registerDevice: (body) => mesh.register(body),

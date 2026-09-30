@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Talon
+GenericName=AI Agent Client
+Comment=Chat with your Talon agent from the desktop
+Exec=talon-companion %U
+Icon=talon-companion
+Terminal=false
+Categories=Utility;Network;Chat;
+Keywords=talon;agent;assistant;ai;chat;llm;
+StartupNotify=true
+StartupWMClass=talon_companion

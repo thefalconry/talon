@@ -169,6 +169,28 @@ void main() {
     expect(n(const {}, 'application/zip'), 'abc.zip');
     expect(n(const {}, 'application/octet-stream'), 'abc');
     expect(n(const {}, 'image/png', u: 'http://x/media'), 'media.png');
+    expect(n(const {}, 'text/x-patch', u: 'http://x/media?id=mmuk3t376'),
+        'mmuk3t376.patch');
+    expect(n(const {}, 'text/x-diff', u: 'http://x/media?id=mmuk3t376'),
+        'mmuk3t376.diff');
+    expect(
+        n(const {}, 'text/x-patch',
+            u: 'http://x/media?id=m1&filename=0001-fix.patch'),
+        '0001-fix.patch');
+    expect(
+        n({'content-disposition': 'attachment; filename="0001-fix.patch"'},
+            'text/x-diff'),
+        '0001-fix.patch');
+  });
+
+  test('openLink with explicit name uses the declared name', () async {
+    final file = await opener().openLink(
+      url: '${url('m42')}&ct=text/x-diff',
+      name: '0001-fix.patch',
+      headers: const {'Authorization': 'Bearer secret'},
+    );
+
+    expect(file.path, endsWith('${Platform.pathSeparator}0001-fix.patch'));
   });
 
   test('save copies the download into Downloads without overwriting',
