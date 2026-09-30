@@ -126,11 +126,11 @@ describe("DeviceCredentialStore", () => {
     expect(reloaded.authenticate(token)?.deviceId).toBe("node-1");
   });
 
-  it("binds an unbound credential once, and never to an id another credential holds", async () => {
+  it("binds an unbound credential once, and never over a device holding wider scopes", async () => {
     const { store } = await tempStore();
     await store.mint({
       deviceId: "taken",
-      scopes: ["device"],
+      scopes: ["device", "client", "operator"],
       origin: "upgrade",
     });
     const pair = store.mintNow({
@@ -144,6 +144,94 @@ describe("DeviceCredentialStore", () => {
     expect(store.bind(id, "phone")).toMatchObject({ ok: true });
     expect(store.bind(id, "other")).toMatchObject({ ok: false });
     expect(store.authenticate(pair.token)?.deviceId).toBe("phone");
+  });
+
+  it("lets a pairing link re-pair a device that already holds a credential", async () => {
+    const { store, file } = await tempStore();
+    const old = await store.mint({
+      deviceId: "mac",
+      scopes: ["device", "client", "operator"],
+      origin: "upgrade",
+    });
+    expect(store.authenticate(old.token)?.deviceId).toBe("mac");
+    const revoked: string[] = [];
+    store.onRevoked((ids) => revoked.push(...ids));
+
+    const pair = store.mintNow({
+      deviceId: null,
+      scopes: ["device", "client", "operator"],
+      origin: "pair",
+    });
+    expect(store.authenticate(pair.token)).not.toBeNull();
+    expect(store.bind(pair.credential.id, "mac")).toMatchObject({ ok: true });
+
+    // The old credential is dead at once, and its live sessions were told to drop.
+    expect(store.authenticate(old.token)).toBeNull();
+    expect(revoked).toEqual([old.credential.id]);
+    expect(store.activeFor("mac").map((c) => c.id)).toEqual([
+      pair.credential.id,
+    ]);
+    expect(store.authenticate(pair.token)?.deviceId).toBe("mac");
+
+    // ...and stays dead across a reload.
+    await settle();
+    const reloaded = new DeviceCredentialStore(file);
+    await reloaded.load();
+    expect(reloaded.authenticate(old.token)).toBeNull();
+    expect(reloaded.authenticate(pair.token)?.deviceId).toBe("mac");
+
+    // A used link cannot re-pair anything else (single use).
+    expect(store.bind(pair.credential.id, "phone")).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("lets an installer link re-provision a node but not take over a companion", async () => {
+    const { store } = await tempStore();
+    const node = await store.mint({
+      deviceId: "node-1",
+      scopes: ["device"],
+      origin: "upgrade",
+    });
+    const phone = await store.mint({
+      deviceId: "phone",
+      scopes: ["device", "client"],
+      origin: "upgrade",
+    });
+    const install = store.mintNow({
+      deviceId: null,
+      scopes: ["device"],
+      origin: "install",
+    });
+    const refused = store.bind(install.credential.id, "phone");
+    expect(refused).toMatchObject({ ok: false });
+    expect(refused.ok ? "" : refused.error).toContain("client");
+    expect(store.authenticate(phone.token)?.deviceId).toBe("phone");
+
+    expect(store.bind(install.credential.id, "node-1")).toMatchObject({
+      ok: true,
+    });
+    expect(store.authenticate(node.token)).toBeNull();
+  });
+
+  it("never lets a non-pairing unbound credential take over a device", async () => {
+    const { store } = await tempStore();
+    const held = await store.mint({
+      deviceId: "mac",
+      scopes: ["device"],
+      origin: "upgrade",
+    });
+    // Only pairing/installer links are minted unbound today; guard the rule
+    // anyway by forging one of another origin.
+    const odd = store.mintNow({
+      deviceId: null,
+      scopes: ["device", "client", "operator"],
+      origin: "upgrade",
+    });
+    const result = store.bind(odd.credential.id, "mac");
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok ? "" : result.error).toContain("revoke it first");
+    expect(store.authenticate(held.token)?.deviceId).toBe("mac");
   });
 
   it("expires an unbound credential that is never used", async () => {
