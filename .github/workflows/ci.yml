@@ -579,11 +579,22 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Cache gleam toolchain
+        id: gleam-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gleam-bin
+          key: gleam-${{ runner.os }}-v1.17.0
+
       - name: Install gleam
+        if: steps.gleam-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$HOME/.gleam-bin"
           curl -fsSL https://github.com/gleam-lang/gleam/releases/download/v1.17.0/gleam-v1.17.0-x86_64-unknown-linux-musl.tar.gz -o /tmp/gleam.tgz
           tar -xzf /tmp/gleam.tgz -C "$HOME/.gleam-bin"
+
+      - name: Add gleam to PATH
+        run: |
           echo "$HOME/.gleam-bin" >> "$GITHUB_PATH"
           "$HOME/.gleam-bin/gleam" --version
 
@@ -1292,6 +1303,27 @@ jobs:
         # `npm pack` reads package.json files[] from the source tree and
         # the checker uses only node builtins — no install needed.
         run: npm run tarball:check
+
+      # Publish the daemon tarball from main as a workflow artifact — the
+      # exact `npm pack` output the checker just validated. Anything that
+      # needs a built daemon (manual smoke tests, a companion/node job that
+      # wants to drive a real daemon) can `actions/download-artifact` it
+      # from the latest main run instead of rebuilding from source.
+      - name: Pack daemon tarball (main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p "$RUNNER_TEMP/pack"
+          npm pack --pack-destination "$RUNNER_TEMP/pack"
+          ls -l "$RUNNER_TEMP/pack"
+
+      - name: Upload daemon tarball (main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: talon-daemon-tarball
+          path: ${{ runner.temp }}/pack/*.tgz
+          if-no-files-found: error
+          retention-days: 14
 
   # ── Final status gate ─────────────────────────────────────────
   # All required jobs MUST pass for `CI Status` to be green. Branch
