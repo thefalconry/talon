@@ -28,6 +28,22 @@ class MainFlutterWindow: NSWindow, NSWindowDelegate {
       }
     }
 
+    // talon://pair links (the last hop of the daemon's /mesh pair page),
+    // held by AppDelegate until Dart consumes them — see
+    // lib/src/services/pair_links.dart.
+    let pairChannel = FlutterMethodChannel(
+      name: "talon/pair",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    pairChannel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "consume":
+        result((NSApp.delegate as? AppDelegate)?.consumePairLink())
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     self.delegate = self
 
     super.awakeFromNib()

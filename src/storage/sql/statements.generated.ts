@@ -275,7 +275,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   run_count        INTEGER NOT NULL DEFAULT 0,
   last_status      TEXT,
   last_error       TEXT,
-  last_duration_ms INTEGER
+  last_duration_ms INTEGER,
+  timeout_ms       INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_cron_chat ON cron_jobs(chat_id);
 
@@ -515,22 +516,22 @@ export const cronSql = {
   (id, chat_id, name, type, content, enabled, schedule, every_ms,
    timezone, model, provider, instructions, start_at, end_at, max_runs,
    catchup, created_at, last_run_at, run_count, last_status, last_error,
-   last_duration_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   last_duration_ms, timeout_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   get: `SELECT id, chat_id, name, type, content, enabled, schedule, every_ms,
        timezone, model, provider, instructions, start_at, end_at, max_runs,
        catchup, created_at, last_run_at, run_count, last_status, last_error,
-       last_duration_ms
+       last_duration_ms, timeout_ms
 FROM cron_jobs WHERE id = ?`,
   listByChat: `SELECT id, chat_id, name, type, content, enabled, schedule, every_ms,
        timezone, model, provider, instructions, start_at, end_at, max_runs,
        catchup, created_at, last_run_at, run_count, last_status, last_error,
-       last_duration_ms
+       last_duration_ms, timeout_ms
 FROM cron_jobs WHERE chat_id = ? ORDER BY created_at`,
   listAll: `SELECT id, chat_id, name, type, content, enabled, schedule, every_ms,
        timezone, model, provider, instructions, start_at, end_at, max_runs,
        catchup, created_at, last_run_at, run_count, last_status, last_error,
-       last_duration_ms
+       last_duration_ms, timeout_ms
 FROM cron_jobs ORDER BY created_at`,
   remove: `DELETE FROM cron_jobs WHERE id = ?`,
   count: `SELECT COUNT(*) AS n FROM cron_jobs`,
@@ -557,6 +558,9 @@ ALTER TABLE history_messages ADD COLUMN attachments TEXT`,
   addSessionsLastTurnEndedAtColumn: `-- Column reconciliation for databases that shipped before the cache-age
 -- signal existed. Fresh databases get the column via schema.sql.
 ALTER TABLE sessions ADD COLUMN last_turn_ended_at INTEGER`,
+  addCronTimeoutMsColumn: `-- Column reconciliation for databases that shipped before a cron job could
+-- carry its own run timeout. Fresh databases get the column via schema.sql.
+ALTER TABLE cron_jobs ADD COLUMN timeout_ms INTEGER`,
   vacuumInto: `-- Transactionally consistent copy of the whole database into a new file,
 -- produced by SQLite itself (storage/db.ts snapshotDatabase). A backup
 -- must never copy a live .db byte-wise: the WAL holds committed pages the

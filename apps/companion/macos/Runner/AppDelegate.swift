@@ -17,9 +17,54 @@ class AppDelegate: FlutterAppDelegate {
     keyEquivalent: ""
   )
 
+  /// The last `talon://pair` link macOS handed us, held until Dart asks for
+  /// it over the "talon/pair" channel (see MainFlutterWindow and
+  /// lib/src/services/pair_links.dart). A mailbox, like Android's
+  /// PairBridge: a cold start delivers the URL before Dart is listening.
+  private var pendingPairLink: String?
+
+  override init() {
+    super.init()
+    // Registered this early so a cold start by a talon:// link (delivered
+    // between will- and didFinishLaunching) isn't missed. A raw Apple Event
+    // handler rather than application(_:open:) so it doesn't depend on
+    // which NSApplicationDelegate methods FlutterAppDelegate implements.
+    NSAppleEventManager.shared().setEventHandler(
+      self,
+      andSelector: #selector(handleGetURL(_:withReplyEvent:)),
+      forEventClass: AEEventClass(kInternetEventClass),
+      andEventID: AEEventID(kAEGetURL)
+    )
+  }
+
+  // FlutterAppDelegate doesn't implement applicationDidFinishLaunching, so
+  // calling super here raised an unrecognized-selector exception on every
+  // launch (AppKit swallowed it).
   override func applicationDidFinishLaunching(_ notification: Notification) {
     setUpStatusItem()
-    super.applicationDidFinishLaunching(notification)
+  }
+
+  @objc private func handleGetURL(
+    _ event: NSAppleEventDescriptor,
+    withReplyEvent reply: NSAppleEventDescriptor
+  ) {
+    guard
+      let link = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject))?
+        .stringValue,
+      link.lowercased().hasPrefix("talon:")
+    else { return }
+    pendingPairLink = link
+    // The link carries a bearer token; log that one arrived, never what.
+    NSLog("Talon: pairing link received")
+    // Bring the window forward: Dart checks for a link when the app resumes.
+    showMainWindow()
+  }
+
+  /// Hands the pending pairing link over exactly once.
+  func consumePairLink() -> String? {
+    let link = pendingPairLink
+    pendingPairLink = nil
+    return link
   }
 
   // Keep running headless in the menu bar after the last window closes —

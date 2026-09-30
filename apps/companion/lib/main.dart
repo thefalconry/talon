@@ -260,10 +260,11 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
     await MessageNotifications.clearChat(chatId);
   }
 
-  /// Resume does two jobs: mirror foreground state into prefs for the
-  /// background isolate (which shares no memory with us and would otherwise
-  /// notify for replies the user is watching stream in), and re-read the
-  /// platform accent in case the wallpaper changed while we were away.
+  /// Resume mirrors foreground state into prefs for the background isolate
+  /// (which shares no memory with us and would otherwise notify for replies
+  /// the user is watching stream in), reopens an event stream that went
+  /// quiet while we were away, and re-reads the platform accent in case the
+  /// wallpaper changed meanwhile.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Desktop reports `inactive` for an unfocused window and `hidden` for a
@@ -288,6 +289,10 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         widget.state.resumeUiStream();
       }
+      // A stream that stayed "connected" while the app was frozen (laptop
+      // lid, iOS suspension, a network switch meanwhile) may be half-open:
+      // if it has been quiet past a keep-alive or two, reopen it now.
+      widget.state.reconnectIfStale();
       final chatId = widget.state.selectedChatId;
       // Anything waiting in the shade for the chat now on screen is read.
       if (chatId != null) unawaited(MessageNotifications.clearChat(chatId));

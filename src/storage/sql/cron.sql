@@ -6,28 +6,28 @@ INSERT OR REPLACE INTO cron_jobs
   (id, chat_id, name, type, content, enabled, schedule, every_ms,
    timezone, model, provider, instructions, start_at, end_at, max_runs,
    catchup, created_at, last_run_at, run_count, last_status, last_error,
-   last_duration_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+   last_duration_ms, timeout_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
 -- name: get
 SELECT id, chat_id, name, type, content, enabled, schedule, every_ms,
        timezone, model, provider, instructions, start_at, end_at, max_runs,
        catchup, created_at, last_run_at, run_count, last_status, last_error,
-       last_duration_ms
+       last_duration_ms, timeout_ms
 FROM cron_jobs WHERE id = ?
 
 -- name: listByChat
 SELECT id, chat_id, name, type, content, enabled, schedule, every_ms,
        timezone, model, provider, instructions, start_at, end_at, max_runs,
        catchup, created_at, last_run_at, run_count, last_status, last_error,
-       last_duration_ms
+       last_duration_ms, timeout_ms
 FROM cron_jobs WHERE chat_id = ? ORDER BY created_at
 
 -- name: listAll
 SELECT id, chat_id, name, type, content, enabled, schedule, every_ms,
        timezone, model, provider, instructions, start_at, end_at, max_runs,
        catchup, created_at, last_run_at, run_count, last_status, last_error,
-       last_duration_ms
+       last_duration_ms, timeout_ms
 FROM cron_jobs ORDER BY created_at
 
 -- name: remove
