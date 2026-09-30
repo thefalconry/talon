@@ -155,6 +155,62 @@ function decodeChunked(raw: Buffer): { body: string; complete: boolean } {
   return { body: Buffer.concat(parts).toString("utf-8"), complete: false };
 }
 
+/** The body of a 428 once it is complete (or the connection ended), else undefined. */
+function read428Body(
+  head: ParsedHead,
+  buf: Buffer,
+  ended: boolean,
+): string | undefined {
+  const raw = buf.subarray(head.bodyStart);
+  if (/chunked/i.test(head.headers.get("transfer-encoding") ?? "")) {
+    const decoded = decodeChunked(raw);
+    return decoded.complete || ended ? decoded.body : undefined;
+  }
+  const length = Number(head.headers.get("content-length"));
+  if (Number.isFinite(length) && raw.length >= length)
+    return raw.subarray(0, length).toString("utf-8");
+  return ended ? raw.toString("utf-8") : undefined;
+}
+
+/**
+ * The probe's verdict from what the server has sent so far, or undefined
+ * while more bytes are needed. `ended` = the connection is closed.
+ */
+function readVerdict(
+  buf: Buffer,
+  ended: boolean,
+  client: string,
+): EndpointProbe | undefined {
+  const head = parseHead(buf);
+  if (!head) {
+    return ended
+      ? {
+          state: "unreachable",
+          client,
+          reason: "connection closed before a response",
+        }
+      : undefined;
+  }
+  if (head.status === 101) return { state: "match", client };
+  if (head.status !== 428) {
+    return {
+      state: "unreachable",
+      client,
+      reason: `HTTP ${head.status || "?"} instead of an upgrade`,
+    };
+  }
+  const body = read428Body(head, buf, ended);
+  if (body === undefined) return undefined;
+  const parsed = parseMismatch(body);
+  return parsed
+    ? { state: "mismatch", client, server: parsed.server }
+    : {
+        state: "unreachable",
+        client,
+        reason: "428 without a version box in the body",
+      };
+}
+
 /**
  * Perform the WebSocket upgrade the MCP child performs, advertising
  * `clientVersion`, and read the server's verdict. Never throws; never
@@ -213,42 +269,9 @@ export function probeEndpoint(
     deadline.unref?.();
 
     let buf = Buffer.alloc(0);
-    let head: ParsedHead | undefined;
     const verdict = (ended: boolean) => {
-      head ??= parseHead(buf);
-      if (!head) {
-        if (ended) unreachable("connection closed before a response");
-        return;
-      }
-      if (head.status === 101) {
-        done({ state: "match", client: clientVersion });
-        return;
-      }
-      if (head.status !== 428) {
-        unreachable(`HTTP ${head.status || "?"} instead of an upgrade`);
-        return;
-      }
-      // 428: wait for the body that carries the version box.
-      const raw = buf.subarray(head.bodyStart);
-      let body: string | undefined;
-      if (/chunked/i.test(head.headers.get("transfer-encoding") ?? "")) {
-        const decoded = decodeChunked(raw);
-        if (decoded.complete || ended) body = decoded.body;
-      } else {
-        const length = Number(head.headers.get("content-length"));
-        if (Number.isFinite(length) && raw.length >= length)
-          body = raw.subarray(0, length).toString("utf-8");
-        else if (ended) body = raw.toString("utf-8");
-      }
-      if (body === undefined) return;
-      const parsed = parseMismatch(body);
-      if (parsed)
-        done({
-          state: "mismatch",
-          client: clientVersion,
-          server: parsed.server,
-        });
-      else unreachable("428 without a version box in the body");
+      const result = readVerdict(buf, ended, clientVersion);
+      if (result) done(result);
     };
 
     socket.setTimeout(timeoutMs, () => unreachable("timeout"));
