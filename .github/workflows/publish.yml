@@ -17,6 +17,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -37,8 +38,22 @@ jobs:
             exit 1
           fi
 
+      # Pack once and publish that exact tarball, so the GitHub attestation
+      # below covers the same bytes the registry serves (`npm pack
+      # talon-agent@<v>` fetches them back for `gh attestation verify`).
+      - name: Pack
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
+          ls -la dist
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tgz
+
       - name: Publish
-        run: npm publish --provenance --access public
+        run: npm publish ./dist/*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -160,6 +175,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -209,6 +226,13 @@ jobs:
         working-directory: dist
         run: sha256sum talon-* > SHA256SUMS
 
+      # SLSA build provenance for every binary plus SHA256SUMS, verifiable
+      # with `gh attestation verify <file> --repo thefalconry/talon`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -225,6 +249,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -266,6 +292,13 @@ jobs:
           build_pkgs amd64 bin/talon-linux-x64 x86_64
           build_pkgs arm64 bin/talon-linux-arm64 aarch64
           ls -la dist
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.deb
+            dist/*.rpm
 
       - name: Upload to release
         env:

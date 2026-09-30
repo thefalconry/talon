@@ -39,9 +39,22 @@ android {
     // these env vars at it; without them (local dev, forks without the
     // secret) the build falls back to debug signing, where every machine's
     // throwaway key makes upgrades require an uninstall.
-    val releaseKeystore = System.getenv("TALON_ANDROID_KEYSTORE_FILE")
-        ?.let { file(it) }
-        ?.takeIf { it.exists() }
+    //
+    // A release pipeline sets TALON_ANDROID_REQUIRE_RELEASE_SIGNING=1, which
+    // turns the debug fallback into a hard error so a published APK can never
+    // silently carry the debug key. A keystore path that is set but missing
+    // is always an error: someone asked for release signing and didn't get it.
+    val keystorePath = System.getenv("TALON_ANDROID_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+    val releaseKeystore = keystorePath?.let { file(it) }?.takeIf { it.exists() }
+    if (keystorePath != null && releaseKeystore == null) {
+        throw GradleException("TALON_ANDROID_KEYSTORE_FILE points at a missing file: $keystorePath")
+    }
+    if (releaseKeystore == null && System.getenv("TALON_ANDROID_REQUIRE_RELEASE_SIGNING") == "1") {
+        throw GradleException(
+            "TALON_ANDROID_REQUIRE_RELEASE_SIGNING=1 but no release keystore is configured " +
+                "(TALON_ANDROID_KEYSTORE_FILE) — refusing to fall back to debug signing.",
+        )
+    }
     signingConfigs {
         if (releaseKeystore != null) {
             create("release") {

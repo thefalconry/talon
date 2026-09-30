@@ -168,6 +168,7 @@ describe("the mutex", () => {
       return { ...manifest("20260101T000000Z-cccccc"), label: options.label };
     }) as unknown as typeof _backupDeps.build;
     _backupDeps.discover = vi.fn(async () => []);
+    _backupDeps.pruneLocal = (async () => undefined) as never;
 
     await initBackup({
       settings: resolveBackupSettings({ enabled: false }),
@@ -190,8 +191,9 @@ describe("the mutex", () => {
     expect(release.length).toBe(1); // the second has not started
 
     release[0]();
-    await settle();
-    expect(release.length).toBe(2);
+    // Poll rather than sleep: on a loaded runner the first run's tail can
+    // outlast a fixed pause, and a stranded second run leaks into the next test.
+    await vi.waitFor(() => expect(release.length).toBe(2));
     release[1]();
 
     expect((await first).label).toBe("one");

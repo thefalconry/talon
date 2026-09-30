@@ -29,6 +29,12 @@ jobs:
     name: Vet, Test & Cross-compile
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # id-token + attestations: build-provenance attestations for the release
+    # binaries (GitHub-issued Sigstore identity; no key of ours involved).
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     defaults:
       run:
         working-directory: apps/node
@@ -73,11 +79,26 @@ jobs:
       - name: Cross-compile all targets
         run: go run ./tools/build
 
+      # ASLR (DYNAMICBASE) and DEP (NXCOMPAT) must be on the Windows binary.
+      # Go's linker never emits Control Flow Guard, so GUARD_CF is reported
+      # but not enforced.
+      - name: Check Windows PE hardening
+        run: node ../../scripts/check-pe-hardening.mjs build/talon-node-windows-amd64.exe
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: talon-node-binaries
           path: apps/node/build/*
+
+      # SLSA build provenance for every binary plus talon-node-SHA256SUMS,
+      # verifiable with `gh attestation verify <file> --repo thefalconry/talon`
+      # (SECURITY.md). Release and manual runs only: fork PRs get no OIDC token.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: apps/node/build/*
 
       - name: Attach binaries to release
         if: github.event_name == 'release'
