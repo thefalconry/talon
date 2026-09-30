@@ -38,7 +38,8 @@ import {
 } from "./tls.js";
 import { checkBridgeTokenStrength } from "./auth.js";
 import { AuthGuard, type AuthGuardPolicy } from "./auth-guard.js";
-import { contentTypeFor } from "../media/media.js";
+import { basename } from "node:path";
+import { contentTypeFor, safeUploadName } from "../media/media.js";
 import { type BridgeEvent } from "../protocol.js";
 import { buildRoutes } from "./routes/index.js";
 import type { BridgeServerHandlers, RouteHost } from "./routes/host.js";
@@ -609,10 +610,15 @@ export class BridgeServer {
       if (!info.isFile()) {
         return this.json(res, 404, { ok: false, error: "No such media" });
       }
+      const rawName =
+        this.handlers.mediaName?.(id) ??
+        basename(filePath).replace(/^\d+-[0-9a-z]+-/, "");
+      const filename = safeUploadName(rawName);
       res.writeHead(200, {
         ...this.corsHeaders(),
         "Content-Type": contentTypeFor(filePath),
         "Content-Length": String(info.size),
+        "Content-Disposition": `inline; filename="${filename}"`,
         "Cache-Control": "private, max-age=3600",
       });
       const stream = createReadStream(filePath);

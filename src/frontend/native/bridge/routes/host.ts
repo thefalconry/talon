@@ -122,6 +122,8 @@ export type BridgeServerHandlers = {
   liveTurnEvents(): BridgeEvent[];
   /** Resolve a media id to an absolute file path (or null if unknown). */
   mediaPath(id: string): string | null;
+  /** Best-effort original file name for a media id (or null if unknown). */
+  mediaName?(id: string): string | null;
   /** Register/update one mesh device. */
   registerDevice(body: Record<string, unknown>): Promise<DeviceInfo>;
   /** Store the last-known location for one mesh device. */

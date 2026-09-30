@@ -309,7 +309,8 @@ class MessageBubble extends StatelessWidget {
                   builder: (context) => MarkdownBody(
                     data: message.text.isEmpty ? '…' : message.text,
                     builders: {'code': CodeElementBuilder()},
-                    onTapLink: (_, href, __) => _onTapLink(context, href),
+                    onTapLink: (text, href, _) =>
+                        _onTapLink(context, href, text: text),
                     styleSheet: talonMarkdownStyle(),
                   ),
                 ),
@@ -334,22 +335,55 @@ class MessageBubble extends StatelessWidget {
   /// token never rides in a browser-visible URL and mTLS still applies, then
   /// saved to Downloads (with an Open action). Everything else opens in the
   /// browser.
-  void _onTapLink(BuildContext context, String? href) {
+  void _onTapLink(BuildContext context, String? href, {String? text}) {
     if (href == null) return;
     final media = bridgeMediaUrl(href, mediaBaseUrl);
     if (media != null) {
       final messenger = ScaffoldMessenger.maybeOf(context);
+      final suggestedName = _nameFromLink(text, href);
       AttachmentOpener.instance
-          .saveLink(url: media, headers: mediaHeaders)
+          .saveLink(
+            url: media,
+            headers: mediaHeaders,
+            name: suggestedName,
+          )
           .then((saved) => showSavedSnackBar(messenger, saved))
           .catchError((Object e) {
         messenger?.showSnackBar(
-          SnackBar(content: Text("Couldn't save link: $e")),
+          SnackBar(
+            duration: const Duration(seconds: 3),
+            content: Text("Couldn't save link: $e"),
+          ),
         );
       });
       return;
     }
     launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
+  }
+
+  /// Extracts a clean file name from a tapped link label or query string,
+  /// or null if the link does not specify a filename.
+  @visibleForTesting
+  static String? _nameFromLink(String? text, String href) {
+    final uri = Uri.tryParse(href);
+    final queryName =
+        uri?.queryParameters['filename'] ?? uri?.queryParameters['name'];
+    if (queryName != null && queryName.trim().isNotEmpty) {
+      return AttachmentOpener.safeName(queryName.trim());
+    }
+    if (text != null) {
+      final t = text.trim();
+      if (t.isNotEmpty &&
+          !t.startsWith('http://') &&
+          !t.startsWith('https://') &&
+          !t.contains('/') &&
+          !t.contains(r'\') &&
+          t.contains('.') &&
+          !t.endsWith('.')) {
+        return AttachmentOpener.safeName(t);
+      }
+    }
+    return null;
   }
 
   /// The URL to fetch in-app for a `/media?id=…` link, or null when [href]
@@ -375,7 +409,14 @@ class MessageBubble extends StatelessWidget {
     final base = baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
-    return '$base/media?id=${Uri.encodeQueryComponent(id)}';
+    final filename =
+        link.queryParameters['filename'] ?? link.queryParameters['name'];
+    final q = [
+      'id=${Uri.encodeQueryComponent(id)}',
+      if (filename != null && filename.isNotEmpty)
+        'filename=${Uri.encodeQueryComponent(filename)}',
+    ].join('&');
+    return '$base/media?$q';
   }
 
   /// Selection highlight for text inside the user's own bubble. White, so
@@ -716,6 +757,7 @@ class _FileChip extends StatefulWidget {
 void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved) {
   messenger?.showSnackBar(
     SnackBar(
+      duration: const Duration(seconds: 3),
       content: Text('Saved to ${saved.location}'),
       action: SnackBarAction(
         label: 'Open',
@@ -723,7 +765,10 @@ void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved)
           AttachmentOpener.instance
               .openLocal(saved.file, saved.mimeType)
               .catchError((Object e) {
-            messenger.showSnackBar(SnackBar(content: Text('$e')));
+            messenger.showSnackBar(SnackBar(
+              duration: const Duration(seconds: 3),
+              content: Text('$e'),
+            ));
           });
         },
       ),
@@ -753,7 +798,10 @@ class _FileChipState extends State<_FileChip> {
       showSavedSnackBar(messenger, saved);
     } catch (e) {
       messenger?.showSnackBar(
-        SnackBar(content: Text("Couldn't save ${file.name}: $e")),
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text("Couldn't save ${file.name}: $e"),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
