@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.26.2](https://github.com/thefalconry/talon/compare/v5.26.1...v5.26.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* **backup:** refuse /update without a checkpoint, alert on a missing key, keep the key on restore ([#1207](https://github.com/thefalconry/talon/issues/1207)) ([b8b61b8](https://github.com/thefalconry/talon/commit/b8b61b8a42e98fe69fc8cc14bd8af2e541fb0044))
+* **boot:** never delete chat history on model reconcile; checkpoint on version change ([#1206](https://github.com/thefalconry/talon/issues/1206)) ([029bc5a](https://github.com/thefalconry/talon/commit/029bc5acea02f7bb3f7cf7d25c9ae03040b0eeeb))
+
 ## [5.26.1](https://github.com/thefalconry/talon/compare/v5.26.0...v5.26.1) (2026-09-30)
 
 
