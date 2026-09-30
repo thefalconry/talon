@@ -33,5 +33,5 @@ export {
   deliverToAgent,
   initAgentDelivery,
 } from "./delivery.js";
-export { describeParent } from "./prompt.js";
+export { describeParent, wantsPreflight } from "./prompt.js";
 export type { AgentCaps, AgentParent, AgentRecord } from "./types.js";
