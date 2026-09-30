@@ -5,6 +5,7 @@ import 'package:talon_companion/src/models/bridge_models.dart';
 import 'package:talon_companion/src/services/prefs.dart';
 import 'package:talon_companion/src/state/app_state.dart';
 import 'package:talon_companion/src/theme.dart';
+import 'package:talon_companion/src/ui/brand.dart';
 import 'package:talon_companion/src/ui/chat_view.dart';
 
 /// ChatView rendering contracts: day dividers appear where the calendar day
@@ -137,6 +138,52 @@ void main() {
     expect(pos.maxScrollExtent, greaterThan(0));
 
     // Flush AppState's debounced snapshot-save timer before teardown.
+    await tester.pump(const Duration(seconds: 3));
+  });
+
+  testWidgets(
+      'mid-turn messages and the live turn read as one run with one footer',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final now = DateTime.now();
+    final state = await seededState({
+      'c1': [
+        msg('1', Role.user, 'check the servers',
+            now.subtract(const Duration(minutes: 3))),
+        msg('2', Role.assistant, 'On it.',
+            now.subtract(const Duration(minutes: 2))),
+        msg('3', Role.assistant, 'First one is fine.',
+            now.subtract(const Duration(minutes: 1))),
+        msg('4', Role.assistant, 'Checking the second.', now),
+      ],
+    });
+    addTearDown(state.dispose);
+    final turn = state.turnFor('c1')
+      ..active = true
+      ..continuing = true;
+
+    await tester.pumpWidget(host(state));
+    await tester.pump(const Duration(milliseconds: 500));
+
+    // One avatar for the whole run — the live turn doesn't open a second
+    // "Talon · Working" card — and no per-message Copy while it continues.
+    expect(find.byType(BrandMark), findsOneWidget);
+    expect(find.text('Copy'), findsNothing);
+    expect(find.byKey(const Key('working-row')), findsOneWidget);
+
+    // Turn ends: the working row goes, and the run's last row gets the
+    // single footer.
+    turn
+      ..active = false
+      ..continuing = false;
+    state.debugSeed(connState: ConnState.connected);
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byKey(const Key('working-row')), findsNothing);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.byType(BrandMark), findsOneWidget);
+
     await tester.pump(const Duration(seconds: 3));
   });
 }

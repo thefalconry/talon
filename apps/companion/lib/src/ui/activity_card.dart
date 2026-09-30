@@ -19,7 +19,18 @@ import 'effects.dart';
 class LiveTurn extends StatelessWidget {
   final TurnState turn;
   final String botName;
-  const LiveTurn({super.key, required this.turn, required this.botName});
+
+  /// False when the live turn continues a run of assistant messages the model
+  /// already delivered mid-turn (send_message): the run's first row carries
+  /// the avatar + name, so this row only adds the work still in progress.
+  final bool showHeader;
+
+  const LiveTurn({
+    super.key,
+    required this.turn,
+    required this.botName,
+    this.showHeader = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -29,13 +40,18 @@ class LiveTurn extends StatelessWidget {
   Widget _build(BuildContext context, Widget? _) {
     // Same anatomy as a finished turn: reasoning and the tool timeline live
     // on the canvas above the bubble; only the streaming reply text wears the
-    // bubble. Until text arrives, no bubble is drawn at all — the typing dots
-    // / working pill sit quietly on the canvas instead.
+    // bubble. Until text arrives, no bubble is drawn at all — one quiet
+    // working row sits on the canvas instead.
     final hasPre = turn.reasoning.isNotEmpty || turn.tools.isNotEmpty;
+    final streaming = turn.draft.isNotEmpty;
+    // A running tool already animates (its spinner) and names what is
+    // happening, so it *is* the working row; a second "Working…" under it
+    // would say the same thing twice.
+    final toolRunning = turn.tools.any((t) => !t.done && t.error == null);
     return AssistantSurface(
       botName: botName,
       surfaceKey: const Key('assistant-live-card'),
-      trailing: _LiveBadge(active: turn.active),
+      showHeader: showHeader,
       aboveBubble: hasPre
           ? Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -44,68 +60,25 @@ class LiveTurn extends StatelessWidget {
                 if (turn.reasoning.isNotEmpty)
                   _ReasoningStrip(
                     text: turn.reasoning.join(''),
-                    // Once the reply starts streaming, the thinking is done —
-                    // fold the strip into a quiet pill (tap re-expands).
-                    condensed: turn.draft.isNotEmpty,
+                    // Once the reply starts streaming — or the model is
+                    // already mid-run delivering messages — the thinking is
+                    // background: fold the strip into a quiet pill (tap
+                    // re-expands).
+                    condensed: streaming || !showHeader,
                   ),
                 if (turn.tools.isNotEmpty) ToolTrace(tools: turn.tools),
               ],
             )
           : null,
-      bubble: turn.draft.isNotEmpty ? _StreamingText(text: turn.draft) : null,
-      belowBubble: turn.draft.isEmpty
-          ? AnimatedSwitcher(
-              duration: TalonMotion.fast,
-              switchInCurve: TalonMotion.emphasized,
-              switchOutCurve: Curves.easeIn,
-              child: turn.continuing
-                  ? const _WorkingPill(key: ValueKey('working'))
-                  : turn.typing
-                      ? const Padding(
-                          key: ValueKey('typing'),
-                          padding: EdgeInsets.only(top: 2),
-                          child: _TypingDots(),
-                        )
-                      : const SizedBox.shrink(key: ValueKey('idle')),
-            )
-          : null,
-    );
-  }
-}
-
-class _LiveBadge extends StatelessWidget {
-  final bool active;
-  const _LiveBadge({required this.active});
-
-  @override
-  Widget build(BuildContext context) {
-    final color = active ? TalonColors.accent2 : TalonColors.textFaint;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: TalonRadius.rPill,
-        border: Border.all(color: color.withValues(alpha: 0.24)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 6,
-            height: 6,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            active ? 'Working' : 'Ready',
-            style: TextStyle(
-              color: color,
-              fontSize: 10.5,
-              fontWeight: FontWeight.w600,
+      bubble: streaming ? _StreamingText(text: turn.draft) : null,
+      belowBubble: streaming || toolRunning
+          ? null
+          : WorkingRow(
+              key: const ValueKey('working'),
+              label: turn.reasoning.isNotEmpty && !turn.continuing
+                  ? 'Thinking…'
+                  : 'Working…',
             ),
-          ),
-        ],
-      ),
     );
   }
 }
@@ -344,95 +317,63 @@ class _ReasoningStripState extends State<_ReasoningStrip> {
   }
 }
 
-/// Quiet "still working" chip shown when the model has delivered a message
-/// mid-turn (via send_message) but hasn't ended the turn — signalling that more
-/// is likely coming. Deliberately calmer than the typing dots: a soft breathing
-/// accent dot beside a label, so a delivered bubble followed by continued work
-/// reads as intentional rather than finished.
-class _WorkingPill extends StatelessWidget {
-  const _WorkingPill({super.key});
+/// The one quiet "still working" row under an in-progress turn: three softly
+/// breathing accent dots and a short label, with no chrome around it. Shown
+/// while the model is thinking or working between delivered messages, and
+/// gone the moment reply text streams or the turn ends — so a run of
+/// mid-turn messages reads as one reply still being written rather than a
+/// finished bubble followed by a separate "Talon · Working" card.
+class WorkingRow extends StatelessWidget {
+  final String label;
+  const WorkingRow({super.key, this.label = 'Working…'});
 
   @override
   Widget build(BuildContext context) {
-    final reduceMotion = MediaQuery.of(context).disableAnimations;
-    final dot = Container(
-      width: 7,
-      height: 7,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: TalonColors.accent2,
-      ),
-    );
-    final pill = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: TalonColors.glassFill,
-        borderRadius: TalonRadius.rPill,
-        border: Border.all(color: TalonColors.glassStroke),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          reduceMotion
-              ? dot
-              : dot
-                  .animate(onPlay: (c) => c.repeat(reverse: true))
-                  .fadeIn(
-                      begin: 0.35, duration: 900.ms, curve: Curves.easeInOut)
-                  .scaleXY(begin: 0.85, end: 1.15, curve: Curves.easeInOut)
-                  .wrapAmbient(),
-          const SizedBox(width: 7),
-          Text(
-            'Still working…',
-            style: TextStyle(fontSize: 11.5, color: TalonColors.textDim),
-          ),
-        ],
-      ),
-    );
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: reduceMotion
-          ? pill
-          : pill.animate().fadeIn(duration: TalonMotion.base).slideY(
-                begin: 0.25,
-                end: 0,
-                curve: TalonMotion.emphasized,
-              ),
-    );
-  }
-}
-
-/// Three dots that ripple while the model is thinking but hasn't produced text
-/// yet. A staggered fade/scale loop via flutter_animate — no manual controller.
-class _TypingDots extends StatelessWidget {
-  const _TypingDots();
-
-  @override
-  Widget build(BuildContext context) {
+    final still = MediaQuery.of(context).disableAnimations;
     Widget dot(int i) {
       final base = Container(
-        width: 7,
-        height: 7,
-        margin: const EdgeInsets.symmetric(horizontal: 3),
+        width: 5,
+        height: 5,
+        margin: const EdgeInsets.only(right: 3),
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          color: TalonColors.textDim,
+          color: TalonColors.accent2,
         ),
       );
-      if (MediaQuery.of(context).disableAnimations) return base;
+      if (still) return base;
       return base
           .animate(onPlay: (c) => c.repeat(reverse: true))
-          .fadeIn(delay: (i * 160).ms, duration: 500.ms, begin: 0.3)
-          .scaleXY(begin: 0.7, end: 1, curve: Curves.easeOut)
+          .fadeIn(
+              delay: (i * 180).ms,
+              begin: 0.25,
+              duration: 700.ms,
+              curve: Curves.easeInOut)
           .wrapAmbient();
     }
 
-    return SizedBox(
-      height: 20,
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [dot(0), dot(1), dot(2)],
+    final row = Semantics(
+      liveRegion: true,
+      label: label,
+      excludeSemantics: true,
+      child: Padding(
+        key: const Key('working-row'),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            dot(0),
+            dot(1),
+            dot(2),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(fontSize: 12.5, color: TalonColors.textFaint),
+            ),
+          ],
+        ),
       ),
     );
+    if (still) return row;
+    return row.animate().fadeIn(duration: TalonMotion.base);
   }
 }
