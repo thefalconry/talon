@@ -37,8 +37,8 @@
 //   --max-age-days <n>    map staleness limit (default: 14)
 //   --now <iso>           override "now" (tests)
 //   --json                print the whole decision as JSON instead of the list
-//   --refresh             download the newest map artifact from the latest
-//                         successful main CI run (needs gh) and exit
+//   --refresh             replace the map with the newest `test-impact-map`
+//                         artifact from a main CI run (needs gh) and exit
 
 import { execFileSync } from "node:child_process";
 import {
@@ -292,42 +292,34 @@ function loadMap(root, path) {
   }
 }
 
-function refresh(mapPath) {
-  const run = execFileSync(
+function refresh(root, mapPath) {
+  // Newest unexpired map artifact uploaded by a CI run on main (a red run
+  // still records a valid graph, so this does not require a green run).
+  const runId = execFileSync(
     "gh",
     [
-      "run",
-      "list",
-      "--workflow",
-      "CI",
-      "--branch",
-      "main",
-      "--event",
-      "push",
-      "--status",
-      "success",
-      "--limit",
-      "1",
-      "--json",
-      "databaseId",
+      "api",
+      "repos/{owner}/{repo}/actions/artifacts?name=test-impact-map&per_page=30",
       "--jq",
-      ".[0].databaseId",
+      '[.artifacts[] | select(.expired | not) | select(.workflow_run.head_branch == "main")] | sort_by(.created_at) | last | .workflow_run.id // empty',
     ],
-    { cwd: ROOT, encoding: "utf8" },
+    { cwd: root, encoding: "utf8" },
   ).trim();
-  if (!run) throw new Error("no successful main CI run found");
+  if (!runId) throw new Error("no test-impact-map artifact from main found");
   const dir = mkdtempSync(join(tmpdir(), "tia-"));
   try {
     execFileSync(
       "gh",
-      ["run", "download", run, "-n", "test-impact-map", "-D", dir],
-      { cwd: ROOT, stdio: "inherit" },
+      ["run", "download", runId, "-n", "test-impact-map", "-D", dir],
+      { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
     );
     const body = readFileSync(join(dir, "test-impact-map.json"), "utf8");
-    writeFileSync(resolve(ROOT, mapPath), body);
     const m = JSON.parse(body);
+    if (m.version !== 1)
+      throw new Error(`unsupported map version ${m.version}`);
+    writeFileSync(resolve(root, mapPath), body);
     process.stderr.write(
-      `TIA: refreshed ${mapPath} from run ${run} (${m.testCount} tests, generated ${m.generatedAt})\n`,
+      `TIA: refreshed ${mapPath} from run ${runId} (${m.testCount} tests, generated ${m.generatedAt})\n`,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -367,7 +359,7 @@ function report(decision) {
 
 function main() {
   const o = parseArgs(process.argv.slice(2));
-  if (o.refresh) return refresh(o.map);
+  if (o.refresh) return refresh(o.root, o.map);
   let changed;
   let decision;
   const allTests = listTestFiles(o.root);

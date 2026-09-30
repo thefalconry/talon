@@ -275,12 +275,27 @@ jobs:
         run: npm run format:check
 
   # ── Unit & integration tests + coverage ────────────────────────
+  #
+  # Light PR runs use test-impact analysis on ubuntu: scripts/tia.mjs picks
+  # the test files whose runtime import graph (ci/test-impact-map.json)
+  # touches the PR's changes, plus a smoke set, and falls back to the full
+  # suite for config/lockfile/scripts/native/prompts changes or a stale
+  # map. Full runs (main, dispatch, `full-ci`) run everything with
+  # coverage and re-record the map as the `test-impact-map` artifact,
+  # which the next PR run downloads — the map is never committed back
+  # from CI (main is protected; a bot push or refresh PR per merge would
+  # be noise). The committed copy is only the bootstrap / offline
+  # fallback; `node scripts/tia.mjs --refresh` updates it locally.
   test:
     name: Tests (${{ matrix.os }}, Node ${{ matrix.node-version }})
     needs: changes
     if: needs.changes.outputs.daemon == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read # download the newest test-impact-map artifact
+      pull-requests: read # list the PR's changed files
     strategy:
       fail-fast: false
       matrix:
@@ -304,16 +319,46 @@ jobs:
         if: matrix.os != 'ubuntu-latest'
         run: npm run test:ci
 
+      # ── Light PR lane: impacted tests only ──
+      - name: Select impacted tests (TIA)
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # Same change set the `changes` job classified (renames on both sides).
+          gh api --paginate "repos/$REPO/pulls/$PR/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/changed.txt"
+          # Freshest map from main; the committed copy is the fallback.
+          node scripts/tia.mjs --refresh || echo "::warning::Could not fetch the test-impact map from main; using the committed copy"
+          node scripts/tia.mjs --files "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/tia-tests.txt"
+
+      - name: Run impacted tests
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full != 'true'
+        # Empty selection = full suite (xargs runs a bare `vitest run`).
+        run: xargs npx vitest run --reporter=verbose --reporter=json --outputFile=test-results.json < "$RUNNER_TEMP/tia-tests.txt"
+
+      # ── Full runs: whole suite with coverage + re-record the map ──
       - name: Run tests with coverage
-        if: matrix.os == 'ubuntu-latest'
-        run: npx vitest run --coverage --reporter=verbose --reporter=json --outputFile=test-results.json
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true'
+        run: npx vitest run --coverage --reporter=verbose --reporter=json --outputFile=test-results.json --reporter=./scripts/tia-reporter.mjs --experimental.importDurations.limit=1000000
+
+      - name: Upload test-impact map
+        if: always() && matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true' && hashFiles('ci/test-impact-map.json') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-impact-map
+          path: ci/test-impact-map.json
+          retention-days: 30
 
       - name: Test summary
         if: always()
         run: node .github/scripts/vitest-summary.mjs test-results.json "Tests (${{ matrix.os }}, Node ${{ matrix.node-version }})" coverage/coverage-summary.json
 
       - name: Validate coverage report
-        if: matrix.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true'
         run: |
           node -e "if (!require('fs').existsSync('coverage/coverage-summary.json')) { console.error('Coverage report not generated'); process.exit(1); }"
 
@@ -326,7 +371,7 @@ jobs:
           retention-days: 14
 
       - name: Upload coverage
-        if: always() && matrix.os == 'ubuntu-latest'
+        if: always() && matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-report
