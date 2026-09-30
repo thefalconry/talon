@@ -305,7 +305,7 @@ final alternation = ChatScenario(
   ],
 );
 
-final empty = ChatScenario('empty', 'New chat', const []);
+const empty = ChatScenario('empty', 'New chat', []);
 
 final allChatScenarios = [
   burst,
