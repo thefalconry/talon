@@ -30,15 +30,15 @@ async function selectEffort(
     backendId: beId,
     config,
   });
-  if (reasoning.levels.length === 0) {
+  // Adaptive needs no model levels — reachable even when the model has none.
+  if (level === "adaptive") setChatEffort(chatId, undefined);
+  else if (reasoning.levels.length === 0) {
     await interaction.update({
       content: "No valid reasoning levels found for this model.",
       components: [],
     });
     return;
-  }
-  if (level === "adaptive") setChatEffort(chatId, undefined);
-  else if (supportsReasoningLevel(level, reasoning.levels))
+  } else if (supportsReasoningLevel(level, reasoning.levels))
     setChatEffort(chatId, level as EffortLevel);
   else {
     await interaction.update({

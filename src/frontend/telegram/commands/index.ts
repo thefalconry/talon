@@ -34,10 +34,11 @@ export { setAdminUserId } from "./state.js";
 export function registerCommands(
   bot: Bot,
   config: TalonConfig,
-  gateway?: { backend: Backend | null },
+  gateway?: { backend: Backend | null; isListening?: () => boolean },
 ): void {
   const deps = { config, gateway };
-  registerInfoCommands(bot);
+  const isListening = gateway?.isListening?.bind(gateway);
+  registerInfoCommands(bot, { bridgeListening: isListening });
   registerMemoryCommand(bot);
   registerSessionCommands(bot, deps);
   registerSettingsCommands(bot, deps);
