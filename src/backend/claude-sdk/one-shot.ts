@@ -22,6 +22,10 @@ import { buildMcpServers, buildPluginMcpServers } from "./options.js";
 import { isBackgroundToolContext } from "../../core/agents/context.js";
 import { warnIfBelowCacheMinimum } from "../runtime/cache/cache-telemetry.js";
 import { emitAssistantText, emitSessionId } from "../runtime/one-shot-hooks.js";
+import {
+  isOtherLiveDaemon,
+  ownerFromEnviron,
+} from "../../core/daemon/pidfile.js";
 
 const DEFAULT_SUBPROCESS_KILL_GRACE_MS = 5 * 1000;
 
@@ -311,8 +315,10 @@ async function formatAndAppendMessage(
  * triggers: the warden respawned them, the next sweep killed them again, and
  * the only visible symptom was a trigger stuck in "errored" with no output.
  *
- * Two independent guards, because this function issues SIGKILL:
+ * Three independent guards, because this function issues SIGKILL:
  *  - refuse anything tagged `TALON_TRIGGER_ID` (a trigger, or its child);
+ *  - refuse anything spawned by another daemon that is still running
+ *    (see core/daemon/pidfile.ts). Its "orphans" are that daemon's live runs;
  *  - require the argv to actually be the `claude` SDK binary, which is the
  *    only thing this sweep was ever meant to reap.
  */
@@ -325,6 +331,7 @@ export function isEvictableOrphan(
   if (envEntries.some((entry) => entry.startsWith("TALON_TRIGGER_ID="))) {
     return false;
   }
+  if (isOtherLiveDaemon(ownerFromEnviron(envEntries))) return false;
   return argv.some((arg) => arg === "claude" || arg.endsWith("/claude"));
 }
 

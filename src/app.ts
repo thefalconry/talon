@@ -78,6 +78,7 @@ import {
   writePidRecord,
   removePidRecordIfOwnedBy,
 } from "./core/daemon/pidfile.js";
+import { stampDaemonOwner } from "./core/daemon/pidfile.js";
 import {
   recordBootMetrics,
   startResourceSampler,
@@ -98,6 +99,24 @@ if (process.argv.includes(BOOT_SMOKE_FLAG)) {
   console.log(BOOT_SMOKE_OK);
   process.exit(0);
 }
+
+// One daemon per install. This runs before anything with a side effect
+// (restore, database, pidfile, trigger resume), because a second daemon
+// does damage in each of them — see checkSingleInstance in core/daemon/discovery.ts.
+{
+  const { checkSingleInstance, describeRefusal } =
+    await import("./core/daemon/discovery.js");
+  const verdict = await checkSingleInstance();
+  if (!verdict.ok) {
+    const message = describeRefusal(verdict.instance);
+    logError("bot", message);
+    console.error(`talon: ${message}`);
+    process.exit(1);
+  }
+}
+// Every child spawned from here on names this daemon as its owner, so an
+// orphan sweep can tell a dead daemon's leftovers from a live one's runs.
+stampDaemonOwner();
 
 /**
  * A `/backup restore <id>` from chat writes ~/.talon/restore-pending.json
@@ -164,6 +183,17 @@ writePidRecord({ pid: process.pid, startedAt: bootedAt });
 // ── Create gateway + frontend ─────────────────────────────────────────────────
 
 const gateway = new Gateway("daemon");
+// Fail rather than fall back when the gateway port belongs to another
+// daemon: a fallback port is how a second daemon went unnoticed.
+gateway.setPortInUseCheck(async (port) => {
+  const { probeHealth } = await import("./core/daemon/discovery.js");
+  const health = await probeHealth(port);
+  return health?.app === "talon" &&
+    health.mode === "daemon" &&
+    health.pid !== process.pid
+    ? `gateway port ${port} is held by another Talon daemon (pid ${String(health.pid)})`
+    : undefined;
+});
 gateway.onStarted((port) =>
   writePidRecord({ pid: process.pid, port, startedAt: bootedAt }),
 );

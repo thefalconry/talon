@@ -155,6 +155,7 @@ export async function bootstrap(
       ...(config.operatorIds ?? []),
       ...(config.discord?.adminUserIds ?? []).map((id) => `discord:${id}`),
     ],
+    guardChildren: true,
   });
 
   initWorkspace(config.workspace);

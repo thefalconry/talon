@@ -18,9 +18,20 @@ import {
   collectBackendUsage,
   formatHeadroom,
   leadWith,
+  type BackendHeadroom,
   type BackendUsageSnapshot,
 } from "../backend-router/index.js";
 import type { SharedActionHandlers } from "./types.js";
+
+/**
+ * Headroom as agents see it, to 2dp. `null` for an unmeasured backend: the
+ * router scores those 0 so they are never preferred, but telling an agent
+ * "0" would read as "spent", which is not known either.
+ */
+function headroomFigure(entry: BackendHeadroom): number | null {
+  if (entry.source === "none" && !entry.unavailable) return null;
+  return Math.round(entry.headroom * 100) / 100;
+}
 
 /** One `plan_usage` block: the headroom line, then any plan windows. */
 function usageLines(entry: BackendUsageSnapshot): string[] {
@@ -143,10 +154,13 @@ export const modelHandlers: SharedActionHandlers = {
         id: entry.id,
         label: entry.label,
         current: entry.id === currentId,
-        headroom: Math.round(entry.headroom.headroom * 100) / 100,
+        headroom: headroomFigure(entry.headroom),
         source: entry.headroom.source,
         limiting: entry.headroom.limiting ?? null,
         stale: entry.headroom.stale ?? false,
+        ...(entry.headroom.unavailable
+          ? { unavailable: entry.headroom.unavailable }
+          : {}),
         plan: entry.plan?.plan ?? null,
         windows: entry.plan?.windows ?? [],
         ...(entry.note ? { note: entry.note } : {}),
@@ -170,10 +184,11 @@ export const modelHandlers: SharedActionHandlers = {
         id: b.id,
         label: b.label,
         current: b.id === currentId,
-        headroom: entry
-          ? Math.round(entry.headroom.headroom * 100) / 100
-          : null,
+        headroom: entry ? headroomFigure(entry.headroom) : null,
         headroomSource: entry?.headroom.source ?? null,
+        ...(entry?.headroom.unavailable
+          ? { unavailable: entry.headroom.unavailable }
+          : {}),
       };
     });
     const lines = backends.map((b) => {

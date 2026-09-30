@@ -83,6 +83,12 @@ export const agentTools: ToolDefinition[] = [
         .describe(
           "Hard wall-clock cap in seconds (default 900, min 30, max 3600). On timeout the agent is aborted and you are told.",
         ),
+      preflight: z
+        .boolean()
+        .optional()
+        .describe(
+          "Tell the agent to run the pre-flight lane (`npm run preflight` / run_preflight) before every git push and push only on green. Default: on when the brief mentions a PR, off otherwise.",
+        ),
     },
     execute: (params, bridge) => bridge("spawn_agent", params),
     tag: "agents",
@@ -211,6 +217,28 @@ export const agentTools: ToolDefinition[] = [
       "Sub-agents only. Drain anything sent to you — instructions from your parent, and notes from peer agents working alongside you. Each message names its sender. Messages are delivered no other way, so check at milestones: after a phase of work, before a long operation, and before you report.",
     schema: {},
     execute: (_params, bridge) => bridge("check_inbox", {}),
+    tag: "agents",
+  },
+];
+
+/**
+ * The pre-flight lane tool. Its own list so it can be appended at the END of
+ * ALL_TOOLS (the prompt-cache prefix) rather than beside the agent family.
+ */
+export const preflightTools: ToolDefinition[] = [
+  {
+    name: "run_preflight",
+    description:
+      "Run the pre-flight lane (`npm run preflight`: typecheck, lint, format, architecture/knip/ratchet gates, the unit tests touched by your diff, gitleaks) in a talon checkout on the daemon host and get its verdict. Run it before every `git push` on a PR branch and push only when it is GREEN; a RED result lists each failing step with the tail of its log. Takes a few minutes (hard cap 10). Needs `npm ci` done in the checkout.",
+    schema: {
+      cwd: z
+        .string()
+        .optional()
+        .describe(
+          "Path inside the checkout to check (its git root is used), e.g. /tmp/fix-foo. Defaults to the workspace.",
+        ),
+    },
+    execute: (params, bridge) => bridge("run_preflight", params),
     tag: "agents",
   },
 ];

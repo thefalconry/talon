@@ -150,6 +150,55 @@ class MessageNotifications {
     }
   }
 
+  /// Slot for the "background mesh paused" notice — outside the per-chat id
+  /// space in practice (a fixed small id), so it replaces itself.
+  static const int meshPausedId = 7;
+
+  /// Post a status notice that isn't a chat reply (no payload: tapping it
+  /// just opens the app). Never throws.
+  static Future<void> showNotice({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    if (!supported) return;
+    await ensureInitialized();
+    if (!_initialized) return;
+    try {
+      await _plugin.show(
+        id: id,
+        title: title,
+        body: body,
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            channelId,
+            channelName,
+            channelDescription: channelDescription,
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+            styleInformation: BigTextStyleInformation(body),
+            onlyAlertOnce: true,
+            autoCancel: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      AppLog.warn('notify', 'notice post failed', e);
+    }
+  }
+
+  /// Withdraw a notice posted with [showNotice].
+  static Future<void> clearNotice(int id) async {
+    if (!supported) return;
+    await ensureInitialized();
+    if (!_initialized) return;
+    try {
+      await _plugin.cancel(id: id);
+    } catch (_) {
+      // Nothing to cancel.
+    }
+  }
+
   /// Drop the notification for a chat — called when the user opens it, so a
   /// message they have now read stops sitting in the shade.
   static Future<void> clearChat(String chatId) async {

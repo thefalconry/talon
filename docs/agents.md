@@ -100,8 +100,8 @@ is waiting.
 
 Parent-side (available in every chat, and inside an `agent:*` run):
 
-- `spawn_agent({ brief, label, backend?, model?, effort?, timeout_s? })` →
-  `{ agent_id, backend, model }`
+- `spawn_agent({ brief, label, backend?, model?, effort?, timeout_s?, preflight? })` →
+  `{ agent_id, backend, model }` — `preflight` see [Pre-flight lane](#pre-flight-lane)
 - `list_agents()` — this chat's agents, descendants included
 - `agent_status({ agent_id })` — everything but the brief
 - `wait_for_agent({ agent_id, timeout_s ≤ 120 })`
@@ -117,6 +117,63 @@ Agent-side (refused anywhere but an `agent:*` context):
 Visibility is scoped the way triggers are scoped to their chat: a chat sees
 the agents rooted in it, an agent sees its own descendants, and an id from
 another chat is simply "not found".
+
+## Pre-flight lane
+
+Agents that open PRs run the light CI suite locally and push only when it is
+green, so GitHub Actions becomes the confirmer of a change rather than the
+first compiler it meets.
+
+**The lane** is `scripts/preflight.sh` (`npm run preflight`). It mirrors the
+`lint` job in `ci.yml` plus the unit tests touched by the diff:
+
+| step            | what                                                      |
+| --------------- | --------------------------------------------------------- |
+| `typecheck`     | `tsc --noEmit`                                            |
+| `lint`          | oxlint                                                    |
+| `format`        | `prettier --check`                                        |
+| `depcruise`     | architecture boundaries                                   |
+| `knip`          | dead code                                                 |
+| `ratchets`      | ratchet gates                                             |
+| `function-size` | function-size ratchet                                     |
+| `tree`          | tree ratchet                                              |
+| `only-skip`     | no `.only()` / `.skip()` left in tests                    |
+| `tests`         | `vitest related <changed src>` — tests importing the diff |
+| `gitleaks`      | secrets in `<base>..HEAD`; skipped with a note if absent  |
+
+Every step runs even after one fails, so one pass shows everything red. It
+prints one verdict line (`preflight: GREEN in 94s …` / `RED — failed: knip,
+tests`) and writes `.preflight/last.json` (verdict, per-step status and
+duration, failing steps) plus one `.preflight/<step>.log` per step; exit 0 is
+green, 1 is red. `PREFLIGHT_BASE` (default `origin/main`) is the diff base,
+`PREFLIGHT_SKIP=knip,tests` skips steps, `PREFLIGHT_QUIET=1` keeps step
+output in the logs only. It needs `npm ci` done in the checkout.
+
+The changed set is everything since the merge-base with the base, plus
+staged, unstaged and untracked work. A change to `package-lock.json`,
+`vitest.config.ts` or the test harness (`src/__tests__/setup/`) runs the whole
+unit suite; a change with nothing under `src/` runs no tests. Tests under
+`src/__tests__/integration/` are left to CI (some reach live services). A hub module
+(e.g. `core/types.ts`) makes `vitest related` pick up most of the suite, so
+the lane is slower there — which is exactly when it is worth waiting for.
+
+It is not the whole of CI: functional/integration suites, native builds,
+coverage and the Windows/macOS matrix still only run on GitHub.
+
+**Wiring into sub-agents.** `spawn_agent` takes `preflight?: boolean`. Unset,
+it defaults on for any brief that mentions a PR (`PR`, `PRs`, "pull
+request") and off otherwise. When on, the activation prompt ends with a
+standing instruction: before every `git push`, run `npm run preflight` (or
+call `run_preflight`), push only when green, and if a red step is genuinely
+out of scope say which one and why in the PR body.
+
+**`run_preflight({ cwd? })`** runs the lane in the checkout that contains
+`cwd` (its git root; default the workspace) on the daemon host, capped at
+10 minutes, and returns the verdict, the step table and the last 30 lines of
+every failing step's log. A red lane is a successful tool call with a red
+verdict; the tool errors only when it could not run (no such directory, no
+`scripts/preflight.sh` in that checkout, the lane died without a summary, or
+it timed out). It is callable from a chat and from inside an agent run.
 
 ## Tool surface inside an agent
 

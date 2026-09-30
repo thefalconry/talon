@@ -598,6 +598,15 @@ class Prefs {
       appLockEnabled && (_sp.getBool(_kAppLockElevatedGate) ?? false);
   Future<void> setAppLockElevatedGate(bool v) =>
       _sp.setBool(_kAppLockElevatedGate, v);
+
+  static const _kBlockScreenshots = 'security.blockScreenshots.v1';
+
+  /// "Block screenshots and screen recording" (Android FLAG_SECURE,
+  /// app-wide). Null until the user picks: the default then follows the app
+  /// lock — on with a passcode, off without one.
+  bool? get blockScreenshots => _sp.getBool(_kBlockScreenshots);
+  Future<void> setBlockScreenshots(bool v) =>
+      _sp.setBool(_kBlockScreenshots, v);
 }
 
 /// Encode [snapshot] and replace the file at [path] atomically (temp file +

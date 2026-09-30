@@ -46,6 +46,8 @@ import {
 } from "../engine/backend-controller/index.js";
 import {
   chooseBackend,
+  recordBackendRunFailure,
+  recordBackendRunSuccess,
   recordBackendRunUsage,
   taskClassForEffort,
 } from "../engine/backend-router/index.js";
@@ -276,6 +278,7 @@ export async function spawnAgent(
       ...(spec.model ? { requestedModel: spec.model } : {}),
       timeoutMs: spec.timeoutMs ?? capsHolder.caps.defaultTimeoutMs,
       cwd: dirs.workspace,
+      ...(spec.preflight ? { preflight: true } : {}),
     },
     capsHolder.caps,
   );
@@ -344,7 +347,11 @@ async function buildRunParams(
   );
   const id = record.id;
   return {
-    prompt: resume ? resume.prompt : buildAgentPrompt(record.brief),
+    prompt: resume
+      ? resume.prompt
+      : buildAgentPrompt(record.brief, {
+          preflight: spec.preflight === true,
+        }),
     systemPrompt: buildAgentSystemPrompt({
       agentId: record.id,
       label: record.label,
@@ -484,15 +491,22 @@ async function runAgent(
       });
       recordBackendRunUsage(record.backendId, usage ?? undefined);
       // A backend may swallow the shutdown abort and return normally — the
-      // run still did not finish, so it must not settle as done/failed.
-      settled = agentRegistry.isInterrupted(id)
-        ? null
-        : settleSuccess(id, task, capture.last, usage ?? undefined);
+      // run still did not finish, so it must not settle as done/failed, and
+      // it says nothing about the backend's health either way.
+      if (agentRegistry.isInterrupted(id)) {
+        settled = null;
+      } else {
+        recordBackendRunSuccess(record.backendId);
+        settled = settleSuccess(id, task, capture.last, usage ?? undefined);
+      }
     }
   } catch (err) {
-    settled = agentRegistry.isInterrupted(id)
-      ? null
-      : settleFailure(id, task, err);
+    if (agentRegistry.isInterrupted(id)) {
+      settled = null;
+    } else {
+      recordBackendRunFailure(record.backendId, err);
+      settled = settleFailure(id, task, err);
+    }
   } finally {
     await release().catch((err: unknown) =>
       logError("agents", `failed to release backend for ${id}`, err),
@@ -739,6 +753,7 @@ async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
     : {
         prompt: buildRebriefPrompt({
           brief: saved.brief,
+          preflight: saved.preflight === true,
           interruptedAt,
           elapsedMinutes: minutes,
           logPath: agentLogPath(saved.id),
@@ -760,6 +775,7 @@ async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
       ? { reasoningEffort: record.reasoningEffort }
       : {}),
     timeoutMs,
+    ...(saved.preflight ? { preflight: true } : {}),
   };
   agentRegistry.markResumed(record.id);
   log(

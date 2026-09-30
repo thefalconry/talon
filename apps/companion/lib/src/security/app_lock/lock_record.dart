@@ -108,9 +108,25 @@ class AppLockRecord {
         if (lastFailureAtMs != null) 'failedAt': lastFailureAtMs,
       });
 
+  /// The record without its [verifier]: what the lock keeps *outside* the
+  /// secure store (see AppLockController's params mirror) so that a keychain
+  /// that can't be read — every ad-hoc-signed macOS update used to cause
+  /// that — is recovered by re-entering the passcode instead of erasing the
+  /// device. The passcode is then checked by opening [wrappedDataKey].
+  String encodeParams() {
+    final json = jsonDecode(encode()) as Map<String, dynamic>;
+    json.remove('verifier');
+    return jsonEncode(json);
+  }
+
+  /// Decode [encodeParams] output. The result has an empty [verifier]; it can
+  /// only be checked through [wrappedDataKey].
+  static AppLockRecord decodeParams(String raw) =>
+      decode(raw, requireVerifier: false);
+
   /// Throws [FormatException] for anything that isn't a record this build
   /// understands — the caller treats that as "no usable lock".
-  static AppLockRecord decode(String raw) {
+  static AppLockRecord decode(String raw, {bool requireVerifier = true}) {
     final json = jsonDecode(raw);
     if (json is! Map || json['v'] != currentVersion) {
       throw const FormatException('unsupported app-lock record');
@@ -134,7 +150,9 @@ class AppLockRecord {
     return AppLockRecord(
       kdf: KdfParams.fromJson(kdf.cast<String, dynamic>()),
       salt: bytes('salt'),
-      verifier: bytes('verifier'),
+      verifier: requireVerifier || json['verifier'] is String
+          ? bytes('verifier')
+          : Uint8List(0),
       wrappedDataKey: dataKey,
       keyCheck: bytes('keyCheck'),
       numeric: json['numeric'] == true,

@@ -49,6 +49,8 @@ export interface AgentRegistration {
   readonly timeoutMs?: number;
   /** Working directory the run executes in. */
   readonly cwd?: string;
+  /** The spawn asked for the pre-flight lane instruction. */
+  readonly preflight?: boolean;
 }
 
 /** What the runner knows once the run is actually under way. */
@@ -109,6 +111,7 @@ interface LiveAgent {
   requestedModel?: string;
   timeoutMs?: number;
   cwd?: string;
+  preflight?: boolean;
   sessionId?: string;
   elapsedMs: number;
   resumeCount: number;
@@ -180,6 +183,7 @@ function toPersisted(entry: LiveAgent): PersistedAgent {
   }
   if (entry.timeoutMs !== undefined) saved.timeoutMs = entry.timeoutMs;
   if (entry.cwd !== undefined) saved.cwd = entry.cwd;
+  if (entry.preflight) saved.preflight = true;
   if (record.startedAt !== undefined) saved.startedAt = record.startedAt;
   if (record.endedAt !== undefined) saved.endedAt = record.endedAt;
   if (entry.sessionId !== undefined) saved.sessionId = entry.sessionId;
@@ -283,6 +287,7 @@ export class AgentRegistry {
     }
     if (spec.timeoutMs !== undefined) entry.timeoutMs = spec.timeoutMs;
     if (spec.cwd !== undefined) entry.cwd = spec.cwd;
+    if (spec.preflight) entry.preflight = true;
     this.live.set(id, entry);
     if (spec.parent.kind === "agent") {
       this.live.get(spec.parent.agentId)?.record.children.push(id);
@@ -353,6 +358,7 @@ export class AgentRegistry {
     }
     if (saved.timeoutMs !== undefined) entry.timeoutMs = saved.timeoutMs;
     if (saved.cwd !== undefined) entry.cwd = saved.cwd;
+    if (saved.preflight) entry.preflight = true;
     if (saved.sessionId !== undefined) entry.sessionId = saved.sessionId;
     if (saved.interruptedAt !== undefined) {
       entry.interruptedAt = saved.interruptedAt;

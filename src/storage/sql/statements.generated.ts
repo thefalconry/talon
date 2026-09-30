@@ -446,7 +446,10 @@ CREATE TABLE IF NOT EXISTS agents (
   -- dying with the daemon eventually settles as failed).
   resume_count     INTEGER NOT NULL DEFAULT 0,
   -- When the last restart interrupted it, if one did.
-  interrupted_at   INTEGER
+  interrupted_at   INTEGER,
+  -- 1 when the spawn asked for the pre-flight lane, so a re-briefed resume
+  -- keeps the instruction.
+  preflight        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state, depth, created_at);`;
 
@@ -456,13 +459,13 @@ export const agentsSql = {
    model, requested_model, effort, timeout_ms, depth, cwd, state,
    created_at, started_at, ended_at, updated_at, session_id, inbox_json,
    reported, result_summary, result_details, error, elapsed_ms,
-   resume_count, interrupted_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   resume_count, interrupted_at, preflight)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   get: `SELECT id, label, brief, parent_kind, parent_id, parent_numeric, backend_id,
        model, requested_model, effort, timeout_ms, depth, cwd, state,
        created_at, started_at, ended_at, updated_at, session_id, inbox_json,
        reported, result_summary, result_details, error, elapsed_ms,
-       resume_count, interrupted_at
+       resume_count, interrupted_at, preflight
 FROM agents WHERE id = ?
 
 -- Rows a restart interrupted, parents before children (a child can only
@@ -471,7 +474,7 @@ FROM agents WHERE id = ?
        model, requested_model, effort, timeout_ms, depth, cwd, state,
        created_at, started_at, ended_at, updated_at, session_id, inbox_json,
        reported, result_summary, result_details, error, elapsed_ms,
-       resume_count, interrupted_at
+       resume_count, interrupted_at, preflight
 FROM agents WHERE state IN ('queued', 'running')
 ORDER BY depth, created_at`,
   remove: `DELETE FROM agents WHERE id = ?

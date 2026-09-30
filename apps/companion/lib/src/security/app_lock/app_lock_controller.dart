@@ -101,7 +101,9 @@ class AppLockController extends ChangeNotifier {
     SnapshotCipher cipher = const SnapshotCipher(),
     KdfParams kdfParams = KdfParams.standard,
     DateTime Function()? clock,
+    SecretStore? paramsStore,
   })  : _store = store,
+        _paramsStore = paramsStore,
         _sealed = sealedSnapshots,
         _biometrics = biometrics,
         _deriver = deriver,
@@ -127,10 +129,14 @@ class AppLockController extends ChangeNotifier {
           : PlatformSecretStore(),
       sealedSnapshots: FileSealedSnapshotStore(),
       biometrics: linux ? const NoBiometrics() : PlatformBiometrics(),
+      paramsStore: FileSecretStore(),
     );
   }
 
   static const String recordKey = 'record.v1';
+
+  /// Key of the verifier-less copy of the record in [_paramsStore].
+  static const String paramsKey = 'params.v1';
   static const String _dataKeyAad = 'talon.applock.datakey.v1';
 
   /// How long one on-device approval covers further device-control commands
@@ -155,6 +161,12 @@ class AppLockController extends ChangeNotifier {
 
   final Prefs prefs;
   final SecretStore _store;
+
+  /// Outside the secure store: the record minus its verifier, so a secure
+  /// store that won't open (a macOS keychain item created by a build with a
+  /// different code signature) is recovered with the passcode rather than
+  /// only by erasing the device. Null = no mirror (tests, by default).
+  final SecretStore? _paramsStore;
   final SealedSnapshotStore _sealed;
   final BiometricUnlocker _biometrics;
   final PasscodeDeriver _deriver;
@@ -174,6 +186,7 @@ class AppLockController extends ChangeNotifier {
   Uint8List? _dataKey;
   bool _ready = false;
   bool _storeError = false;
+  bool _recovering = false;
   bool _verifying = false;
   bool _biometricsAvailable = false;
   bool _hydrated = false;
@@ -202,8 +215,15 @@ class AppLockController extends ChangeNotifier {
   /// The stored lock has been read (or found absent).
   bool get ready => _ready;
 
-  /// The lock is on but its record couldn't be read — only a reset helps.
+  /// The lock is on but its record couldn't be read and there is no copy to
+  /// recover from. [retryLoad] may still help (a keychain prompt that was
+  /// dismissed or denied); otherwise only a reset does.
   bool get storeError => _storeError;
+
+  /// The secure store couldn't be read, so the lock is running from its
+  /// params mirror: the passcode is checked against the wrapped data key,
+  /// and the first successful unlock writes the record back to the store.
+  bool get recovering => _recovering;
 
   /// A passcode is being checked (the KDF takes a moment).
   bool get verifying => _verifying;
@@ -255,8 +275,20 @@ class AppLockController extends ChangeNotifier {
       AppLog.warn('app_lock', 'lock record unreadable', e);
     }
     if (record == null) {
-      if (readFailed && prefs.appLockEnabled) {
-        // On, but unreadable: stay locked. The lock screen offers the reset.
+      final params = prefs.appLockEnabled ? await _readParams() : null;
+      if (params != null) {
+        // The secure store refused us or came back empty (on macOS: a
+        // keychain item written by a build with another code signature, or a
+        // denied Allow prompt) but the lock's parameters survive outside it.
+        // Stay locked — never fall open — and let the right passcode open the
+        // wrapped data key and write the record back.
+        AppLog.warn('app_lock', 'lock record unreadable; recovering from params');
+        _record = params;
+        _recovering = true;
+        _status = AppLockStatus.locked;
+      } else if (readFailed && prefs.appLockEnabled) {
+        // On, but unreadable: stay locked. The lock screen offers a retry
+        // and, failing that, the reset.
         _storeError = true;
         _status = AppLockStatus.locked;
       } else {
@@ -270,6 +302,8 @@ class AppLockController extends ChangeNotifier {
       }
     } else {
       _record = record;
+      // Installs from before the mirror existed get one on first load.
+      await _mirrorParams(record);
       if (!prefs.appLockEnabled) {
         // Interrupted while turning the lock on: finish the job. Anything left
         // in the plaintext cache can't be sealed without the key — drop it.
@@ -282,6 +316,72 @@ class AppLockController extends ChangeNotifier {
     _biometricsAvailable = await _biometrics.isAvailable();
     _ready = true;
     _notify();
+  }
+
+  /// Read the secure store again — after the user dismissed or denied the
+  /// system's keychain prompt, say. No-op unless the last read failed.
+  Future<void> retryLoad() async {
+    if (!_storeError && !_recovering) return;
+    _loading = null;
+    _ready = false;
+    _storeError = false;
+    _recovering = false;
+    _record = null;
+    _notify();
+    await load();
+  }
+
+  Future<AppLockRecord?> _readParams() async {
+    final store = _paramsStore;
+    if (store == null) return null;
+    try {
+      final raw = await store.read(paramsKey);
+      return raw == null ? null : AppLockRecord.decodeParams(raw);
+    } catch (e) {
+      AppLog.warn('app_lock', 'lock params unreadable', e);
+      return null;
+    }
+  }
+
+  Future<void> _mirrorParams(AppLockRecord record) async {
+    final store = _paramsStore;
+    if (store == null) return;
+    try {
+      await store.write(paramsKey, record.encodeParams());
+    } catch (e) {
+      AppLog.warn('app_lock', 'lock params mirror write failed', e);
+    }
+  }
+
+  /// Recovery: the passcode is right when it opens the wrapped data key.
+  bool _opensDataKey(AppLockRecord record, Uint8List kek) {
+    try {
+      final key = Envelope.open(kek, record.wrappedDataKey, aad: _dataKeyAad);
+      return constantTimeEquals(keyCheckOf(key), record.keyCheck);
+    } on EnvelopeException {
+      return false;
+    }
+  }
+
+  /// Recovery succeeded: put the full record (verifier restored from the
+  /// passcode just checked) back into the secure store, replacing the item
+  /// this build couldn't read. If the store still refuses, the session stays
+  /// unlocked and the next launch recovers the same way.
+  Future<void> _restoreRecord(AppLockRecord record) async {
+    _record = record;
+    try {
+      try {
+        await _store.delete(recordKey);
+      } catch (e) {
+        AppLog.debug('app_lock', 'unreadable record not deleted', e);
+      }
+      await _store.write(recordKey, record.encode());
+      _recovering = false;
+      AppLog.info('app_lock', 'lock record restored to the secure store');
+    } catch (e) {
+      AppLog.warn('app_lock', 'secure store still unwritable; staying in recovery', e);
+    }
+    await _mirrorParams(record);
   }
 
   // ── Lifecycle / idle ─────────────────────────────────────────────────────
@@ -382,10 +482,16 @@ class AppLockController extends ChangeNotifier {
     _notify();
     try {
       final keys = await _deriver.derive(passcode, record.salt, record.kdf);
-      if (!constantTimeEquals(keys.verifier, record.verifier)) {
+      final match = _recovering
+          ? _opensDataKey(record, keys.kek)
+          : constantTimeEquals(keys.verifier, record.verifier);
+      if (!match) {
         return (await _registerFailure(record), null);
       }
-      final key = await _unwrapOrRotate(record, keys.kek);
+      if (_recovering) {
+        await _restoreRecord(record.copyWith(verifier: keys.verifier));
+      }
+      final key = await _unwrapOrRotate(_record ?? record, keys.kek);
       return (const UnlockResult(UnlockOutcome.success), key);
     } finally {
       _verifying = false;
@@ -565,6 +671,14 @@ class AppLockController extends ChangeNotifier {
     await _sealed.delete();
     await _biometrics.clear();
     await _store.delete(recordKey);
+    final params = _paramsStore;
+    if (params != null) {
+      try {
+        await params.delete(paramsKey);
+      } catch (e) {
+        AppLog.debug('app_lock', 'lock params not deleted', e);
+      }
+    }
     _record = null;
     _dataKey = null;
     _setStatus(AppLockStatus.disabled);
@@ -643,6 +757,19 @@ class AppLockController extends ChangeNotifier {
     _notify();
   }
 
+  /// "Block screenshots and screen recording". Until the user picks, it
+  /// follows the lock: on while a passcode is set, off otherwise. The lock
+  /// screen blocks capture regardless (see AppLockGate).
+  bool get blockScreenshots => prefs.blockScreenshots ?? enabled;
+
+  /// Whether [blockScreenshots] is still the lock-following default.
+  bool get blockScreenshotsIsDefault => prefs.blockScreenshots == null;
+
+  Future<void> setBlockScreenshots(bool on) async {
+    await prefs.setBlockScreenshots(on);
+    _notify();
+  }
+
   /// Forget the lock entirely — the "forgot passcode" path, and what the wipe
   /// threshold triggers. Removes the lock record, the biometric key and every
   /// cached chat. With [wipeConnection] (always, from the lock screen: a
@@ -671,6 +798,8 @@ class AppLockController extends ChangeNotifier {
     }
 
     await quietly(() => _store.delete(recordKey));
+    final params = _paramsStore;
+    if (params != null) await quietly(() => params.delete(paramsKey));
     await quietly(_biometrics.clear);
     await quietly(_sealed.delete);
     await prefs.setAppLockEnabled(false);
@@ -680,6 +809,7 @@ class AppLockController extends ChangeNotifier {
     _dataKey = null;
     _deferredSnapshot = null;
     _storeError = false;
+    _recovering = false;
     _hydrated = true; // nothing left to restore
   }
 
@@ -751,7 +881,18 @@ class AppLockController extends ChangeNotifier {
 
   Future<void> _save(AppLockRecord record) async {
     _record = record;
-    await _store.write(recordKey, record.encode());
+    if (_recovering) {
+      // The secure store is what failed: don't let it block counting a
+      // failed attempt; the mirror carries the state until it's restored.
+      try {
+        await _store.write(recordKey, record.encode());
+      } catch (e) {
+        AppLog.debug('app_lock', 'secure store write failed in recovery', e);
+      }
+    } else {
+      await _store.write(recordKey, record.encode());
+    }
+    await _mirrorParams(record);
   }
 
   void _setStatus(AppLockStatus next) {

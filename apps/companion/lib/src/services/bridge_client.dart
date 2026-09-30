@@ -130,13 +130,25 @@ class BridgeClient {
   /// the pin candidate the caller persists after a successful first connect.
   String? get seenFingerprint => _seenFingerprint;
 
+  /// How long an idle pooled connection is kept for reuse. dart:io's default
+  /// is 15 s, shorter than the mesh's 60 s registration heartbeat, so every
+  /// heartbeat paid a fresh DNS lookup, TCP connect and TLS handshake
+  /// (~1000 of them in two days on one Mac). Outliving the heartbeat lets
+  /// it ride one kept-alive connection wherever the server end (a reverse
+  /// proxy, or the bridge's own keep-alive window) holds it open too; a
+  /// connection the server has closed is dropped from the pool as soon as
+  /// its FIN arrives, so nothing is sent on a dead socket.
+  static const Duration restIdleTimeout = Duration(seconds: 90);
+
   http.Client _newClient() {
-    if (!config.tls) return http.Client();
     // A reverse proxy in front of the bridge may demand a client
     // certificate; present the imported one whenever it's asked for. Server
     // trust is still the pin below.
-    final inner = HttpClient(context: config.clientSecurityContext())
-      ..badCertificateCallback = (cert, host, port) => _evaluate(cert);
+    final inner = config.tls
+        ? (HttpClient(context: config.clientSecurityContext())
+          ..badCertificateCallback = (cert, host, port) => _evaluate(cert))
+        : HttpClient();
+    inner.idleTimeout = restIdleTimeout;
     return IOClient(inner);
   }
 

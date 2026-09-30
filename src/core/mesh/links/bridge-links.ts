@@ -12,6 +12,7 @@
 import { networkInterfaces } from "node:os";
 import {
   CompanionPairStore,
+  PAIR_GRANT_TTL_MS,
   pairLink,
   pairPage,
   type CompanionPairPayload,
@@ -32,7 +33,9 @@ import {
 } from "./node-provision.js";
 import {
   DEFAULT_COMPANION_SCOPES,
+  isDeviceCredentialToken,
   NODE_SCOPES,
+  UNBOUND_TTL_MS,
   type CredentialOrigin,
   type MeshScope,
 } from "../credentials/index.js";
@@ -278,6 +281,40 @@ export class BridgeLinks {
       url: base,
       token,
       ...(info.fingerprint ? { fingerprint: info.fingerprint } : {}),
+    };
+  }
+
+  /**
+   * `make_companion_pair_link`: {@link makeCompanionPairLink} as a tool
+   * result — the one-tap link plus the values for typing in by hand, the
+   * same things the Telegram `/mesh pair` reply shows.
+   */
+  makeCompanionPairLinkText(
+    label?: unknown,
+    bridgeUrl?: unknown,
+  ): MeshToolResult {
+    const minted = this.makeCompanionPairLink(label, bridgeUrl);
+    if (!minted.ok) return minted;
+    const minutes = Math.round(PAIR_GRANT_TTL_MS / 60_000);
+    const perDevice = isDeviceCredentialToken(minted.token);
+    return {
+      ok: true,
+      text: [
+        "Open this link on the phone or computer running the Talon companion:",
+        "",
+        `  ${minted.link}`,
+        "",
+        `Single-use, expires in ${minutes} minutes. If the link doesn't open the app, enter these by hand:`,
+        `  Bridge URL: ${minted.url}`,
+        `  Token: ${minted.token}`,
+        ...(minted.fingerprint
+          ? [`  Certificate SHA-256: ${minted.fingerprint}`]
+          : []),
+        "",
+        perDevice
+          ? `The token is this device's own credential: it binds to the first device that registers with it and lapses after ${Math.round(UNBOUND_TTL_MS / 86_400_000)} days unused. It can't take over a device that already holds a live credential — revoke that one first (talon mesh revoke <device>).`
+          : "The token is the bridge's shared token (this mesh has no per-device credential store).",
+      ].join("\n"),
     };
   }
 

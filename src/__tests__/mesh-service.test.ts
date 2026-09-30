@@ -71,6 +71,7 @@ describe("mesh tool availability", () => {
         "update_node",
         "get_node_binary",
         "make_node_install_link",
+        "make_companion_pair_link",
         "remove_device",
       ]) {
         expect(names).toContain(tool);

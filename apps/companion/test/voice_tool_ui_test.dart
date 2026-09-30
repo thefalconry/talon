@@ -20,6 +20,7 @@ void main() {
       expect(toolPhrase('mcp__email-tools__search_emails'), 'Search emails');
       expect(toolServer('mcp__email-tools__search_emails'), 'email');
       expect(toolPhrase('mcp__polymarket-tools__place_order'), 'Place order');
+      expect(toolPhrase('mcp__ssh-tools__execute-command'), 'Execute command');
       expect(toolServer('Bash'), isNull);
     });
 

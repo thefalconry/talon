@@ -75,6 +75,7 @@ class LockScreen extends StatefulWidget {
   static const Key denyKey = ValueKey('app-lock-deny');
   static const Key forgotKey = ValueKey('app-lock-forgot');
   static const Key resetConfirmKey = ValueKey('app-lock-reset-confirm');
+  static const Key retryKey = ValueKey('app-lock-retry');
 
   @override
   State<LockScreen> createState() => _LockScreenState();
@@ -219,9 +220,12 @@ class _LockScreenState extends State<LockScreen> {
       );
     } else if (_c.storeError) {
       body = _resetPanel(
-        'The app lock on this device can’t be read. Resetting it erases '
-        'the cached chats and this device’s connection; you’ll pair '
-        'it again.',
+        'Talon couldn’t read its app lock from the system keychain. If the '
+        'system asked whether Talon may use its saved data and it was '
+        'dismissed or denied, try again and choose Always Allow.\n\n'
+        'If that doesn’t work, resetting erases the cached chats and this '
+        'device’s connection; you’ll pair it again.',
+        onRetry: _c.retryLoad,
       );
     } else if (_confirmReset) {
       body = _resetPanel(
@@ -234,6 +238,15 @@ class _LockScreenState extends State<LockScreen> {
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (_c.recovering) ...[
+            Text(
+              'Talon couldn’t open its keychain entry (this happens after '
+              'some updates). Enter your passcode to restore it.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: TalonColors.textDim, height: 1.4),
+            ),
+            const SizedBox(height: 14),
+          ],
           TextField(
             key: LockScreen.passcodeFieldKey,
             controller: _field,
@@ -352,7 +365,11 @@ class _LockScreenState extends State<LockScreen> {
     );
   }
 
-  Widget _resetPanel(String explanation, {bool cancellable = false}) {
+  Widget _resetPanel(
+    String explanation, {
+    bool cancellable = false,
+    Future<void> Function()? onRetry,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -362,6 +379,14 @@ class _LockScreenState extends State<LockScreen> {
           style: TextStyle(color: TalonColors.textDim, height: 1.4),
         ),
         const SizedBox(height: 16),
+        if (onRetry != null) ...[
+          FilledButton(
+            key: LockScreen.retryKey,
+            onPressed: () => unawaited(onRetry()),
+            child: const Text('Try again'),
+          ),
+          const SizedBox(height: 8),
+        ],
         FilledButton(
           key: LockScreen.resetConfirmKey,
           style: FilledButton.styleFrom(backgroundColor: TalonColors.bad),

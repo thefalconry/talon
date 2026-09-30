@@ -44,6 +44,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: apps/node/go.mod
+          # The module has no go.sum and lives under apps/node, so the
+          # default lookup (go.sum at the repo root) found nothing and the
+          # build cache was never restored ("Dependencies file is not
+          # found"). Key on go.mod instead: GOCACHE then carries the
+          # compiled std + packages across the cross-compile matrix.
+          cache-dependency-path: apps/node/go.mod
 
       - name: Format check
         run: test -z "$(gofmt -l .)"

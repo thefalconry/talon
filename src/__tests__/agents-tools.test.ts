@@ -8,7 +8,8 @@
  */
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { agentTools } from "../core/tools/ops/agents.js";
+import type { z } from "zod";
+import { agentTools, preflightTools } from "../core/tools/ops/agents.js";
 import {
   agentContextActions,
   agentHandlers,
@@ -98,7 +99,7 @@ afterEach(() => {
 
 describe("tool → action routing", () => {
   it("routes every tool to the bridge action of the same name", async () => {
-    for (const tool of agentTools) {
+    for (const tool of [...agentTools, ...preflightTools]) {
       const seen: string[] = [];
       await tool.execute({ probe: 1 }, async (action) => {
         seen.push(action);
@@ -109,7 +110,9 @@ describe("tool → action routing", () => {
   });
 
   it("has a gateway handler for every tool, and no orphan handlers", () => {
-    const toolNames = agentTools.map((tool) => tool.name).sort();
+    const toolNames = [...agentTools, ...preflightTools]
+      .map((tool) => tool.name)
+      .sort();
     expect(Object.keys(agentHandlers).sort()).toEqual(toolNames);
     expect([...agentContextActions].sort()).toEqual(toolNames);
     for (const name of toolNames) expect(isAgentContextAction(name)).toBe(true);
@@ -257,6 +260,21 @@ describe("chat-side actions", () => {
       effort: "turbo",
     });
     expect(badEffort.error).toContain("Unknown effort");
+    const badPreflight = await asChat("spawn_agent", {
+      brief: "x",
+      label: "y",
+      preflight: "yes",
+    });
+    expect(badPreflight.error).toBe("preflight must be true or false");
+  });
+
+  it("spawn_agent exposes an optional boolean preflight param", () => {
+    const spawnTool = agentTools.find((tool) => tool.name === "spawn_agent");
+    const param = spawnTool?.schema.preflight as z.ZodType | undefined;
+    expect(param).toBeDefined();
+    expect(param?.safeParse(undefined).success).toBe(true);
+    expect(param?.safeParse(true).success).toBe(true);
+    expect(param?.safeParse("yes").success).toBe(false);
   });
 });
 

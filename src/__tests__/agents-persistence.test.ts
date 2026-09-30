@@ -46,6 +46,8 @@ vi.mock("../core/engine/backend-router/index.js", () => ({
     routed: false,
   })),
   recordBackendRunUsage: vi.fn(),
+  recordBackendRunFailure: vi.fn(),
+  recordBackendRunSuccess: vi.fn(),
   taskClassForEffort: () => undefined,
 }));
 
@@ -135,7 +137,10 @@ const execute = vi.fn(
 );
 
 /** Spawn an agent, let it start, then "restart the daemon" under it. */
-async function spawnAndRestart(sessionId?: string): Promise<string> {
+async function spawnAndRestart(
+  sessionId?: string,
+  opts: { preflight?: boolean } = {},
+): Promise<string> {
   await boot(blockingRun(sessionId), true);
   const outcome = await spawnAgent({
     brief: "port the widget to the new API",
@@ -143,6 +148,7 @@ async function spawnAndRestart(sessionId?: string): Promise<string> {
     parent: CHAT,
     backendId: "codex",
     timeoutMs: 60 * 60 * 1000,
+    ...(opts.preflight ? { preflight: true } : {}),
   });
   if (!outcome.ok) throw new Error(outcome.error);
   const id = outcome.agentId;
@@ -248,6 +254,36 @@ describe("sub-agent persistence", () => {
     expect(params.resumeSessionId).toBeUndefined();
     expect(params.prompt).toContain("port the widget to the new API");
     expect(params.prompt).toContain("RESUMED AFTER A DAEMON RESTART");
+  });
+
+  it("keeps the pre-flight lane when it re-briefs a resumed agent", async () => {
+    const id = await spawnAndRestart("sess-1", { preflight: true });
+    expect(agentsRepo.get(id)?.preflight).toBe(true);
+
+    const rerun = vi.fn<OneShot>(async (p) => {
+      p.onAssistantText?.("done again");
+    });
+    await boot(rerun, false);
+    await resumeAgentsAfterRestart();
+    await agentRegistry.waitForSettle(id, 5_000);
+
+    const params = rerun.mock.calls[0]![0];
+    expect(params.prompt).toContain("RESUMED AFTER A DAEMON RESTART");
+    expect(params.prompt).toContain("npm run preflight");
+  });
+
+  it("does not add the pre-flight lane to a re-brief that never had it", async () => {
+    const id = await spawnAndRestart("sess-1");
+    expect(agentsRepo.get(id)?.preflight).toBeUndefined();
+
+    const rerun = vi.fn<OneShot>(async (p) => {
+      p.onAssistantText?.("done again");
+    });
+    await boot(rerun, false);
+    await resumeAgentsAfterRestart();
+    await agentRegistry.waitForSettle(id, 5_000);
+
+    expect(rerun.mock.calls[0]![0].prompt).not.toContain("npm run preflight");
   });
 
   it("keeps undrained inbox messages across the restart", async () => {

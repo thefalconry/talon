@@ -251,6 +251,13 @@ export interface UsageTelemetry {
    */
   getPlanUsage?(): Promise<PlanUsage | undefined>;
   /**
+   * Why the backend's credential is known to be rejected (e.g. the usage
+   * endpoint returned 401), or `undefined` when nothing says it is.
+   * Synchronous and cheap: it reports what the last `getPlanUsage` saw.
+   * The router treats a backend that reports one as having no headroom.
+   */
+  getAuthFailure?(): string | undefined;
+  /**
    * Banked one-shot limit resets, where the plan has them. Spending one is
    * irreversible, so this is reachable only from a human-pressed confirm
    * button — never exposed as an agent tool.

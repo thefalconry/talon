@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/bridge_models.dart';
+import '../security/app_lock/app_lock_controller.dart';
 import '../services/log.dart';
 import '../services/secure_window.dart';
 import '../services/voice.dart';
@@ -16,8 +17,11 @@ import 'motion.dart';
 import 'app_lock/app_lock_gate.dart';
 import 'settings/app_lock_card.dart';
 import 'settings/appearance_card.dart';
+import 'settings/mesh_audit_section.dart';
 import 'settings/mesh_card.dart';
+import 'settings/notifications_card.dart';
 import 'settings/overview_cards.dart';
+import 'settings/screen_privacy_card.dart';
 import 'settings/settings_widgets.dart';
 import 'settings/updates_card.dart';
 import 'settings/voice_card.dart';
@@ -30,8 +34,8 @@ class SettingsScreen extends StatefulWidget {
   final AppState state;
   const SettingsScreen({super.key, required this.state});
 
-  /// Width at which the ten stacked cards become a chapter rail plus a detail
-  /// pane. Higher than the app shell's 820 on purpose: that breakpoint only
+  /// Width at which the settings home (rows that push chapter pages) becomes
+  /// a chapter rail plus a detail pane. Higher than the app shell's 820 on purpose: that breakpoint only
   /// has to fit a 308px chat list beside a conversation that reads fine at any
   /// width, whereas this route has to fit the rail *and* leave the card column
   /// the ~560 it was tuned for — [_railWidth] 248 + the 24 gutter + 24 of
@@ -94,14 +98,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
   /// sync; a title that no longer exists (Agent, before the config lands) falls
   /// back to the first available chapter at build time rather than through a
   /// setState.
-  String _selectedSection = 'Overview';
+  String _selectedSection = 'Connection';
+
+  /// The installed app lock, read (and subscribed to) in [build].
+  AppLockController? _lock;
+
+  /// Bumped on every [setState], so a pushed chapter page — its own route,
+  /// outside this widget's rebuilds — repaints with this screen.
+  final ValueNotifier<int> _tick = ValueNotifier(0);
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _tick.value++;
+  }
 
   @override
   void initState() {
     super.initState();
-    // Shows the bridge token / pairing details: keep it out of the recents
-    // thumbnail, screenshots and screen recordings (Android).
-    SecureWindow.acquire();
     // Rebuild on AppState changes: the mesh toggles / device list live in
     // AppState + prefs, and mutate via notifyListeners — without this
     // subscription the switches only repainted on a manual refresh.
@@ -111,8 +125,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   void dispose() {
-    SecureWindow.release();
     widget.state.removeListener(_onAppState);
+    _tick.dispose();
     _name.dispose();
     _tz.dispose();
     super.dispose();
@@ -256,7 +270,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          const Divider(height: 12),
           ControlButton(
             icon: Icons.menu_book_outlined,
             label: 'Skills',
@@ -273,28 +287,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Widget _controlsCard() {
+  /// Daemon tools that are safe to run any time.
+  Widget _toolsCard() {
     return SettingsSection(
-      title: 'Controls',
+      title: 'Tools',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ControlButton(
-            icon: Icons.restart_alt,
-            label: 'Restart Talon',
-            subtitle: 'Bounce the daemon — applies pending config changes',
-            pending: _restarting,
-            onTap: _restarting ? null : _confirmRestart,
-          ),
-          const SizedBox(height: 10),
-          ControlButton(
-            icon: Icons.auto_awesome_outlined,
-            label: 'Run dream now',
-            subtitle: 'Consolidate memory + write the diary immediately',
-            pending: _dreaming,
-            onTap: _dreaming ? null : _triggerDream,
-          ),
-          const SizedBox(height: 10),
           ControlButton(
             icon: Icons.receipt_long_outlined,
             label: 'View logs',
@@ -306,13 +305,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ),
+          const Divider(height: 12),
+          ControlButton(
+            icon: Icons.auto_awesome_outlined,
+            label: 'Run dream now',
+            subtitle: 'Consolidate memory + write the diary immediately',
+            pending: _dreaming,
+            onTap: _dreaming ? null : _triggerDream,
+          ),
         ],
       ),
     );
   }
 
+  /// Disruptive actions, last on the page and in red.
+  Widget _dangerCard() {
+    return SettingsSection(
+      title: 'Danger zone',
+      child: ControlButton(
+        icon: Icons.restart_alt,
+        label: 'Restart Talon',
+        subtitle: 'Bounce the daemon — applies pending config changes. '
+            'Every client drops for a few seconds.',
+        pending: _restarting,
+        onTap: _restarting ? null : _confirmRestart,
+        destructive: true,
+      ),
+    );
+  }
+
+  /// Command audit: what the connected Talon ran on this device. Local, so it
+  /// shows with or without a daemon config.
+  Widget _auditCard() => const SettingsSection(
+        title: 'Mesh audit',
+        child: MeshAuditSection(),
+      );
+
   @override
   Widget build(BuildContext context) {
+    // Subscribes this screen to lock changes, so the Security summary on the
+    // home follows the passcode and screenshot switches.
+    _lock = AppLockScope.maybeOf(context);
     // This screen is a pushed route, outside the root's theme rebuild chain —
     // subscribe to palette changes so toggling Appearance repaints in place.
     return ValueListenableBuilder<int>(
@@ -336,211 +369,333 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ],
           ),
-          // Two forms of the same screen. On a phone the single column is
-          // right and stays untouched; on a desktop window it was a ribbon of
-          // cards in a sea of empty space with no way to reach section eight
-          // except scrolling past seven, so past the breakpoint the sections
-          // split into a rail and an independently scrolling pane.
+          // Two forms of the same chapters. A phone gets a settings home —
+          // one row per chapter with a summary of its current value — that
+          // pushes each chapter as its own page; a desktop window gets the
+          // rail and an independently scrolling pane.
           body: LayoutBuilder(
             builder: (context, constraints) =>
                 constraints.maxWidth >= SettingsScreen._railBreakpoint
                     ? _masterDetail()
-                    : Center(
-                        child: SingleChildScrollView(
-                          // Bottom inset: this screen runs under the
-                          // navigation bar like every other phone surface.
-                          padding: EdgeInsets.fromLTRB(
-                              20, 20, 20, 20 + navInset(context)),
-                          child: ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 560),
-                            // Status, Appearance, diagnostics, and connection
-                            // data are already local. Paint them on the first
-                            // frame; only the daemon-backed cards below use a
-                            // loading placeholder.
-                            child: _body(),
-                          ),
-                        ),
-                      ),
+                    : _home(),
           ),
         ),
       ),
     );
   }
 
-  Widget _body() {
-    // Fall back to the cached snapshot so the status card shows instantly on a
-    // cold start, before the fresh fetch lands.
-    final cfg = _cfg ?? widget.state.appConfig;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        StatusCard(state: widget.state, cfg: cfg),
-        const SizedBox(height: 16),
-        AppearanceCard(state: widget.state),
-        const SizedBox(height: 16),
-        if (AppLockScope.maybeOf(context) case final lock?) ...[
-          AppLockCard(controller: lock),
-          const SizedBox(height: 16),
-        ],
-        if (VoiceService.supported) ...[
-          VoiceCard(state: widget.state),
-          const SizedBox(height: 16),
-        ],
-        if (cfg == null && _loading)
-          const SettingsSkeleton()
-        else if (cfg == null)
-          _unavailableCard()
-        else ...[
-          _generalCard(cfg),
-          const SizedBox(height: 16),
-          _backgroundAgentsCard(cfg),
-          const SizedBox(height: 16),
-          if (widget.state.status.hasCapability('plugins-skills')) ...[
-            _extensionsCard(),
-            const SizedBox(height: 16),
-          ],
-          MeshCard(state: widget.state),
-          const SizedBox(height: 16),
-          _controlsCard(),
-        ],
-        const SizedBox(height: 16),
-        DiagnosticsCard(state: widget.state, cfg: cfg),
-        const SizedBox(height: 16),
-        AboutCard(state: widget.state, cfg: cfg),
-        const SizedBox(height: 16),
-        UpdatesCard(state: widget.state),
-        const SizedBox(height: 16),
-        const HelpCard(),
-        const SizedBox(height: 16),
-        ConnectionCard(state: widget.state),
-        const SizedBox(height: 24),
-      ],
-    );
-  }
-
-  /// The rail's chapters.
+  /// The chapters, in order, for both layouts:
   ///
-  /// Three of them, not one per card, and that is the whole point: ten rail
-  /// entries meant nine panes holding a single short card, which traded "a
-  /// narrow ribbon in a sea of empty space" for "a small card in a sea of empty
-  /// space". Grouped this way every pane carries four-ish cards across two
-  /// columns and actually fills the window. The grouping is also the honest one
-  /// — Overview is "is this thing healthy and what is it", Agent is everything
-  /// the daemon owns, This device is the local prefs (theme, voice, and mesh,
-  /// whose switches are all `prefs`-backed and about *this* machine).
+  ///   Connection · Agent │ Mesh & device control · Security · Notifications
+  ///   │ Appearance · Voice │ Updates · Advanced
+  ///
+  /// What you check first (am I connected, to what) leads; what you change
+  /// once (theme) sits in the middle; what you only need when something is
+  /// wrong (diagnostics, logs) and what can hurt (restart) come last. Each
+  /// [SettingsChapter.subtitle] is a one-line summary of the chapter's
+  /// current value, recomputed on every build.
   ///
   /// Each chapter declares its cards as columns rather than a flat list, so the
-  /// two-up split is authored where the content is known instead of guessed
-  /// from measured heights at layout time. Flattened in order, a chapter's
-  /// columns give the same sequence the phone column paints — which is what
-  /// [_detailPane] falls back to when the pane is too narrow to go two-up.
+  /// desktop pane's two-up split is authored where the content is known.
+  /// Flattened in order they give the phone page's running order.
   ///
-  /// Conditionality is unchanged from the single column: Voice only where the
-  /// voice service exists, Mesh and the whole Agent chapter only once a config
-  /// snapshot has landed, Extensions only with the daemon's `plugins-skills`
-  /// capability. Until the snapshot arrives, Overview carries the skeleton (or
-  /// the failure copy) directly under the status card — Overview is the default
-  /// selection, so a cold open still shows the load state in place.
-  List<SettingsChapter> _sections(ConfigSnapshot? cfg) => [
+  /// Agent and Mesh need a config snapshot; Security needs an installed app
+  /// lock; Notifications and Voice need a platform that has them. Until the
+  /// snapshot arrives, Connection carries the skeleton or the failure copy
+  /// under the status card.
+  List<SettingsChapter> _sections(ConfigSnapshot? cfg) {
+    final lock = _lock;
+    final s = widget.state;
+    final prefs = s.prefs;
+    final updates = s.updates;
+    final c = s.config;
+    final where = c.isLoopback ? 'this computer' : c.host;
+    final connected = s.conn == ConnState.connected;
+    final themeLabel = switch (TalonTheme.mode.value) {
+      ThemeMode.system => 'Auto',
+      ThemeMode.light => 'Light',
+      ThemeMode.dark => 'Dark',
+    };
+    final textPct = (TalonTheme.textScale.value * 100).round();
+    return [
+      SettingsChapter(
+        title: 'Connection',
+        subtitle: '${connected ? 'Connected' : 'Disconnected'} · $where',
+        icon: Icons.monitor_heart_outlined,
+        columns: () => [
+          [
+            StatusCard(state: widget.state, cfg: cfg),
+            if (cfg == null && _loading)
+              const SettingsSkeleton()
+            else if (cfg == null)
+              _unavailableCard(),
+          ],
+          [ConnectionCard(state: widget.state)],
+        ],
+      ),
+      if (cfg != null) _agentSection(cfg),
+      if (cfg != null)
         SettingsChapter(
-          title: 'Overview',
-          subtitle: 'Health, version & endpoint',
-          icon: Icons.monitor_heart_outlined,
+          title: 'Mesh & device control',
+          subtitle: !prefs.meshSharing
+              ? 'Off'
+              : 'Location on · control '
+                  '${prefs.meshDeviceControl ? 'on' : 'off'}',
+          icon: Icons.hub_outlined,
+          group: 1,
           columns: () => [
-            [
-              StatusCard(state: widget.state, cfg: cfg),
-              if (cfg == null && _loading)
-                const SettingsSkeleton()
-              else if (cfg == null)
-                _unavailableCard(),
-              DiagnosticsCard(state: widget.state, cfg: cfg),
-            ],
-            [
-              AboutCard(state: widget.state, cfg: cfg),
-              UpdatesCard(state: widget.state),
-              const HelpCard(),
-              ConnectionCard(state: widget.state),
-            ],
+            [MeshCard(state: widget.state)],
           ],
         ),
-        if (cfg != null) _agentSection(cfg),
+      if (lock != null)
         SettingsChapter(
-          title: 'This device',
-          subtitle: 'Theme, voice & mesh sharing',
-          icon: Icons.devices_outlined,
+          title: 'Security',
+          subtitle: [
+            lock.enabled ? 'Passcode on' : 'No passcode',
+            if (SecureWindow.supported)
+              lock.blockScreenshots
+                  ? 'screenshots blocked'
+                  : 'screenshots allowed',
+          ].join(' · '),
+          icon: Icons.shield_outlined,
+          group: 1,
           columns: () => [
-            [
-              AppearanceCard(state: widget.state),
-              if (AppLockScope.maybeOf(context) case final lock?)
-                AppLockCard(controller: lock),
-              if (VoiceService.supported) VoiceCard(state: widget.state)
-            ],
-            [if (cfg != null) MeshCard(state: widget.state)],
+            [AppLockCard(controller: lock)],
+            [ScreenPrivacyCard(controller: lock)],
           ],
         ),
-      ];
+      if (NotificationsCard.supported)
+        SettingsChapter(
+          title: 'Notifications',
+          subtitle: prefs.messageNotifications
+              ? 'Message notifications on'
+              : 'Off',
+          icon: Icons.notifications_none_outlined,
+          group: 1,
+          columns: () => [
+            [NotificationsCard(state: widget.state)],
+          ],
+        ),
+      SettingsChapter(
+        title: 'Appearance',
+        subtitle: '$themeLabel theme · text $textPct%',
+        icon: Icons.palette_outlined,
+        group: 2,
+        columns: () => [
+          [AppearanceCard(state: widget.state)],
+        ],
+      ),
+      if (VoiceService.supported)
+        SettingsChapter(
+          title: 'Voice',
+          subtitle: '${prefs.voiceName == null ? 'System voice' : 'Custom voice'}'
+              ' · hands-free ${prefs.voiceHandsFree ? 'on' : 'off'}',
+          icon: Icons.graphic_eq,
+          group: 2,
+          columns: () => [
+            [VoiceCard(state: widget.state)],
+          ],
+        ),
+      SettingsChapter(
+        title: 'Updates',
+        subtitle: updates.updateAvailable && updates.release != null
+            ? 'v${updates.release!.version} is available'
+            : [
+                if (updates.currentVersion != null)
+                  'v${updates.currentVersion}',
+                updates.autoCheck ? 'checks automatically' : 'auto-check off',
+              ].join(' · ').capitalized,
+        icon: Icons.system_update_alt,
+        group: 3,
+        columns: () => [
+          [UpdatesCard(state: widget.state)],
+        ],
+      ),
+      SettingsChapter(
+        title: 'Advanced',
+        subtitle: 'Diagnostics, logs & audit',
+        versionFooter: true,
+        icon: Icons.tune_outlined,
+        group: 3,
+        columns: () => [
+          [
+            DiagnosticsCard(state: widget.state, cfg: cfg),
+            if (cfg != null) _toolsCard(),
+            _auditCard(),
+          ],
+          [
+            const HelpCard(),
+            AboutCard(state: widget.state, cfg: cfg),
+            if (cfg != null) _dangerCard(),
+          ],
+        ],
+      ),
+    ];
+  }
 
   /// The daemon's own chapter. Split out so [cfg] arrives here already
   /// non-null: the alternative is card closures that lean on a nullable local
   /// staying promoted across a closure boundary, which is a needlessly subtle
   /// thing to depend on.
-  SettingsChapter _agentSection(ConfigSnapshot cfg) => SettingsChapter(
-        title: 'Agent',
-        subtitle: 'Model, background work & tools',
-        icon: Icons.auto_awesome_outlined,
-        columns: () => [
-          [_generalCard(cfg), _backgroundAgentsCard(cfg)],
-          [
-            if (widget.state.status.hasCapability('plugins-skills'))
-              _extensionsCard(),
-            _controlsCard(),
-          ],
+  SettingsChapter _agentSection(ConfigSnapshot cfg) {
+    final background = [
+      if (_eff('pulse', cfg.pulse)) 'pulse',
+      if (_eff('heartbeat', cfg.heartbeat)) 'heartbeat',
+      if (_eff('dream', cfg.dream)) 'dream',
+    ];
+    final model = cfg.modelDisplay.isEmpty ? cfg.model : cfg.modelDisplay;
+    return SettingsChapter(
+      title: 'Agent',
+      subtitle: '$model · '
+          '${background.isEmpty ? 'background agents off' : '${background.join(', ')} on'}',
+      icon: Icons.auto_awesome_outlined,
+      columns: () => [
+        [_generalCard(cfg), _backgroundAgentsCard(cfg)],
+        [
+          if (widget.state.status.hasCapability('plugins-skills'))
+            _extensionsCard(),
         ],
-      );
-
-  Widget _masterDetail() {
-    // Same cached-snapshot fallback as the column: the local cards have to
-    // paint on the first frame, before the config fetch resolves.
-    final cfg = _cfg ?? widget.state.appConfig;
-    final sections = _sections(cfg);
-    // Fall back to the first chapter when the remembered title has gone — a
-    // failed refresh can retire the whole Agent chapter under you.
-    final selected = sections.firstWhere(
-      (s) => s.title == _selectedSection,
-      orElse: () => sections.first,
+      ],
     );
-    return Align(
-      // Top-aligned, not centred: a settings page starts at the top. Centring
-      // is horizontal only, for the case where the window is wider than the
-      // widest composition this screen has any use for.
-      alignment: Alignment.topCenter,
-      child: ConstrainedBox(
-        constraints:
-            const BoxConstraints(maxWidth: SettingsScreen._maxContentWidth),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-              TalonSpace.xl, TalonSpace.sm, TalonSpace.xl, TalonSpace.xl),
-          child: Row(
-            // start, not stretch: stretching gave the rail the window's full
-            // height, which left a few hundred pixels of empty glass below the
-            // last chapter and read as an unfinished panel. Hugging its content
-            // means both columns simply end where their content does.
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: SettingsScreen._railWidth,
-                child: _rail(sections, selected.title),
-              ),
-              const SizedBox(width: TalonSpace.xl),
-              Expanded(child: _detailPane(selected)),
-            ],
-          ),
+  }
+
+  /// The chapter currently named [title], rebuilt from live state — what a
+  /// pushed chapter page paints on every tick. Null once it has gone (a
+  /// failed refresh retires Agent and Mesh).
+  SettingsChapter? _chapterNamed(String title) {
+    if (!mounted) return null;
+    final cfg = _cfg ?? widget.state.appConfig;
+    for (final section in _sections(cfg)) {
+      if (section.title == title) return section;
+    }
+    return null;
+  }
+
+  void _openChapter(String title) {
+    final lock = _lock;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _ChapterPage(
+          title: title,
+          state: widget.state,
+          listenable: Listenable.merge([
+            _tick,
+            widget.state,
+            widget.state.updates,
+            if (lock != null) lock,
+          ]),
+          resolve: () => _chapterNamed(title),
         ),
       ),
     );
   }
 
-  /// The chapter rail: a compact glass panel echoing the chat sidebar's.
+  /// The phone's settings home: the chapters as grouped rows, each with a
+  /// one-line summary of its current value, then the version footer.
+  Widget _home() {
+    final cfg = _cfg ?? widget.state.appConfig;
+    return ListenableBuilder(
+      // Update checks land outside AppState; keep the Updates summary live.
+      listenable: widget.state.updates,
+      builder: (context, _) {
+        final groups = <List<SettingsChapter>>[];
+        int? last;
+        for (final section in _sections(cfg)) {
+          if (section.group != last) groups.add([]);
+          groups.last.add(section);
+          last = section.group;
+        }
+        return Align(
+          alignment: Alignment.topCenter,
+          child: SingleChildScrollView(
+            // Bottom inset: this screen runs under the navigation bar like
+            // every other phone surface.
+            padding: EdgeInsets.fromLTRB(
+                16, 12, 16, 20 + navInset(context)),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final (i, group) in groups.indexed) ...[
+                    if (i > 0) const SizedBox(height: TalonSpace.lg),
+                    SettingsNavGroup(
+                      rows: [
+                        for (final section in group)
+                          SettingsNavRow(
+                            key: ValueKey('settings-row-${section.title}'),
+                            icon: section.icon,
+                            title: section.title,
+                            summary: section.subtitle,
+                            onTap: () => _openChapter(section.title),
+                          ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: TalonSpace.sm),
+                  VersionFooter(state: widget.state),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _masterDetail() {
+    // Same cached-snapshot fallback as the home: the local cards have to
+    // paint on the first frame, before the config fetch resolves.
+    final cfg = _cfg ?? widget.state.appConfig;
+    return ListenableBuilder(
+      listenable: widget.state.updates,
+      builder: (context, _) {
+        final sections = _sections(cfg);
+        // Fall back to the first chapter when the remembered title has gone —
+        // a failed refresh can retire the whole Agent chapter under you.
+        final selected = sections.firstWhere(
+          (s) => s.title == _selectedSection,
+          orElse: () => sections.first,
+        );
+        return Align(
+          // Top-aligned, not centred: a settings page starts at the top.
+          // Centring is horizontal only, for the case where the window is
+          // wider than the widest composition this screen has any use for.
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+                maxWidth: SettingsScreen._maxContentWidth),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  TalonSpace.xl, TalonSpace.sm, TalonSpace.xl, TalonSpace.xl),
+              child: Row(
+                // start, not stretch: both columns end where their content
+                // does instead of the rail trailing empty glass.
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: SettingsScreen._railWidth,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Flexible(child: _rail(sections, selected.title)),
+                        VersionFooter(state: widget.state),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: TalonSpace.xl),
+                  Expanded(child: _detailPane(selected)),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// The chapter rail: a compact glass panel echoing the chat sidebar's, the
+  /// same chapters and groups as the phone home.
   ///
   /// The list is [Flexible] around a shrink-wrapping [ListView] rather than
   /// [Expanded]: that way the panel is exactly as tall as its chapters, but a
@@ -559,14 +714,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Padding(
             padding: const EdgeInsets.only(
                 left: TalonSpace.sm, bottom: TalonSpace.sm),
-            child: Text('SECTIONS', style: TalonType.eyebrow),
+            child: Text('SETTINGS', style: TalonType.eyebrow),
           ),
           Flexible(
             child: ListView(
               padding: EdgeInsets.zero,
               shrinkWrap: true,
               children: [
-                for (final (i, section) in sections.indexed)
+                for (final (i, section) in sections.indexed) ...[
+                  // A hairline between the home's groups.
+                  if (i > 0 && section.group != sections[i - 1].group)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: TalonSpace.sm, vertical: TalonSpace.xs),
+                      child: Divider(
+                        height: 1,
+                        thickness: 1,
+                        color: TalonColors.glassStroke,
+                      ),
+                    ),
                   // Keyed by title so the entrance plays once per tile and the
                   // frequent AppState-driven rebuilds of this screen never
                   // restart the cascade mid-flight.
@@ -585,6 +751,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                     ),
                   ),
+                ],
               ],
             ),
           ),
@@ -598,10 +765,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ///
   /// Two columns once the pane can afford them, one otherwise — and the
   /// one-column form flattens the chapter's columns in order, so it reads as
-  /// the same running order as the phone. Empty columns are dropped first:
-  /// This device's second column is just the Mesh card, which doesn't exist
-  /// until the daemon answers, and an empty column would otherwise reserve half
-  /// the pane for nothing.
+  /// the same running order as the phone page. Empty columns are dropped
+  /// first, so a missing card never reserves half the pane for nothing.
   Widget _detailPane(SettingsChapter section) {
     final columns = [
       for (final column in section.columns())
@@ -628,7 +793,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       for (final (i, column) in columns.indexed) ...[
                         if (i > 0) const SizedBox(width: TalonSpace.xl),
-                        Expanded(child: _cardStack(column)),
+                        Expanded(child: settingsCardStack(column)),
                       ],
                     ],
                   )
@@ -641,7 +806,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(
                           maxWidth: SettingsScreen._maxCardWidth),
-                      child: _cardStack(
+                      child: settingsCardStack(
                         [for (final column in columns) ...column],
                       ),
                     ),
@@ -651,16 +816,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       },
     );
   }
-
-  Widget _cardStack(List<Widget> cards) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final (i, card) in cards.indexed) ...[
-            if (i > 0) const SizedBox(height: TalonSpace.lg),
-            card,
-          ],
-        ],
-      );
 
   /// Shown in place of the daemon-backed cards when the config fetch failed.
   /// Carries whatever [AppLog.diagnose] can infer from the error plus a
@@ -807,4 +962,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
     );
   }
+}
+
+/// A chapter's cards stacked with the section gap.
+Widget settingsCardStack(List<Widget> cards) => Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final (i, card) in cards.indexed) ...[
+          if (i > 0) const SizedBox(height: TalonSpace.lg),
+          card,
+        ],
+      ],
+    );
+
+/// One chapter as its own phone page, pushed from the settings home.
+///
+/// The cards are built by the settings screen's state (which owns the config
+/// snapshot, the optimistic updates and the text controllers), so the page
+/// re-resolves its chapter from [resolve] whenever [listenable] ticks —
+/// that screen's setState, AppState, updates and the lock — rather than
+/// holding a stale copy.
+class _ChapterPage extends StatelessWidget {
+  final String title;
+  final AppState state;
+  final Listenable listenable;
+  final SettingsChapter? Function() resolve;
+
+  const _ChapterPage({
+    required this.title,
+    required this.state,
+    required this.listenable,
+    required this.resolve,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: TalonTheme.revision,
+      builder: (context, _, __) => TalonBackdrop(
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            title: Text(title),
+          ),
+          body: ListenableBuilder(
+            listenable: listenable,
+            builder: (context, _) {
+              final chapter = resolve();
+              if (chapter == null) {
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(TalonSpace.xl),
+                    child: Text(
+                      'This section isn’t available right now — '
+                      'check the connection and refresh Settings.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: TalonColors.textDim),
+                    ),
+                  ),
+                );
+              }
+              return Align(
+                alignment: Alignment.topCenter,
+                child: SingleChildScrollView(
+                  key: ValueKey('settings-page-$title'),
+                  padding: EdgeInsets.fromLTRB(
+                      16, 8, 16, 20 + navInset(context)),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 560),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        settingsCardStack(
+                          [for (final column in chapter.columns()) ...column],
+                        ),
+                        if (chapter.versionFooter) ...[
+                          const SizedBox(height: TalonSpace.sm),
+                          VersionFooter(state: state),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+extension on String {
+  /// Summaries are joined from lower-case parts; the row starts upper-case.
+  String get capitalized =>
+      isEmpty ? this : '${this[0].toUpperCase()}${substring(1)}';
 }

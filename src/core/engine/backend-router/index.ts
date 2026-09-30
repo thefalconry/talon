@@ -21,6 +21,17 @@ export {
   LEDGER_SHORT_WINDOW_MS,
 } from "./ledger.js";
 export {
+  isAuthFailureMessage,
+  openBreaker,
+  recordBackendRunFailure,
+  recordBackendRunSuccess,
+  resetBackendBreakersForTest,
+  BREAKER_BASE_COOLOFF_MS,
+  BREAKER_FAILURE_THRESHOLD,
+  BREAKER_MAX_COOLOFF_MS,
+  type OpenBreaker,
+} from "./breaker.js";
+export {
   collectBackendHeadroom,
   formatHeadroom,
   getBackendHeadroom,

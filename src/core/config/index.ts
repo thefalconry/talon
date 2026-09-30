@@ -318,6 +318,80 @@ const whatsappConfigSchema = z
   })
   .strict();
 
+/** `fetch` — the fetch ladder behind `fetch_url` (docs/fetch-ladder.md). */
+export const fetchConfigSchema = z
+  .object({
+    /** Browser-TLS impersonation via curl-impersonate (default true). */
+    impersonate: z.boolean().default(true),
+    /** curl-impersonate profiles for the direct rung, tried in order. */
+    impersonateTargets: z
+      .array(
+        z
+          .string()
+          .regex(
+            /^[a-z0-9_]+$/,
+            "a curl-impersonate target name, e.g. safari184",
+          ),
+      )
+      .min(1)
+      .optional(),
+    /** Use this curl-impersonate binary instead of the first-use download. */
+    curlImpersonatePath: z.string().trim().min(1).optional(),
+    /**
+     * SOCKS exits for the impersonation rung, e.g.
+     * "socks5h://socks-nl1.nordvpn.com:1080". Credentials are never
+     * accepted here: they come from TALON_FETCH_SOCKS_USER /
+     * TALON_FETCH_SOCKS_PASS or `socksCredentialsFile` (one line,
+     * "user:pass").
+     */
+    socksExits: z
+      .array(
+        z
+          .string()
+          .trim()
+          .refine((value) => {
+            try {
+              return /^socks(4a?|5h?):$/.test(new URL(value).protocol);
+            } catch {
+              return false;
+            }
+          }, "must be a socks5h://, socks5://, socks4a:// or socks4:// URL")
+          .refine((value) => {
+            try {
+              const u = new URL(value);
+              return !u.username && !u.password;
+            } catch {
+              return true;
+            }
+          }, "must not contain credentials — set TALON_FETCH_SOCKS_USER/TALON_FETCH_SOCKS_PASS or fetch.socksCredentialsFile"),
+      )
+      .default([]),
+    socksCredentialsFile: z.string().trim().min(1).optional(),
+    /**
+     * Anti-detect browser rung: connect to the Camoufox/Playwright server
+     * at `browserEndpoint` (default: the playwright plugin's endpoint).
+     */
+    camoufox: z.boolean().default(false),
+    browserEndpoint: z.string().trim().min(1).optional(),
+    /**
+     * Last resort: run curl on this mesh device (id or name). Off unless
+     * set — the device's owner pays for the traffic and the IP.
+     */
+    egressDevice: z.string().trim().min(1).optional(),
+    /**
+     * Daily cap (bytes) on traffic through relayed rungs (SOCKS exits and
+     * the egress device). 0 disables those rungs. Direct rungs are
+     * uncapped. The counter is in-memory and resets at UTC midnight and
+     * on restart.
+     */
+    dailyByteCap: z
+      .number()
+      .int()
+      .min(0)
+      .default(100 * 1024 * 1024),
+  })
+  .strict();
+
 const playwrightConfigSchema = z.object({
   enabled: z.boolean().default(false),
   /** Browser engine: chromium (default), chrome, firefox, webkit, msedge */
@@ -690,6 +764,14 @@ const configSchema = z.object({
     .object({ allowPrivateNetworks: z.boolean().default(true) })
     .strict()
     .optional(),
+  /**
+   * The fetch ladder behind `fetch_url` (docs/fetch-ladder.md): when a page
+   * answers with a bot wall it retries through browser-TLS impersonation,
+   * SOCKS exits, a plain fetch, an anti-detect browser and — only if set —
+   * a mesh device, in that order. Everything but impersonation is off
+   * until configured.
+   */
+  fetch: fetchConfigSchema.optional(),
   /**
    * Codex-specific OpenAI API key. Prefer this, CODEX_API_KEY, or
    * TALON_CODEX_KEY when the Codex backend should use API-key billing

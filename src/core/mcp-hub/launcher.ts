@@ -1,10 +1,18 @@
 /**
  * MCP supervisor — one universal launch method for every install type.
  *
- * Every MCP stdio server Talon hands to a backend SDK is wrapped
- * through a supervisor process that proxies stdio, filters non-JSON
+ * The per-child supervisor process proxies stdio, filters non-JSON
  * stdout lines, and kills the child when Talon dies — no orphans, no
  * /proc scan, no per-plugin signature list.
+ *
+ * The hub no longer runs one per MCP child by default: it spawns
+ * children itself, filters stdout in-process (child-transport.ts, same
+ * parseJsonRpcLine rule) and guards them with ONE reaper process per
+ * daemon (child-guard.ts / reaper.ts, same stdin-EOF + BridgeWatchdog +
+ * SIGTERM→SIGKILL semantics as below). Wrapping a child in this
+ * supervisor is the fallback when the reaper can't run, or when
+ * `TALON_MCP_SUPERVISOR=per-child` asks for it. `selfInvocation` below
+ * is how both helpers are launched.
  *
  * The supervisor is Talon itself: `wrapMcpServer()` re-invokes the
  * current process (`process.execPath` + `process.execArgv` + entry
@@ -28,8 +36,8 @@
  *   }
  *
  * src/index.ts and src/cli.ts are the two real entrypoints; both
- * dispatch. index.ts additionally defers the whole app graph behind a
- * dynamic import so supervisor processes stay light.
+ * dispatch (the reaper's `_mcp-reaper` too), each helper behind its own
+ * dynamic import so helper processes load only their own module.
  *
  * Child-shutdown signals (both terminate the child with SIGTERM, then
  * SIGKILL after a grace period):
@@ -107,7 +115,8 @@ function isEmbeddedEntry(entry: string): boolean {
  * The command prefix that re-invokes the current Talon process with a
  * hidden subcommand, in every install shape (tsx source run, bun source
  * run, bun-compiled binary, npm install). Used for MCP supervision
- * (`_mcp-launch`) and the WASM Lua trigger runner (`_lua-run`) — any
+ * (`_mcp-launch`, `_mcp-reaper`) and the WASM Lua trigger runner
+ * (`_lua-run`) — any
  * subcommand passed here must be dispatched by src/index.ts and
  * src/cli.ts before the app graph loads.
  */
@@ -275,6 +284,63 @@ export class BridgeWatchdog {
   }
 }
 
+/** Tag prefixed to child stdout lines that were re-routed to stderr. */
+export const STDOUT_REROUTE_TAG = "[mcp-launcher: stdout→stderr] ";
+
+/**
+ * Parse one line of MCP child stdout under the stdio filter rule: a
+ * JSON-RPC line must be a JSON OBJECT (starts with `{`, parses). Returns
+ * the parsed value, or null for anything else — banners, log lines,
+ * `[timestamp] [INFO] …`, a stray `{ tip: "…" }` that isn't JSON. Both
+ * the per-child supervisor and the hub's in-process transport use this,
+ * so the two filtering paths cannot drift apart.
+ */
+export function parseJsonRpcLine(line: string): object | null {
+  const s = line.trimStart();
+  if (s.length === 0 || s[0] !== "{") return null;
+  try {
+    const parsed: unknown = JSON.parse(s);
+    return typeof parsed === "object" && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run the bridge-health watchdog: ping `${bridgeUrl}/health` every
+ * BRIDGE_PING_INTERVAL_MS (first tick staggered randomly), and call
+ * `onTrip` once BridgeWatchdog says the daemon is gone. `isStopping`
+ * short-circuits ticks after shutdown began. Shared by the per-child
+ * supervisor and the hub's reaper so both keep identical semantics.
+ */
+export function startBridgeWatchdog(
+  bridgeUrl: string,
+  isStopping: () => boolean,
+  onTrip: (outcome: BridgePingOutcome, downForSec: number) => void,
+): void {
+  const watchdog = new BridgeWatchdog();
+  const tick = async (): Promise<void> => {
+    if (isStopping()) return;
+    const outcome = await pingBridge(bridgeUrl);
+    if (isStopping()) return;
+    if (watchdog.record(outcome)) {
+      onTrip(
+        outcome,
+        watchdog.consecutiveFailures * (BRIDGE_PING_INTERVAL_MS / 1000),
+      );
+    }
+  };
+  // Stagger first tick so a process-wide restart doesn't have every
+  // watchdog pinging the bridge in lockstep.
+  const initialDelay = Math.floor(Math.random() * BRIDGE_PING_INTERVAL_MS);
+  const startTimer = setTimeout(() => {
+    void tick();
+    const interval = setInterval(() => void tick(), BRIDGE_PING_INTERVAL_MS);
+    interval.unref?.();
+  }, initialDelay);
+  startTimer.unref?.();
+}
+
 /**
  * Run the supervisor over `argvTail` = [cmd, ...args].
  *
@@ -331,16 +397,7 @@ export function runSupervisor(argvTail: string[]): Promise<never> {
   // `[ISO-timestamp] [INFO] …`). Restrict to `{` and verify it's
   // parseable JSON before forwarding, so a stray `{ tip: "..." }`
   // shell-style line that isn't valid JSON still goes to stderr.
-  const looksJson = (line: string): boolean => {
-    const s = line.trimStart();
-    if (s.length === 0 || s[0] !== "{") return false;
-    try {
-      JSON.parse(s);
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const looksJson = (line: string): boolean => parseJsonRpcLine(line) !== null;
   let buf = "";
   child.stdout.setEncoding("utf-8");
   child.stdout.on("data", (chunk: string) => {
@@ -352,7 +409,7 @@ export function runSupervisor(argvTail: string[]): Promise<never> {
       if (looksJson(line)) {
         process.stdout.write(line);
       } else if (line.trim().length > 0) {
-        process.stderr.write(`[mcp-launcher: stdout→stderr] ${line}`);
+        process.stderr.write(`${STDOUT_REROUTE_TAG}${line}`);
       }
     }
   });
@@ -361,7 +418,7 @@ export function runSupervisor(argvTail: string[]): Promise<never> {
     if (looksJson(buf)) {
       process.stdout.write(buf);
     } else {
-      process.stderr.write(`[mcp-launcher: stdout→stderr] ${buf}`);
+      process.stderr.write(`${STDOUT_REROUTE_TAG}${buf}`);
     }
     buf = "";
   });
@@ -416,33 +473,20 @@ export function runSupervisor(argvTail: string[]): Promise<never> {
   // (every Talon-spawned MCP server has it; ad-hoc supervisor uses
   // without the env var keep the stdin-EOF-only behavior).
   if (BRIDGE_URL) {
-    const watchdog = new BridgeWatchdog();
-    const tick = async (): Promise<void> => {
-      if (terminating) return;
-      const outcome = await pingBridge(BRIDGE_URL);
-      if (terminating) return;
-      if (watchdog.record(outcome)) {
+    startBridgeWatchdog(
+      BRIDGE_URL,
+      () => terminating,
+      (outcome, downForSec) => {
         // Talon's gateway is gone (or wedged for minutes). The MCP child
         // has nothing useful to serve — bridge calls would 404 against a
         // dead port — so shut down. Kilo/OpenCode notice the stdio close
         // on the next interaction and drop the registration on their side.
         process.stderr.write(
-          `mcp-launcher: bridge ${BRIDGE_URL} ${outcome} for ${
-            watchdog.consecutiveFailures * (BRIDGE_PING_INTERVAL_MS / 1000)
-          }s; shutting down child\n`,
+          `mcp-launcher: bridge ${BRIDGE_URL} ${outcome} for ${downForSec}s; shutting down child\n`,
         );
         terminate(0);
-      }
-    };
-    // Stagger first tick so a process-wide restart doesn't have every
-    // supervisor pinging the bridge in lockstep.
-    const initialDelay = Math.floor(Math.random() * BRIDGE_PING_INTERVAL_MS);
-    const startTimer = setTimeout(() => {
-      void tick();
-      const interval = setInterval(() => void tick(), BRIDGE_PING_INTERVAL_MS);
-      interval.unref?.();
-    }, initialDelay);
-    startTimer.unref?.();
+      },
+    );
   }
 
   // The child + stdin pipe keep the event loop alive; exit happens via

@@ -50,11 +50,38 @@ export function buildAgentSystemPrompt(args: {
   });
 }
 
+/**
+ * The standing pre-flight instruction appended to a PR-opening agent's
+ * brief: run the light CI suite locally, push only on green. GitHub then
+ * confirms a change instead of being the first compiler it meets.
+ */
+const PREFLIGHT_INSTRUCTION =
+  "[Pre-flight lane] Before every `git push`, run `npm run preflight` in " +
+  "the repo (or call the run_preflight tool with cwd set to your checkout). " +
+  "Push only when it is green. If it is red, fix it — or, when a failure " +
+  "is genuinely out of scope, say in the PR body which step failed and why " +
+  "you pushed anyway.";
+
+/** A brief that opens, updates or talks about a pull request. */
+const PR_BRIEF = /\bPRs?\b|pull[ -]requests?/i;
+
+/**
+ * Whether a spawn gets the pre-flight instruction: the caller's explicit
+ * choice when given, otherwise on for any brief that mentions a PR.
+ */
+export function wantsPreflight(brief: string, explicit?: boolean): boolean {
+  return explicit ?? PR_BRIEF.test(brief);
+}
+
 /** The activation prompt — the brief, framed as the job to start on. */
-export function buildAgentPrompt(brief: string): string {
+export function buildAgentPrompt(
+  brief: string,
+  options: { preflight?: boolean } = {},
+): string {
+  const lane = options.preflight ? `\n\n${PREFLIGHT_INSTRUCTION}` : "";
   return (
     `[System: AGENT BRIEF. Work this to a conclusion, then call ` +
-    `report_result exactly once.]\n\n${brief}`
+    `report_result exactly once.]\n\n${brief}${lane}`
   );
 }
 
@@ -93,6 +120,8 @@ export function buildResumePrompt(args: {
  */
 export function buildRebriefPrompt(args: {
   brief: string;
+  /** Re-append the pre-flight lane instruction the original spawn carried. */
+  preflight?: boolean;
   interruptedAt: number;
   elapsedMinutes: number;
   logPath: string;
@@ -104,7 +133,7 @@ export function buildRebriefPrompt(args: {
       `</previous-run-log>`
     : `\n\n(The previous attempt's run log is at ${args.logPath}.)`;
   return (
-    `${buildAgentPrompt(args.brief)}\n\n` +
+    `${buildAgentPrompt(args.brief, { preflight: args.preflight === true })}\n\n` +
     `[System: RESUMED AFTER A DAEMON RESTART. You already worked on this ` +
     `brief for about ${args.elapsedMinutes} min before a daemon restart ` +
     `interrupted you at ${stamp(args.interruptedAt)}; this backend could not ` +

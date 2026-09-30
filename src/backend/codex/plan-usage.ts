@@ -173,6 +173,18 @@ async function load(): Promise<PlanUsage | undefined> {
 }
 
 /**
+ * Why the Codex login is known to be rejected, or `undefined`. Set by a 401
+ * from the usage endpoint and cleared once `codex login` rewrites
+ * auth.json (seen on the next {@link getPlanUsage} refresh). The router
+ * reads it to stop sending work to a backend whose runs can only fail.
+ */
+export function getAuthFailure(): string | undefined {
+  return rejectedAuthMtimeMs === undefined
+    ? undefined
+    : "Codex login expired (usage endpoint returned 401) — run `codex login`";
+}
+
+/**
  * Plan windows for `/usage`, cached for a minute. A failed refresh keeps
  * serving the last known values — `fetchedAt` lets the caller age them.
  */

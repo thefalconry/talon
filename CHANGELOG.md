@@ -1,5 +1,45 @@
 # Changelog
 
+## [5.25.1](https://github.com/thefalconry/talon/compare/v5.25.0...v5.25.1) (2026-09-30)
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump axios from 1.18.1 to 1.20.0 ([#1192](https://github.com/thefalconry/talon/issues/1192)) ([5d28b15](https://github.com/thefalconry/talon/commit/5d28b15b459fdaa8afb2c18051908adde01b5d05))
+
+
+### Continuous Integration
+
+* gradle + go build caches, cached gleam toolchain, daemon tarball artifact on main ([#1186](https://github.com/thefalconry/talon/issues/1186)) ([f29c7aa](https://github.com/thefalconry/talon/commit/f29c7aae1dcdc977fc7525498bd2c9acdaebd667))
+
+## [5.25.0](https://github.com/thefalconry/talon/compare/v5.24.1...v5.25.0) (2026-09-30)
+
+
+### Features
+
+* **agents:** pre-flight lane — run the light CI suite before every push ([#1187](https://github.com/thefalconry/talon/issues/1187)) ([ed828a5](https://github.com/thefalconry/talon/commit/ed828a5d30fa22f377d2d19dac6183ce5d3fdd22))
+* **companion:** settings sub-pages and a screenshot-blocking setting ([#1185](https://github.com/thefalconry/talon/issues/1185)) ([7357aa9](https://github.com/thefalconry/talon/commit/7357aa960d64d353c9fd32da86854a97733d4e6d))
+
+
+### Continuous Integration
+
+* no macOS/Windows legs on pull requests in companion + native-provision ([#1189](https://github.com/thefalconry/talon/issues/1189)) ([2285fcb](https://github.com/thefalconry/talon/commit/2285fcb91ddb54ace736688c54a4e3bdcd61d57f))
+* test-impact analysis — run only affected unit tests on PRs ([#1188](https://github.com/thefalconry/talon/issues/1188)) ([4e72187](https://github.com/thefalconry/talon/commit/4e72187f2fe743610905eab090f51d35ab8d6ff5))
+
+## [5.24.1](https://github.com/thefalconry/talon/compare/v5.24.0...v5.24.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **companion:** back off failed mesh registrations and surface Android's dataSync time limit ([#1166](https://github.com/thefalconry/talon/issues/1166)) ([4e19584](https://github.com/thefalconry/talon/commit/4e19584039f2a80292de62bb6ce24f80632a964c))
+* **companion:** detect a half-open event stream and reconnect on network change and resume ([#1163](https://github.com/thefalconry/talon/issues/1163)) ([1f540ae](https://github.com/thefalconry/talon/commit/1f540aef90e45f93ade7018f65ca55ddee879c4c))
+* **companion:** give dropdown text the palette colour ([#1158](https://github.com/thefalconry/talon/issues/1158)) ([fef46cb](https://github.com/thefalconry/talon/commit/fef46cbe58b25cf53187eb22b7b7b129ed987a0c))
+* **companion:** macOS launch exception, location strings, talon:// pairing ([#1160](https://github.com/thefalconry/talon/issues/1160)) ([2cd6e6a](https://github.com/thefalconry/talon/commit/2cd6e6a1e029cd4c1fd2180f6ed65f6bcba63f48))
+* **companion:** stable macOS signing, and recover an unreadable app-lock keychain item with the passcode ([#1157](https://github.com/thefalconry/talon/issues/1157)) ([a38bed9](https://github.com/thefalconry/talon/commit/a38bed9f67663bea6db519341bac4be2ab54224e))
+* **cron:** retire capped jobs after a failed run and honour a per-job timeout ([#1161](https://github.com/thefalconry/talon/issues/1161)) ([e66e746](https://github.com/thefalconry/talon/commit/e66e746a3aaa8d9ebc2929b100ebb561265f78e9))
+* **notify:** queue admin alerts raised before a notifier is wired ([#1167](https://github.com/thefalconry/talon/issues/1167)) ([f85b782](https://github.com/thefalconry/talon/commit/f85b782c8706d5e6faf5e828851c5329708f372f))
+* **telegram:** cap media captions at 1024 chars and send overflow as text ([#1159](https://github.com/thefalconry/talon/issues/1159)) ([77e1c08](https://github.com/thefalconry/talon/commit/77e1c0865ea2fc3b9d109b749801587e3d078c6f))
+
 ## [5.24.0](https://github.com/thefalconry/talon/compare/v5.23.1...v5.24.0) (2026-09-30)
 
 

@@ -45,6 +45,8 @@ export type PersistedAgent = {
   elapsedMs: number;
   resumeCount: number;
   interruptedAt?: number;
+  /** The spawn asked for the pre-flight lane instruction. */
+  preflight?: boolean;
 };
 
 type Row = {
@@ -75,6 +77,7 @@ type Row = {
   elapsed_ms: number;
   resume_count: number;
   interrupted_at: number | null;
+  preflight: number;
 };
 
 function parseInbox(raw: string): PersistedAgentMessage[] {
@@ -125,6 +128,7 @@ function rowToAgent(row: Row): PersistedAgent {
   if (row.result_details !== null) agent.resultDetails = row.result_details;
   if (row.error !== null) agent.error = row.error;
   if (row.interrupted_at !== null) agent.interruptedAt = row.interrupted_at;
+  if (row.preflight === 1) agent.preflight = true;
   return agent;
 }
 
@@ -159,6 +163,7 @@ export function upsert(a: PersistedAgent): void {
       a.elapsedMs,
       a.resumeCount,
       a.interruptedAt ?? null,
+      a.preflight ? 1 : 0,
     );
 }
 

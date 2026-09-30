@@ -43,7 +43,7 @@ import {
 const DEFAULT_FILE = resolve(dirs.root, "mesh-credentials.json");
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A pairing link or installer that is never used stops being a credential. */
-const UNBOUND_TTL_MS = 7 * DAY_MS;
+export const UNBOUND_TTL_MS = 7 * DAY_MS;
 /** How long a device has to pick up a requested rotation before it expires. */
 const ROTATION_GRACE_MS = 7 * DAY_MS;
 /** Revoked rows are kept this long for `talon mesh` / audit, then pruned. */

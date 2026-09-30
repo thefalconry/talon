@@ -59,6 +59,10 @@ class _ChatViewState extends State<ChatView> {
   /// drop target wrapping the whole pane can stage into the same list.
   final _attachments = ComposerAttachments();
 
+  /// The composer's field, owned here so Reply can quote a message into it.
+  final _composerText = TextEditingController();
+  final _composerFocus = FocusNode();
+
   /// True while a drag is hovering the chat, for the drop overlay.
   bool _dragging = false;
 
@@ -110,6 +114,8 @@ class _ChatViewState extends State<ChatView> {
   void dispose() {
     _followedTurn?.removeListener(_onTurnTick);
     _attachments.dispose();
+    _composerText.dispose();
+    _composerFocus.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -217,10 +223,49 @@ class _ChatViewState extends State<ChatView> {
 
   /// Whether [a] (earlier) and [b] (later) belong to the same visual run:
   /// same author, close together in time.
+  ///
+  /// Assistant runs get a wider window than user ones: a model delivering
+  /// progress messages mid-turn (send_message) can spend minutes in tools
+  /// between them, and those messages are still one reply to the reader.
   static bool _grouped(ClientMessage? a, ClientMessage? b) {
     if (a == null || b == null) return false;
-    return a.role == b.role &&
-        b.time.difference(a.time).abs() < const Duration(minutes: 3);
+    if (a.role != b.role || a.role == Role.system) return false;
+    final window = a.role == Role.assistant
+        ? const Duration(minutes: 10)
+        : const Duration(minutes: 3);
+    return b.time.difference(a.time).abs() < window;
+  }
+
+  /// The text of the assistant run ending at row [end], oldest first — what
+  /// the run's single Copy button puts on the clipboard.
+  String _runText(List<Object> rows, int end) {
+    final parts = <String>[];
+    var i = end;
+    while (i >= 0 && rows[i] is ClientMessage) {
+      final m = rows[i] as ClientMessage;
+      if (m.text.isNotEmpty) parts.add(m.text);
+      final prev = i > 0 && rows[i - 1] is ClientMessage
+          ? rows[i - 1] as ClientMessage
+          : null;
+      if (!_grouped(prev, m)) break;
+      i--;
+    }
+    return parts.reversed.join('\n\n');
+  }
+
+  /// Reply: quote [m] at the top of the composer (keeping anything already
+  /// typed below it) and put the cursor at the end.
+  void _reply(ClientMessage m) {
+    var text = m.text.trim();
+    if (text.length > 280) text = '${text.substring(0, 280).trimRight()}…';
+    final quote = text.split('\n').map((l) => '> $l').join('\n');
+    final existing = _composerText.text.trim();
+    final next = existing.isEmpty ? '$quote\n\n' : '$quote\n\n$existing';
+    _composerText.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+    _composerFocus.requestFocus();
   }
 
   /// A row animates in only the first time we see it AND when it's genuinely
@@ -351,6 +396,8 @@ class _ChatViewState extends State<ChatView> {
                               .sendMessage(text, attachments: attachments);
                         },
                         attachments: _attachments,
+                        controller: _composerText,
+                        focusNode: _composerFocus,
                         enabled: widget.state.conn == ConnState.connected,
                         running: widget.state.isTurnRunning(chat.id),
                         onStop: () => widget.state.interruptTurn(chat.id),
@@ -466,6 +513,13 @@ class _ChatViewState extends State<ChatView> {
     }
 
     final rows = _rowsFor(chatId, msgs);
+    // A live turn that follows the model's own mid-turn messages is the same
+    // reply still being written: it joins their run (no second avatar/name,
+    // no "Talon · Working" card) instead of starting a new one.
+    final lastRow = rows.isEmpty ? null : rows.last;
+    final liveJoinsRun = showActivity &&
+        lastRow is ClientMessage &&
+        lastRow.role == Role.assistant;
 
     final topLoader = widget.state.isLoadingOlder(chatId);
     final itemCount =
@@ -522,14 +576,27 @@ class _ChatViewState extends State<ChatView> {
                       mi + 1 < rows.length && rows[mi + 1] is ClientMessage
                           ? rows[mi + 1] as ClientMessage
                           : null;
+                  final assistant = m.role == Role.assistant;
+                  // Another row of this assistant run follows: a later
+                  // message, or (for the newest row) the live turn.
+                  final continues = assistant &&
+                      (next != null
+                          ? _grouped(m, next)
+                          : mi == rows.length - 1 && liveJoinsRun);
+                  final runStart = assistant && !_grouped(prev, m);
                   return MessageBubble(
                     key: ValueKey<Object>(_rowKey(m)),
                     message: m,
                     botName: widget.state.status.botName,
                     animateIn: _shouldAnimate(m),
-                    showHeader:
-                        !(m.role == Role.assistant && _grouped(prev, m)),
+                    showHeader: !(assistant && _grouped(prev, m)),
                     showTime: !(m.role == Role.user && _grouped(m, next)),
+                    showFooter: !continues,
+                    continues: continues,
+                    copyText: assistant && !continues && !runStart
+                        ? _runText(rows, mi)
+                        : null,
+                    onReply: _reply,
                     // activeConfig, not config: in local auto-discover mode the
                     // saved config lacks the bridge's real port/token, and media
                     // fetched through it 404s or gets rejected.
@@ -542,7 +609,10 @@ class _ChatViewState extends State<ChatView> {
                   );
                 }
                 return LiveTurn(
-                    turn: turn, botName: widget.state.status.botName);
+                  turn: turn,
+                  botName: widget.state.status.botName,
+                  showHeader: !liveJoinsRun,
+                );
               },
             ),
           ),

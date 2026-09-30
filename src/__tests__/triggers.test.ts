@@ -437,6 +437,58 @@ describeBash("trigger supervisor", () => {
     );
 
     itLinux(
+      "leaves a live trigger alone when the daemon that spawned it is still running",
+      async () => {
+        // Two daemons at once (2026-09-27): the newcomer's resume must not
+        // SIGKILL the running daemon's watchers. A sleeping process stands
+        // in for that other, live daemon.
+        const { spawn: rawSpawn } = await import("node:child_process");
+        const owner = rawSpawn("sleep", ["30"], {
+          detached: true,
+          stdio: "ignore",
+        });
+        owner.unref();
+        await new Promise((r) => setTimeout(r, 50));
+        const ownerPid = owner.pid!;
+        const watcher = rawSpawn("sleep", ["30"], {
+          detached: true,
+          stdio: "ignore",
+          env: {
+            ...process.env,
+            TALON_DAEMON_PID: String(ownerPid),
+            TALON_DAEMON_STARTTIME: String(readStarttime(ownerPid)),
+          },
+        });
+        watcher.unref();
+        await new Promise((r) => setTimeout(r, 50));
+        const watcherPid = watcher.pid!;
+
+        const t = makeTrigger({ body: "sleep 30\n" });
+        updateTrigger(t.id, {
+          persistent: true,
+          status: "pending",
+          pid: watcherPid,
+          pidStarttime: readStarttime(watcherPid),
+        });
+
+        try {
+          await resumeAfterRestart();
+          await waitForStatus(t.id, (s) => s === "running");
+          expect(() => process.kill(watcherPid, 0)).not.toThrow();
+        } finally {
+          for (const pid of [watcherPid, ownerPid]) {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {
+              /* gone */
+            }
+          }
+          await shutdownTriggers();
+        }
+      },
+    );
+
+    itLinux(
       "PID-reuse defence: starttime mismatch leaves the live process alone",
       async () => {
         // Simulate the "PID was recycled to an unrelated process" case by

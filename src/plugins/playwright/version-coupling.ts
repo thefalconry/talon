@@ -23,9 +23,9 @@
 
 import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import { connect as netConnect, isIP, type Socket } from "node:net";
 import { resolve } from "node:path";
+import { connect as tlsConnect } from "node:tls";
 
 /**
  * Playwright minor of the remote endpoint (python playwright behind
@@ -99,11 +99,132 @@ export function parseMismatch(
     : undefined;
 }
 
+/** Most bytes the probe will buffer from the server before giving up. */
+const MAX_PROBE_BYTES = 64 * 1024;
+
+type ParsedHead = {
+  status: number;
+  headers: Map<string, string>;
+  bodyStart: number;
+};
+
+/** Parse an HTTP/1.x status line + headers once the blank line has arrived. */
+function parseHead(buf: Buffer): ParsedHead | undefined {
+  const end = buf.indexOf("\r\n\r\n");
+  if (end < 0) return undefined;
+  const lines = buf.subarray(0, end).toString("latin1").split("\r\n");
+  const status = Number(/^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(lines[0])?.[1]);
+  const headers = new Map<string, string>();
+  for (const line of lines.slice(1)) {
+    const i = line.indexOf(":");
+    if (i > 0)
+      headers.set(
+        line.slice(0, i).trim().toLowerCase(),
+        line.slice(i + 1).trim(),
+      );
+  }
+  return {
+    status: Number.isFinite(status) ? status : 0,
+    headers,
+    bodyStart: end + 4,
+  };
+}
+
+/**
+ * Decode a (possibly incomplete) chunked body. `complete` is true once the
+ * terminating zero-length chunk has been seen.
+ */
+function decodeChunked(raw: Buffer): { body: string; complete: boolean } {
+  const parts: Buffer[] = [];
+  let at = 0;
+  for (;;) {
+    const eol = raw.indexOf("\r\n", at);
+    if (eol < 0) break;
+    const size = parseInt(raw.subarray(at, eol).toString("latin1"), 16);
+    if (!Number.isFinite(size)) break;
+    if (size === 0)
+      return { body: Buffer.concat(parts).toString("utf-8"), complete: true };
+    const dataStart = eol + 2;
+    if (raw.length < dataStart + size) {
+      parts.push(raw.subarray(dataStart));
+      break;
+    }
+    parts.push(raw.subarray(dataStart, dataStart + size));
+    at = dataStart + size + 2;
+  }
+  return { body: Buffer.concat(parts).toString("utf-8"), complete: false };
+}
+
+/** The body of a 428 once it is complete (or the connection ended), else undefined. */
+function read428Body(
+  head: ParsedHead,
+  buf: Buffer,
+  ended: boolean,
+): string | undefined {
+  const raw = buf.subarray(head.bodyStart);
+  if (/chunked/i.test(head.headers.get("transfer-encoding") ?? "")) {
+    const decoded = decodeChunked(raw);
+    return decoded.complete || ended ? decoded.body : undefined;
+  }
+  const length = Number(head.headers.get("content-length"));
+  if (Number.isFinite(length) && raw.length >= length)
+    return raw.subarray(0, length).toString("utf-8");
+  return ended ? raw.toString("utf-8") : undefined;
+}
+
+/**
+ * The probe's verdict from what the server has sent so far, or undefined
+ * while more bytes are needed. `ended` = the connection is closed.
+ */
+function readVerdict(
+  buf: Buffer,
+  ended: boolean,
+  client: string,
+): EndpointProbe | undefined {
+  const head = parseHead(buf);
+  if (!head) {
+    return ended
+      ? {
+          state: "unreachable",
+          client,
+          reason: "connection closed before a response",
+        }
+      : undefined;
+  }
+  if (head.status === 101) return { state: "match", client };
+  if (head.status !== 428) {
+    return {
+      state: "unreachable",
+      client,
+      reason: `HTTP ${head.status || "?"} instead of an upgrade`,
+    };
+  }
+  const body = read428Body(head, buf, ended);
+  if (body === undefined) return undefined;
+  const parsed = parseMismatch(body);
+  return parsed
+    ? { state: "mismatch", client, server: parsed.server }
+    : {
+        state: "unreachable",
+        client,
+        reason: "428 without a version box in the body",
+      };
+}
+
 /**
  * Perform the WebSocket upgrade the MCP child performs, advertising
  * `clientVersion`, and read the server's verdict. Never throws; never
  * leaves a connection open (a completed upgrade is torn down at once, and
  * Playwright's server treats that as an ordinary client disconnect).
+ *
+ * The handshake is written and read over a raw TCP/TLS socket rather than
+ * node:http's `request`. Runtimes disagree about how an HTTP client surfaces
+ * a 101: Node emits "upgrade", Bun (1.3) emits neither "upgrade" nor
+ * "response" — the probe just sat until the idle timer fired, adding the
+ * full timeout to every boot and reporting a healthy endpoint as
+ * unreachable. Reading the status line ourselves behaves identically on
+ * both, and a hard wall-clock deadline bounds the probe whatever the
+ * server does.
  */
 export function probeEndpoint(
   endpoint: string,
@@ -123,73 +244,62 @@ export function probeEndpoint(
       return;
     }
     const secure = url.protocol === "wss:" || url.protocol === "https:";
-    const request = secure ? httpsRequest : httpRequest;
-    const req = request({
-      host: url.hostname,
-      port: url.port || (secure ? 443 : 80),
-      path: `${url.pathname}${url.search}`,
-      method: "GET",
-      headers: {
-        Connection: "Upgrade",
-        Upgrade: "websocket",
-        "Sec-WebSocket-Version": "13",
-        "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
-        "User-Agent": `Playwright/${clientVersion} (talon endpoint probe)`,
-      },
-      timeout: timeoutMs,
-    });
+    const port = Number(url.port) || (secure ? 443 : 80);
+    // URL keeps IPv6 literals bracketed; sockets want them bare.
+    const host = url.hostname.replace(/^\[(.*)\]$/, "$1");
+    const hostHeader = url.port ? `${url.hostname}:${url.port}` : url.hostname;
+    const socket: Socket = secure
+      ? tlsConnect({ host, port, servername: isIP(host) ? undefined : host })
+      : netConnect({ host, port });
+
     let settled = false;
     const done = (result: EndpointProbe) => {
       if (settled) return;
       settled = true;
-      req.destroy();
+      clearTimeout(deadline);
+      socket.destroy();
       settle(result);
     };
-    req.on("upgrade", (_res, socket) => {
-      socket.destroy();
-      done({ state: "match", client: clientVersion });
-    });
-    req.on("response", (res) => {
-      let body = "";
-      res.setEncoding("utf-8");
-      res.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      res.on("end", () => {
-        if (res.statusCode === 428) {
-          const parsed = parseMismatch(body);
-          done(
-            parsed
-              ? {
-                  state: "mismatch",
-                  client: clientVersion,
-                  server: parsed.server,
-                }
-              : {
-                  state: "unreachable",
-                  client: clientVersion,
-                  reason: "428 without a version box in the body",
-                },
-          );
-          return;
-        }
-        done({
-          state: "unreachable",
-          client: clientVersion,
-          reason: `HTTP ${res.statusCode ?? "?"} instead of an upgrade`,
-        });
-      });
-    });
-    req.on("timeout", () =>
-      done({ state: "unreachable", client: clientVersion, reason: "timeout" }),
+    const unreachable = (reason: string) =>
+      done({ state: "unreachable", client: clientVersion, reason });
+    const deadline = setTimeout(
+      () => unreachable(`no verdict within ${timeoutMs}ms`),
+      timeoutMs,
     );
-    req.on("error", (err: Error) =>
-      done({
-        state: "unreachable",
-        client: clientVersion,
-        reason: err.message,
-      }),
-    );
-    req.end();
+    deadline.unref?.();
+
+    let buf = Buffer.alloc(0);
+    const verdict = (ended: boolean) => {
+      const result = readVerdict(buf, ended, clientVersion);
+      if (result) done(result);
+    };
+
+    socket.setTimeout(timeoutMs, () => unreachable("timeout"));
+    socket.on("error", (err: Error) => unreachable(err.message));
+    socket.on("data", (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length > MAX_PROBE_BYTES) {
+        unreachable("response too large");
+        return;
+      }
+      verdict(false);
+    });
+    socket.on("end", () => verdict(true));
+    socket.on("close", () => verdict(true));
+    socket.once(secure ? "secureConnect" : "connect", () => {
+      socket.write(
+        [
+          `GET ${url.pathname || "/"}${url.search} HTTP/1.1`,
+          `Host: ${hostHeader}`,
+          "Connection: Upgrade",
+          "Upgrade: websocket",
+          "Sec-WebSocket-Version: 13",
+          `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}`,
+          `User-Agent: Playwright/${clientVersion} (talon endpoint probe)`,
+          "",
+          "",
+        ].join("\r\n"),
+      );
+    });
   });
 }

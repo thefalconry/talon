@@ -70,3 +70,6 @@ native/talon-fusefs/dist/
 
 # talon-node build outputs
 apps/node/build/
+
+# Pre-flight lane output (scripts/preflight.sh)
+.preflight/
