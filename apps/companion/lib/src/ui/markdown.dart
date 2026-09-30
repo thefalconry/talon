@@ -6,24 +6,47 @@ import '../theme.dart';
 
 /// Shared Markdown style for assistant content — dark, readable, with framed
 /// code blocks and accent links. Used by finalized messages and the live draft.
+///
+/// Tuned against the golden renders in test/golden: headings step down from
+/// the body size instead of shouting over it, tables keep their natural
+/// column widths and scroll sideways rather than wrapping `native.discoveryPort`
+/// one syllable per line, and blocks get a little more air between them.
 MarkdownStyleSheet talonMarkdownStyle() {
-  return MarkdownStyleSheet(
-    p: TextStyle(
+  final body = TalonDensity.d(14.5, 16);
+  TextStyle heading(double size, {FontWeight weight = FontWeight.w700}) =>
+      TextStyle(
         color: TalonColors.text,
-        fontSize: TalonDensity.d(14.5, 16),
-        height: 1.6),
+        fontSize: size,
+        fontWeight: weight,
+        height: 1.3,
+        letterSpacing: -0.1,
+      );
+  return MarkdownStyleSheet(
+    p: TextStyle(color: TalonColors.text, fontSize: body, height: 1.55),
+    blockSpacing: 10,
     a: TextStyle(
-        color: TalonColors.accent2, decoration: TextDecoration.underline),
+      color: TalonColors.accent2,
+      decoration: TextDecoration.underline,
+      decorationColor: TalonColors.accent2.withValues(alpha: 0.45),
+    ),
     strong: TextStyle(color: TalonColors.text, fontWeight: FontWeight.w700),
     em: TextStyle(color: TalonColors.text, fontStyle: FontStyle.italic),
-    listBullet: TextStyle(
-        color: TalonColors.textDim, fontSize: TalonDensity.d(14.5, 16)),
-    h1: TextStyle(
-        color: TalonColors.text, fontSize: 21, fontWeight: FontWeight.w700),
-    h2: TextStyle(
-        color: TalonColors.text, fontSize: 18, fontWeight: FontWeight.w700),
-    h3: TextStyle(
-        color: TalonColors.text, fontSize: 16, fontWeight: FontWeight.w700),
+    del: TextStyle(
+        color: TalonColors.textDim, decoration: TextDecoration.lineThrough),
+    listBullet: TextStyle(color: TalonColors.textDim, fontSize: body),
+    listIndent: 22,
+    // Headings sit a step above the body, with space above them so a
+    // heading reads as the start of a section rather than a bold paragraph.
+    h1: heading(body + 5),
+    h1Padding: const EdgeInsets.only(top: 6),
+    h2: heading(body + 3),
+    h2Padding: const EdgeInsets.only(top: 6),
+    h3: heading(body + 1, weight: FontWeight.w600),
+    h3Padding: const EdgeInsets.only(top: 4),
+    h4: heading(body, weight: FontWeight.w600),
+    h5: heading(body, weight: FontWeight.w600),
+    h6: heading(body - 1, weight: FontWeight.w600)
+        .copyWith(color: TalonColors.textDim),
     // Inline `code`: on the dark theme a faint ink wash sets it apart; on the
     // light (paper) theme that same wash reads as a muddy grey box, so drop it
     // — the accent color + monospace font already distinguish inline code.
@@ -42,6 +65,7 @@ MarkdownStyleSheet talonMarkdownStyle() {
     // decoration.
     codeblockDecoration: const BoxDecoration(),
     codeblockPadding: EdgeInsets.zero,
+    blockquote: TextStyle(color: TalonColors.textDim, fontSize: body),
     blockquoteDecoration: BoxDecoration(
       color: TalonColors.glassFill,
       borderRadius: BorderRadius.circular(8),
@@ -50,8 +74,27 @@ MarkdownStyleSheet talonMarkdownStyle() {
       ),
     ),
     blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-    tableBorder: TableBorder.all(color: TalonColors.glassStroke),
-    tableHead: const TextStyle(fontWeight: FontWeight.w700),
+    // Tables: natural column widths (IntrinsicColumnWidth is also what makes
+    // flutter_markdown wrap the table in a horizontal scroller), header row
+    // set apart by weight and colour, hairlines between rows only.
+    tableColumnWidth: const IntrinsicColumnWidth(),
+    tableScrollbarThumbVisibility: false,
+    tableHead: TextStyle(
+      color: TalonColors.text,
+      fontWeight: FontWeight.w600,
+      fontSize: body - 1.5,
+    ),
+    tableBody: TextStyle(color: TalonColors.text, fontSize: body - 1.5),
+    tableHeadAlign: TextAlign.left,
+    tableCellsPadding: const EdgeInsets.fromLTRB(12, 7, 12, 7),
+    tableBorder: TableBorder(
+      top: BorderSide(color: TalonColors.glassStroke),
+      bottom: BorderSide(color: TalonColors.glassStroke),
+      left: BorderSide(color: TalonColors.glassStroke),
+      right: BorderSide(color: TalonColors.glassStroke),
+      horizontalInside: BorderSide(color: TalonColors.glassStroke),
+      borderRadius: BorderRadius.circular(8),
+    ),
     horizontalRuleDecoration: BoxDecoration(
       border: Border(top: BorderSide(color: TalonColors.glassStroke)),
     ),
