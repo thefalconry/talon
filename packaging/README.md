@@ -37,7 +37,7 @@ Notes on the build:
   for both variants.** `package-lock.json` is this repo's lockfile of
   record (CI's Lockfile Portability job gates on it) and `bun install`
   cannot read it — there is no `bun.lock` to install from. `npm ci
-  --omit=dev` reproduces the tree exactly, runs the postinstalls that
+--omit=dev` reproduces the tree exactly, runs the postinstalls that
   unpack native artefacts, and selects the `os`/`cpu`-matching optional
   deps for the build platform; the runtime stage just copies
   `node_modules` in. Multi-arch builds work because buildx runs the
@@ -52,17 +52,23 @@ Notes on the build:
   `talon login claude` spawns `claude auth login`, and that is also the
   in-container OAuth bootstrap documented in `docker-compose.yml`.
 - **The musl SDK variant is pruned** (`rm -rf
-  …claude-agent-sdk-linux-*-musl`). Modern npm honours the packages'
+…claude-agent-sdk-linux-*-musl`). Modern npm honours the packages'
   `libc` field and skips it on a glibc host, so this is usually a no-op,
   but it keeps an older npm from leaving a musl binary that the SDK
   probes first and fails to exec on Debian. Invert it if the runtime is
   ever rebased onto Alpine.
-- **`HOME=/home/bun` in both variants**, so one `docker-compose.yml`
-  serves either: the bind mounts (`~/.talon`, `~/.claude`) never move.
-  Both base images ship an unprivileged UID 1000 (`bun` / `node`), which
-  is the user the daemon runs as.
-- **Entrypoint: `docker/entrypoint.sh`.** It checks that `HOME` and the
-  state mounts are writable, and on first boot runs
+- **`HOME=/data` in both variants: one data root.** `~/.talon` and every
+  backend's sign-in and session store (`~/.claude`, `~/.claude.json`,
+  `~/.codex`, `~/.gemini`, `~/.local/share/{opencode,kilo}`) live under it,
+  so a single volume at `/data` persists all of it and `VOLUME /data` is the
+  only one declared. Both base images ship an unprivileged UID 1000
+  (`bun` / `node`), which is the user the daemon runs as. The image sets
+  `TALON_CONTAINER=1`, which turns on the daemon's boot-time check that
+  those stores are on a persistent mount (`src/core/layout/`).
+- **Entrypoint: `docker/entrypoint.sh`.** It keeps a container that
+  still has the old layout's data at `/home/bun/.talon` (and nothing at
+  `/data/.talon`) on `HOME=/home/bun`, with a migration note in the log. It
+  checks that `HOME` and the state mounts are writable, and on first boot runs
   `docker/seed-config.mjs` to write `~/.talon/config.json` from `TALON_*`
   env vars. It never overwrites an existing config. `ENTRYPOINT` is declared
   in each base stage, because declaring it in the runtime stage would reset
@@ -74,7 +80,7 @@ Notes on the build:
   are installed because the Antigravity `agy` CLI shells out to them, and
   Claude Code uses them when present. `agy` itself isn't on npm, so the
   image takes it either baked in at build time (`--build-arg
-  AGY_DOWNLOAD_URL=… --build-arg AGY_SHA256=…`, digest-checked) or
+AGY_DOWNLOAD_URL=… --build-arg AGY_SHA256=…`, digest-checked) or
   bind-mounted at `/usr/local/bin/agy` at run time
   (`docker-compose.agy.yml`). `~/.gemini` is pre-created, owned by UID 1000,
   so a fresh named volume mounted there is writable. See

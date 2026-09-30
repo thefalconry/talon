@@ -11,8 +11,10 @@ import type { TalonConfig } from "../../../core/config/index.js";
 import { respawnSelf } from "../../../core/daemon/respawn.js";
 import { isStaleCommand } from "../polling/stale-command.js";
 import {
+  describeCheckpoint,
   getRepoRoot,
   runSelfUpdate,
+  wantsForce,
 } from "../../../core/update/self-update.js";
 import { forceDream } from "../../../core/background/dream/index.js";
 import { escapeHtml } from "../formatting.js";
@@ -36,13 +38,16 @@ import { getTodayMetrics } from "../../../storage/metrics.js";
 import { isAuthorizedAdmin, type RegisterDeps } from "./state.js";
 import { telegramCommandMenu } from "./definitions.js";
 
-function registerAdminCommand(bot: Bot, config: TalonConfig): void {
+function registerAdminCommand(
+  bot: Bot,
+  { config, gateway }: RegisterDeps,
+): void {
   bot.command("admin", async (ctx) => {
     if (!isAuthorizedAdmin(ctx)) {
       await ctx.reply("Not authorized.");
       return;
     }
-    await handleAdminCommand(ctx, bot, config);
+    await handleAdminCommand(ctx, bot, config, gateway);
   });
 }
 
@@ -166,7 +171,8 @@ function registerRestartCommand(bot: Bot): void {
   });
 }
 
-// /update — pull latest, reinstall, run setup, restart. Only wired
+// /update [force] — pull latest, reinstall, run setup, restart. Refused
+// when the pre-update checkpoint fails unless "force" is given. Only wired
 // up for developer builds running from a git checkout; packaged
 // binaries have no source tree (getRepoRoot() === null) so the
 // command stays absent entirely.
@@ -184,8 +190,11 @@ function registerUpdateCommand(
     if (isStaleCommand(ctx.message?.date, "/update")) return;
     const remote = config.update?.remote ?? "origin";
     const branch = config.update?.branch ?? "main";
+    const force = wantsForce(typeof ctx.match === "string" ? ctx.match : "");
     const sent = await ctx.reply(
-      `⏳ Updating from <code>${escapeHtml(remote)}/${escapeHtml(branch)}</code>…`,
+      `⏳ Updating from <code>${escapeHtml(remote)}/${escapeHtml(branch)}</code>` +
+        (force ? " (forced: a failed checkpoint will not stop it)" : "") +
+        "…",
       { parse_mode: "HTML" },
     );
     const edit = (text: string) =>
@@ -201,12 +210,24 @@ function registerUpdateCommand(
       branch,
       setup: config.update?.setup,
       repoRoot: updateRepoRoot,
+      force,
     })
       .then(async (res) => {
+        if (res.checkpointRefused) {
+          await edit(
+            `🛑 Update refused: ${escapeHtml(res.error ?? "the pre-update checkpoint failed")}\n\n` +
+              `Send <code>/update force</code> to update without a checkpoint.`,
+          );
+          return;
+        }
+        const note = res.checkpoint
+          ? `\n${escapeHtml(describeCheckpoint(res.checkpoint))}`
+          : "";
         if (!res.ok) {
           const tail = res.steps[res.steps.length - 1]?.output ?? "";
           await edit(
             `⚠️ Update failed: ${escapeHtml(res.error ?? "unknown error")}` +
+              note +
               (tail ? `\n\n<pre>${escapeHtml(tail.slice(-1500))}</pre>` : ""),
           );
           return;
@@ -218,7 +239,7 @@ function registerUpdateCommand(
           return;
         }
         await edit(
-          `✅ Updated <code>${escapeHtml(res.before ?? "?")}</code> → <code>${escapeHtml(res.after ?? "?")}</code>. ♻️ Restarting…`,
+          `✅ Updated <code>${escapeHtml(res.before ?? "?")}</code> → <code>${escapeHtml(res.after ?? "?")}</code>.${note}\n♻️ Restarting…`,
         );
         // The successor documents any provisioning changes (plugin
         // runtime upgrades, migrations) back to this chat once it's up.
@@ -258,11 +279,9 @@ function registerUnknownCommandSuggester(bot: Bot, config: TalonConfig): void {
   });
 }
 
-export function registerAdminCommands(
-  bot: Bot,
-  { config }: RegisterDeps,
-): void {
-  registerAdminCommand(bot, config);
+export function registerAdminCommands(bot: Bot, deps: RegisterDeps): void {
+  const { config } = deps;
+  registerAdminCommand(bot, deps);
   registerMetricsCommand(bot);
   registerUsageCommand(bot, config);
   registerDoctorCommand(bot, config);

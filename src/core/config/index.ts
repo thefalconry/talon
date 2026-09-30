@@ -679,7 +679,8 @@ const configSchema = z.object({
    * Backups & checkpoints (docs/backups.md). Talon's only safety net, so
    * it is on by default: every `intervalHours` it writes a snapshot of
    * the identity, state, database and memory under ~/.talon/backups/,
-   * keeps `keepLocal` of them, and uploads to whatever remote targets
+   * keeps them on a tiered schedule (newest `keepLocal`, one a day for
+   * `keepDaily` days, one a week for `keepWeekly` weeks), and uploads to whatever remote targets
    * are registered (`targets: []` keeps everything local).
    *
    *   - `workspaceInclude` — the workspace is mostly bulk that can be
@@ -716,6 +717,30 @@ const configSchema = z.object({
         .min(1)
         .max(1000)
         .default(DEFAULT_BACKUP_SETTINGS.keepRemote),
+      /**
+       * Tiered retention on top of the newest `keepLocal`/`keepRemote`
+       * (docs/backups.md#retention): the newest snapshot of each of the
+       * last `keepDaily` days and `keepWeekly` weeks, plus up to
+       * `keepCheckpoints` unpinned checkpoints counted on their own.
+       */
+      keepDaily: z
+        .number()
+        .int()
+        .min(0)
+        .max(1000)
+        .default(DEFAULT_BACKUP_SETTINGS.keepDaily),
+      keepWeekly: z
+        .number()
+        .int()
+        .min(0)
+        .max(1000)
+        .default(DEFAULT_BACKUP_SETTINGS.keepWeekly),
+      keepCheckpoints: z
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .default(DEFAULT_BACKUP_SETTINGS.keepCheckpoints),
       includePalace: z.boolean().default(DEFAULT_BACKUP_SETTINGS.includePalace),
       /**
        * WhatsApp auth + the userbot's Telegram login. "local" (default)

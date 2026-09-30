@@ -48,6 +48,11 @@ import {
 } from "../core/agent-runtime/backend-registry.js";
 import { handleModelCallback } from "../frontend/telegram/callbacks/model.js";
 import type { TalonConfig } from "../core/config/index.js";
+import {
+  getChatHistoryState,
+  getRecentHistory,
+  pushMessage,
+} from "../storage/history.js";
 
 let nextChatId = 7000;
 function freshChat(): string {
@@ -215,5 +220,32 @@ describe("backend switch hands the session over", () => {
     ).resolves.toBeUndefined();
     await new Promise((r) => setTimeout(r, 0));
     expect(resetChatA).toHaveBeenCalledWith(cid);
+  });
+
+  it("never touches chat history — on a switch or a revert", async () => {
+    const cid = freshChat();
+    pushMessage(cid, {
+      msgId: 1,
+      senderId: 1,
+      senderName: "Ada",
+      text: "weeks of history",
+      timestamp: Date.now(),
+    });
+    await handleModelCallback(makeCtx(cid), "model:backend:be-b", cid, {
+      config: baseConfig,
+      gateway: {} as never,
+    } as never);
+    expect(getRecentHistory(cid).map((m) => m.text)).toEqual([
+      "weeks of history",
+    ]);
+    await handleModelCallback(makeCtx(cid), "model:backend-default", cid, {
+      config: baseConfig,
+      gateway: {} as never,
+    } as never);
+    expect(getRecentHistory(cid).map((m) => m.text)).toEqual([
+      "weeks of history",
+    ]);
+    // Not even a soft reset: the new backend sees the same conversation.
+    expect(getChatHistoryState(cid)).toBeUndefined();
   });
 });

@@ -57,6 +57,19 @@ CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE OF text, sender_name ON his
   VALUES (new.id, new.text, new.sender_name);
 END;
 
+-- Per-chat history state. Chat history is never deleted by a reset, a
+-- backend switch or a chat deletion: a reset records a context floor
+-- (\`cleared_through_id\`, the newest history_messages.id at reset time) so
+-- the bot's context starts fresh after it while every row stays stored
+-- and searchable; deleting a chat in a client sets \`hidden_at\`. Only the
+-- operator's explicit \`talon history purge\` removes rows.
+CREATE TABLE IF NOT EXISTS history_chat_state (
+  chat_id            TEXT    PRIMARY KEY,
+  cleared_through_id INTEGER NOT NULL DEFAULT 0,
+  cleared_at         INTEGER,
+  hidden_at          INTEGER
+);
+
 -- Typed memory: one row per claim, with an FTS5 index over subject +
 -- text. Kinds are lifecycles, not labels (docs/memory-persona-plan.md
 -- §3.1): \`directive\` is durable human intent, \`fact\` is durable and
@@ -397,7 +410,93 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
   uploaded_at INTEGER,
   error       TEXT,
   PRIMARY KEY (backup_id, target_id)
-);`;
+);
+
+-- Sub-agents, persisted so a daemon restart does not kill them. One row
+-- per spawn, written at registration and kept current on every lifecycle
+-- change (start, SDK session id, mailbox, report, settle). On boot, every
+-- row still 'queued' or 'running' was interrupted by the restart and is
+-- respawned — resuming its backend session when the backend can. See
+-- resumeAgentsAfterRestart in core/agents/runner.ts.
+CREATE TABLE IF NOT EXISTS agents (
+  id               TEXT PRIMARY KEY,
+  label            TEXT    NOT NULL,
+  brief            TEXT    NOT NULL,
+  -- 'chat' | 'agent'; parent_id is the chat key or the parent agent id.
+  parent_kind      TEXT    NOT NULL,
+  parent_id        TEXT    NOT NULL,
+  -- The frontend's numeric chat id (chat parents only) — the dispatcher
+  -- needs it to wake the chat with the report.
+  parent_numeric   INTEGER,
+  backend_id       TEXT    NOT NULL,
+  -- The model the run resolved to, and the one the caller asked for (null
+  -- = the backend default), so a resume can re-resolve if it vanished.
+  model            TEXT,
+  requested_model  TEXT,
+  effort           TEXT,
+  timeout_ms       INTEGER,
+  depth            INTEGER NOT NULL DEFAULT 0,
+  cwd              TEXT,
+  state            TEXT    NOT NULL,
+  created_at       INTEGER NOT NULL,
+  started_at       INTEGER,
+  ended_at         INTEGER,
+  updated_at       INTEGER NOT NULL,
+  -- Backend conversation handle (Claude SDK session id, Codex thread id),
+  -- recorded as soon as the backend reports it.
+  session_id       TEXT,
+  -- Pending check_inbox messages, JSON array of {from,text,at}.
+  inbox_json       TEXT    NOT NULL DEFAULT '[]',
+  -- 1 once report_result landed; result_* hold what it said.
+  reported         INTEGER NOT NULL DEFAULT 0,
+  result_summary   TEXT,
+  result_details   TEXT,
+  error            TEXT,
+  -- Wall-clock the agent has already spent in earlier (interrupted) runs,
+  -- charged against its timeout when it is resumed.
+  elapsed_ms       INTEGER NOT NULL DEFAULT 0,
+  -- How many times a restart has resumed it (bounded — a run that keeps
+  -- dying with the daemon eventually settles as failed).
+  resume_count     INTEGER NOT NULL DEFAULT 0,
+  -- When the last restart interrupted it, if one did.
+  interrupted_at   INTEGER,
+  -- 1 when the spawn asked for the pre-flight lane, so a re-briefed resume
+  -- keeps the instruction.
+  preflight        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state, depth, created_at);`;
+
+export const agentsSql = {
+  upsert: `INSERT OR REPLACE INTO agents
+  (id, label, brief, parent_kind, parent_id, parent_numeric, backend_id,
+   model, requested_model, effort, timeout_ms, depth, cwd, state,
+   created_at, started_at, ended_at, updated_at, session_id, inbox_json,
+   reported, result_summary, result_details, error, elapsed_ms,
+   resume_count, interrupted_at, preflight)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  get: `SELECT id, label, brief, parent_kind, parent_id, parent_numeric, backend_id,
+       model, requested_model, effort, timeout_ms, depth, cwd, state,
+       created_at, started_at, ended_at, updated_at, session_id, inbox_json,
+       reported, result_summary, result_details, error, elapsed_ms,
+       resume_count, interrupted_at, preflight
+FROM agents WHERE id = ?
+
+-- Rows a restart interrupted, parents before children (a child can only
+-- be re-attached to a parent that is already back in the registry).`,
+  listInterrupted: `SELECT id, label, brief, parent_kind, parent_id, parent_numeric, backend_id,
+       model, requested_model, effort, timeout_ms, depth, cwd, state,
+       created_at, started_at, ended_at, updated_at, session_id, inbox_json,
+       reported, result_summary, result_details, error, elapsed_ms,
+       resume_count, interrupted_at, preflight
+FROM agents WHERE state IN ('queued', 'running')
+ORDER BY depth, created_at`,
+  remove: `DELETE FROM agents WHERE id = ?
+
+-- Retention: settled rows past their window. Live rows are never pruned.`,
+  pruneSettled: `DELETE FROM agents
+WHERE state NOT IN ('queued', 'running') AND updated_at < ?`,
+  removeAll: `DELETE FROM agents`,
+} as const;
 
 export const backupsSql = {
   upsert: `INSERT OR REPLACE INTO backups
@@ -518,24 +617,55 @@ export const historySql = {
    reply_to_msg_id, timestamp, media_type, sticker_file_id, file_path,
    attachments)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  recent: `SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
+  recent: `-- The \`id > ?\` floor is the chat's context-reset marker (0 for none; see
+-- chatState below): rows at or under it stay stored and searchable but
+-- are no longer the chat's current conversation.
+SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
        timestamp, media_type, sticker_file_id, file_path, attachments
 FROM history_messages
-WHERE chat_id = ? ORDER BY id DESC LIMIT ?`,
+WHERE chat_id = ? AND id > ? ORDER BY id DESC LIMIT ?`,
   recentBefore: `-- Scroll-back pagination: the window of messages strictly older than a
 -- given msg_id, newest-first (the repository reverses to chronological).
 SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
        timestamp, media_type, sticker_file_id, file_path, attachments
 FROM history_messages
-WHERE chat_id = ? AND msg_id < ? ORDER BY id DESC LIMIT ?`,
+WHERE chat_id = ? AND msg_id < ? AND id > ? ORDER BY id DESC LIMIT ?`,
   recentBeforeTime: `-- Time-cursor variant of recentBefore for the read_history \`before\` date
 -- parameter: the newest \`limit\` messages strictly older than a timestamp.
 SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,
        timestamp, media_type, sticker_file_id, file_path, attachments
 FROM history_messages
-WHERE chat_id = ? AND timestamp < ? ORDER BY id DESC LIMIT ?`,
+WHERE chat_id = ? AND timestamp < ? AND id > ? ORDER BY id DESC LIMIT ?`,
   setFilePath: `UPDATE history_messages SET file_path = ? WHERE chat_id = ? AND msg_id = ?`,
-  deleteChat: `DELETE FROM history_messages WHERE chat_id = ?`,
+  purgeChat: `-- The ONLY statement that deletes history rows. Reached solely through the
+-- operator's explicit \`talon history purge\` (history.ts purgeChatHistory);
+-- resets, backend switches and chat deletion never delete rows.
+DELETE FROM history_messages WHERE chat_id = ?`,
+  purgeChatState: `DELETE FROM history_chat_state WHERE chat_id = ?`,
+  chatState: `SELECT cleared_through_id, cleared_at, hidden_at
+FROM history_chat_state WHERE chat_id = ?`,
+  markCleared: `-- Soft reset: move the chat's context floor to its newest stored row. The
+-- rows stay; readers that build the bot's context skip everything at or
+-- under the floor. Parameters: chat_id, chat_id, cleared_at.
+INSERT INTO history_chat_state (chat_id, cleared_through_id, cleared_at)
+VALUES (?, (SELECT COALESCE(MAX(id), 0) FROM history_messages WHERE chat_id = ?), ?)
+ON CONFLICT(chat_id) DO UPDATE SET
+  cleared_through_id = excluded.cleared_through_id,
+  cleared_at = excluded.cleared_at`,
+  markHidden: `-- Soft delete: a chat the user deleted is hidden (and its context floor
+-- moved, so a chat that reappears under the same id starts fresh). The
+-- rows stay. Parameters: chat_id, chat_id, cleared_at, hidden_at.
+INSERT INTO history_chat_state (chat_id, cleared_through_id, cleared_at, hidden_at)
+VALUES (?, (SELECT COALESCE(MAX(id), 0) FROM history_messages WHERE chat_id = ?), ?, ?)
+ON CONFLICT(chat_id) DO UPDATE SET
+  cleared_through_id = excluded.cleared_through_id,
+  cleared_at = excluded.cleared_at,
+  hidden_at = excluded.hidden_at`,
+  hiddenChats: `SELECT s.chat_id, s.hidden_at,
+       (SELECT COUNT(*) FROM history_messages h WHERE h.chat_id = s.chat_id) AS total
+FROM history_chat_state s
+WHERE s.hidden_at IS NOT NULL
+ORDER BY s.hidden_at DESC`,
   searchFts: `-- The match param must already be a valid FTS5 expression
 -- (see history.ts ftsQuery).
 SELECT msg_id, sender_id, sender_name, sender_handle, text, reply_to_msg_id,

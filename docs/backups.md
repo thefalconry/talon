@@ -63,6 +63,67 @@ Chats then restore to session ids that have no transcript behind them.
 everything else. When it is off, the snapshot stays local: remote targets
 refuse plaintext parts.
 
+## Retention
+
+After every run Talon prunes old snapshots, locally and on each remote
+target. Keeping only the newest few is not enough: if something silently
+damages memory, the schedule keeps backing up the damage and every good
+copy ages out within days. Retention is therefore tiered. A snapshot
+survives if **any** rule keeps it:
+
+| Rule          | Config key                 | Default | Keeps                                                                       |
+| ------------- | -------------------------- | ------- | --------------------------------------------------------------------------- |
+| Newest        | `keepLocal` / `keepRemote` | 12 / 30 | the newest N scheduled snapshots (local / per remote target)                |
+| Daily         | `keepDaily`                | 7       | the newest snapshot of each of the last N days that have one (0 = off)      |
+| Weekly        | `keepWeekly`               | 4       | the newest snapshot of each of the last N ISO weeks that have one (0 = off) |
+| Checkpoints   | `keepCheckpoints`          | 10      | the newest N unpinned checkpoints, counted apart from scheduled snapshots   |
+| Pinned        | —                          | —       | every pinned snapshot, always, counted against nothing                      |
+| Last verified | —                          | —       | the newest snapshot whose parts read back correctly after writing           |
+
+At the defaults (every 6 hours) that is about 3 days of every snapshot, one
+a day for a week, and one a week for about a month: roughly 20 scheduled
+snapshots on disk. Days and weeks are counted over snapshots that exist, so
+a machine that was off for a while does not lose its history to the clock.
+Days and weeks are UTC.
+
+- **Checkpoints** (manual, `pre-update`, `pre-upgrade`, `pre-restore`) have
+  their own cap. Taking checkpoints never pushes scheduled snapshots out,
+  and a busy schedule never pushes checkpoints out. The automatic
+  checkpoints are also pinned.
+- **Verification.** Every new snapshot is read back from disk and re-hashed
+  (and, when encrypted, decrypted end to end) before its manifest is
+  written. A snapshot that fails this is deleted and the run fails. The
+  newest snapshot that passed is never pruned. It is recorded as
+  `verifiedAt` in the manifest.
+- **Remote entries Talon cannot read** (no manifest, a partial manifest, no
+  `createdAt`) are never pruned. They are logged as a warning instead. A
+  target that cannot list its snapshots is skipped entirely.
+
+```json
+"backup": { "keepLocal": 12, "keepDaily": 14, "keepWeekly": 8, "keepCheckpoints": 10 }
+```
+
+`talon backup prune` applies the local policy by hand. Everything else Talon
+deletes on its own is listed in docs/data-lifecycle.md. Pin a snapshot
+(`talon backup pin <id>`, or from the `/backup` panel) to keep it past
+every rule.
+
+## Upgrade checkpoints
+
+The first boot of a new version takes a pinned `pre-upgrade <old>→<new>`
+checkpoint before anything else runs against your data: after a staged
+restore, before the stores open and before any migration or model
+reconcile. This covers every install shape: Docker and TrueNAS image
+updates, npm and binary upgrades, and git checkouts (`/update` also takes
+its own `pre-update` checkpoint). The last version that booted is recorded
+in `~/.talon/last-boot-version.json`.
+
+If that checkpoint fails (a missing backup key is the usual cause), Talon
+still boots. It raises a critical alert to the admin, skips its boot-time
+cleanup (old daily logs and notes, expired media), and tries the checkpoint
+again on the next boot. Set `backup.checkpointBeforeUpdate: false` to turn
+both upgrade and update checkpoints off.
+
 ## Restoring on the same machine
 
 ```sh
@@ -85,6 +146,23 @@ refresh. A snapshot's Restore button only opens a confirmation; the
 confirmed restore is staged to `~/.talon/restore-pending.json`, Talon
 restarts, and the next boot applies it before the database opens. Chat
 restores use the local copy — fetch a remote-only snapshot with the CLI.
+
+## Before a self-update
+
+On a git-checkout deployment, `/update` takes a pinned `pre-update
+<from>→<to>` checkpoint after fetching and before anything in the checkout
+changes (`git reset --hard`, `git clean`, `npm install`). If the checkpoint
+fails (the passphrase file is missing, the disk is full, the backup
+subsystem is not running) the update is **refused** and nothing is
+touched. The reply says why.
+
+- `/update force` on Telegram, or `/update force:true` on Discord, goes on
+  without a checkpoint. The reply still says the checkpoint failed.
+- `"backup": { "checkpointBeforeUpdate": false }` turns the checkpoint off.
+  Updates then go ahead without one and without asking.
+- `"backup": { "enabled": false }` only stops the schedule. Checkpoints
+  still work, so `/update` still takes one and still refuses when it fails.
+- When the checkout is already at the remote commit, no checkpoint is taken.
 
 ## Cloning onto a new machine
 

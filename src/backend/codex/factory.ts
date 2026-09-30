@@ -60,6 +60,8 @@ const codexFactory: BackendFactory = {
 
     const background: BackgroundRunner = {
       runOneShotAgent: (p) => codexRunOneShotAgent(p),
+      // Honours resumeSessionId (resumeThread) and reports the thread id.
+      supportsResume: true,
       // Codex spawns per-turn CLI subprocesses that the SDK reaps on its own
       // — no explicit orphan-eviction path needed here.
     };

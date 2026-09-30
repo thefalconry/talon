@@ -468,6 +468,7 @@ talon kill      Abort a killable task by id
 talon events    Tail the event bus (-f follows, --history [N] reads the journal)
 talon plugin    Manage plugins (install / enable / disable / remove)
 talon skill     Manage skills (install / enable / disable / remove)
+talon history   Chat history kept by Talon (show / hidden / purge — docs/chat-history.md)
 talon config    View or edit configuration
 talon logs      Tail structured log file
 talon doctor    Validate environment and dependencies

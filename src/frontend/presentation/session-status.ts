@@ -12,7 +12,7 @@ import {
   getSessionInfo,
   getActiveSessionCount,
 } from "../../storage/sessions.js";
-import { clearHistory } from "../../storage/history.js";
+import { markContextCleared } from "../../storage/history.js";
 import { getChatSettings } from "../../storage/chat-settings.js";
 import { resetPulseCheckpoint } from "../../core/background/pulse/pulse.js";
 import { isPulseEnabled } from "../../core/background/pulse/pulse.js";
@@ -37,16 +37,16 @@ import { formatDuration } from "./format.js";
 import { talonVersionLabel } from "../../util/version.js";
 
 /**
- * Clear a chat's session state everywhere it lives: Talon's session +
- * history stores, the pulse checkpoint, and any in-process backend memory
- * (e.g. openai-agents' MemorySession — stateless backends ignore this).
- * Ends by warming the new session so the next turn (and /status) doesn't
- * pay cold-start latency.
+ * Clear a chat's session state everywhere it lives: Talon's session store
+ * (the replaced backend session id is archived), the chat's context (a
+ * soft reset — see below), the pulse checkpoint, and any in-process
+ * backend memory (e.g. openai-agents' MemorySession — stateless backends
+ * ignore this). Ends by warming the new session so the next turn (and
+ * /status) doesn't pay cold-start latency.
  */
 export async function performSessionReset(
   chatId: string,
   backend: Backend | null | undefined,
-  opts: { keepHistory?: boolean } = {},
 ): Promise<void> {
   const info = getSessionInfo(chatId);
   if (info.turns > 0) {
@@ -62,12 +62,11 @@ export async function performSessionReset(
     );
   }
   resetSession(chatId);
-  // Frontends whose platform keeps the real chat record (Telegram,
-  // Discord) clear the local mirror too — the platform still has
-  // everything. WhatsApp passes keepHistory: the local store is the ONLY
-  // record there, and wiping it on /reset would destroy exactly what the
-  // continuity tools (read/search_chat_history) exist to recover.
-  if (!opts.keepHistory) clearHistory(chatId);
+  // Soft reset, on every frontend: the bot's context starts fresh after
+  // this point, but no history row is deleted — the old conversation stays
+  // searchable (search_history labels it) and recoverable. Hard-deleting
+  // here once wiped weeks of history; only `talon history purge` deletes.
+  markContextCleared(chatId);
   resetPulseCheckpoint(chatId);
   backend?.sessions?.resetChat?.(chatId);
   await backend?.sessions?.warmSession?.(chatId);

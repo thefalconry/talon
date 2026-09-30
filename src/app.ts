@@ -26,7 +26,11 @@ import {
   runStartupCatchup,
 } from "./core/background/cron/scheduler.js";
 import { shutdownTriggers } from "./core/background/triggers/index.js";
-import { shutdownAgents } from "./core/agents/index.js";
+import {
+  interruptAgentsForRestart,
+  resumeAgentsAfterRestart,
+  shutdownAgents,
+} from "./core/agents/index.js";
 import { stopBackupScheduler } from "./core/backup/index.js";
 import { pruneSettledTriggers } from "./storage/triggers.js";
 import { startWatchdog, stopWatchdog } from "./util/watchdog.js";
@@ -174,9 +178,58 @@ const restoreReport = await withConfigGuard(() =>
   bootPhase("staged restore", applyStagedRestore),
 );
 
-const { config } = await withConfigGuard(() =>
-  bootPhase("bootstrap", () => bootstrap()),
+/**
+ * The first boot of a new version (a Docker/TrueNAS image pull, an npm or
+ * binary upgrade — anything but `/update`, which checkpoints itself) takes
+ * a pinned `pre-upgrade <old>→<new>` checkpoint HERE: after a staged
+ * restore, before bootstrap opens the stores and the backend reconcile or
+ * any migration runs against them. A failed checkpoint alerts the admin
+ * and still boots, but with the destructive boot steps skipped.
+ *
+ * Never throws.
+ */
+async function checkpointIfUpgraded(): Promise<{ safe: boolean }> {
+  try {
+    const { checkpointOnVersionChange } =
+      await import("./core/backup/index.js");
+    const { loadConfig } = await import("./core/config/index.js");
+    const { resolveBackupSettings } = await import("./core/backup/plan.js");
+    const { talonVersion } = await import("./util/version.js");
+    const result = await checkpointOnVersionChange({
+      settings: resolveBackupSettings(loadConfig().backup),
+      version: talonVersion(),
+    });
+    return { safe: result.status !== "failed" };
+  } catch (err) {
+    if (err instanceof ConfigFileError) throw err;
+    logError("backup", "Pre-upgrade version check failed", err);
+    const { raiseAlert } = await import("./core/frontend-runtime/alerts.js");
+    raiseAlert(
+      "backup.upgrade-checkpoint",
+      `The boot-time version check / pre-upgrade checkpoint crashed: ${String(err)}. Booted without it; boot-time cleanup skipped.`,
+      { severity: "critical" },
+    );
+    return { safe: false };
+  }
+}
+
+const upgrade = await withConfigGuard(() =>
+  bootPhase("upgrade checkpoint", checkpointIfUpgraded),
 );
+
+const { config } = await withConfigGuard(() =>
+  bootPhase("bootstrap", () =>
+    bootstrap({ skipDestructiveSteps: !upgrade.safe }),
+  ),
+);
+
+// Before any backend resumes a session: carry Claude transcripts over a
+// Talon-home move (their project slug is the cwd), and in a container
+// alert when a backend's session store isn't on a persistent volume.
+await bootPhase("storage layout", async () => {
+  const { runStorageLayoutChecks } = await import("./core/layout/index.js");
+  await runStorageLayoutChecks(config as unknown as Record<string, unknown>);
+});
 
 // Record this process as the daemon. The gateway port is appended once
 // the gateway binds (it may fall back from the default on EADDRINUSE).
@@ -298,6 +351,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log("shutdown", `${signal} received, shutting down gracefully...`);
+  // Park running sub-agents before anything is torn down: stopping the
+  // frontends and the backend pool aborts their runs, and an agent that is
+  // not parked first would record that abort as its death. Parked agents
+  // stay `running` in the store and the next boot resumes them.
+  crashStep("sub-agent park", () => interruptAgentsForRestart());
 
   const deadlineAt = Date.now() + SHUTDOWN_TIMEOUT_MS;
   const forceTimer = setTimeout(() => {
@@ -390,8 +448,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
     triggerPruneTimer = null;
   });
   await shutdownStep("triggers", shutdownTriggers);
-  // Sub-agents are isolated one-shot runs: aborting them is all the daemon
-  // can do, and their parents are gone with the process anyway.
+  // Sub-agents were parked at the top of the shutdown; this aborts whatever
+  // is still running so the process can exit. They resume on the next boot.
   await shutdownStep("sub-agents", shutdownAgents);
   await shutdownStep("watchdog", stopWatchdog);
   await shutdownStep("resource sampler", stopResourceSampler);
@@ -486,6 +544,12 @@ async function main(): Promise<void> {
   // what follows runs while the daemon is alive — not, as it once did,
   // hours later during shutdown.
   await bootPhase("frontends start", () => startFrontends(frontends));
+  // Sub-agents the previous process left running come back now that their
+  // tools (gateway, frontends) and their parents' wake path are up.
+  // Fire-and-forget: a slow backend acquisition must not hold the boot.
+  resumeAgentsAfterRestart().catch((err) =>
+    logError("agents", "resume after restart failed", err),
+  );
   // Phase 0 accounting (docs/ts-migration-plan.md): the boot is over the
   // moment the frontends are listening, so the totals are folded into the
   // metrics store here, from the same uptime figure the log line prints.

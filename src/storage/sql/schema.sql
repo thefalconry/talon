@@ -52,6 +52,19 @@ CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE OF text, sender_name ON his
   VALUES (new.id, new.text, new.sender_name);
 END;
 
+-- Per-chat history state. Chat history is never deleted by a reset, a
+-- backend switch or a chat deletion: a reset records a context floor
+-- (`cleared_through_id`, the newest history_messages.id at reset time) so
+-- the bot's context starts fresh after it while every row stays stored
+-- and searchable; deleting a chat in a client sets `hidden_at`. Only the
+-- operator's explicit `talon history purge` removes rows.
+CREATE TABLE IF NOT EXISTS history_chat_state (
+  chat_id            TEXT    PRIMARY KEY,
+  cleared_through_id INTEGER NOT NULL DEFAULT 0,
+  cleared_at         INTEGER,
+  hidden_at          INTEGER
+);
+
 -- Typed memory: one row per claim, with an FTS5 index over subject +
 -- text. Kinds are lifecycles, not labels (docs/memory-persona-plan.md
 -- §3.1): `directive` is durable human intent, `fact` is durable and
@@ -393,3 +406,57 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
   error       TEXT,
   PRIMARY KEY (backup_id, target_id)
 );
+
+-- Sub-agents, persisted so a daemon restart does not kill them. One row
+-- per spawn, written at registration and kept current on every lifecycle
+-- change (start, SDK session id, mailbox, report, settle). On boot, every
+-- row still 'queued' or 'running' was interrupted by the restart and is
+-- respawned — resuming its backend session when the backend can. See
+-- resumeAgentsAfterRestart in core/agents/runner.ts.
+CREATE TABLE IF NOT EXISTS agents (
+  id               TEXT PRIMARY KEY,
+  label            TEXT    NOT NULL,
+  brief            TEXT    NOT NULL,
+  -- 'chat' | 'agent'; parent_id is the chat key or the parent agent id.
+  parent_kind      TEXT    NOT NULL,
+  parent_id        TEXT    NOT NULL,
+  -- The frontend's numeric chat id (chat parents only) — the dispatcher
+  -- needs it to wake the chat with the report.
+  parent_numeric   INTEGER,
+  backend_id       TEXT    NOT NULL,
+  -- The model the run resolved to, and the one the caller asked for (null
+  -- = the backend default), so a resume can re-resolve if it vanished.
+  model            TEXT,
+  requested_model  TEXT,
+  effort           TEXT,
+  timeout_ms       INTEGER,
+  depth            INTEGER NOT NULL DEFAULT 0,
+  cwd              TEXT,
+  state            TEXT    NOT NULL,
+  created_at       INTEGER NOT NULL,
+  started_at       INTEGER,
+  ended_at         INTEGER,
+  updated_at       INTEGER NOT NULL,
+  -- Backend conversation handle (Claude SDK session id, Codex thread id),
+  -- recorded as soon as the backend reports it.
+  session_id       TEXT,
+  -- Pending check_inbox messages, JSON array of {from,text,at}.
+  inbox_json       TEXT    NOT NULL DEFAULT '[]',
+  -- 1 once report_result landed; result_* hold what it said.
+  reported         INTEGER NOT NULL DEFAULT 0,
+  result_summary   TEXT,
+  result_details   TEXT,
+  error            TEXT,
+  -- Wall-clock the agent has already spent in earlier (interrupted) runs,
+  -- charged against its timeout when it is resumed.
+  elapsed_ms       INTEGER NOT NULL DEFAULT 0,
+  -- How many times a restart has resumed it (bounded — a run that keeps
+  -- dying with the daemon eventually settles as failed).
+  resume_count     INTEGER NOT NULL DEFAULT 0,
+  -- When the last restart interrupted it, if one did.
+  interrupted_at   INTEGER,
+  -- 1 when the spawn asked for the pre-flight lane, so a re-briefed resume
+  -- keeps the instruction.
+  preflight        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state, depth, created_at);

@@ -9,7 +9,6 @@
 import {
   recordTurnMeta as storeRecordTurnMeta,
   getTurnMeta as storeGetTurnMeta,
-  clearTurnMeta as storeClearTurnMeta,
 } from "../../../storage/turn-meta.js";
 import type { ClientToolCall } from "../protocol.js";
 
@@ -32,9 +31,4 @@ export function recordTurnMeta(
 /** Look up the meta for one message, or null. */
 export function getTurnMeta(chatId: string, msgId: string): TurnMeta | null {
   return storeGetTurnMeta<TurnMeta>(chatId, msgId);
-}
-
-/** Forget a chat entirely (chat deleted / history cleared). */
-export function clearTurnMeta(chatId: string): void {
-  storeClearTurnMeta(chatId);
 }

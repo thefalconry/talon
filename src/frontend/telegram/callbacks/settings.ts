@@ -16,11 +16,7 @@ import {
   isPulseEnabled,
 } from "../../../core/background/pulse/pulse.js";
 import { getBackendIdForChat } from "../../../core/engine/backend-controller/index.js";
-import {
-  renderSettingsText,
-  renderSettingsKeyboard,
-  type SettingsButton,
-} from "../render/menu.js";
+import { renderSettingsText, renderSettingsKeyboard } from "../render/menu.js";
 import { resolveBackendForChat } from "../model-menu.js";
 import { resolveActiveModelForChat } from "../../../core/models/active-model.js";
 import {
@@ -117,36 +113,6 @@ export async function handleSettingsCallback(
     config,
   });
   const effortName = displayReasoningEffort(chatSets.effort, reasoning.levels);
-  let modelButtons: Array<SettingsButton> | undefined;
-  let pager:
-    | {
-        page: number;
-        totalPages: number;
-        filter: "all" | "free";
-        freeCount: number;
-        totalCount: number;
-        provider?: string;
-      }
-    | undefined;
-  let view: "models" | "groups" = "models";
-  let activeProvider: string | undefined;
-  if (settingsBe?.models?.getSettingsPresentation && resolvedSettingsModel) {
-    const pres = await settingsBe.models?.getSettingsPresentation(
-      resolvedSettingsModel,
-    );
-    modelButtons = pres.modelButtons;
-    pager = {
-      page: pres.page,
-      totalPages: pres.totalPages,
-      filter: pres.filter,
-      freeCount: pres.freeCount,
-      totalCount: pres.totalCount,
-      provider: pres.provider,
-    };
-    view = pres.view;
-    activeProvider = pres.provider;
-  }
-
   try {
     await ctx.editMessageText(
       renderSettingsText(
@@ -159,14 +125,11 @@ export async function handleSettingsCallback(
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: renderSettingsKeyboard(
-            activeModel,
+            resolvedSettingsModel,
             effortName,
             pulseOn,
-            modelButtons,
-            pager,
-            view,
-            activeProvider,
             reasoning.levels,
+            Boolean(settingsBe?.models?.getSettingsPresentation),
           ),
         },
       },

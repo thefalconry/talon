@@ -86,4 +86,33 @@ describe("alerts", () => {
     raiseAlert("k", "down");
     expect(sent).toHaveLength(2);
   });
+
+  it("queues one copy per key before a notifier is wired and drops it if resolved first", async () => {
+    const notify = await import("../core/frontend-runtime/admin-notify.js");
+    notify.setAdminNotifier(null);
+    notify.clearPendingAdminNotifications();
+    resetAlertsForTest(); // real notifyAdmin
+    try {
+      raiseAlert("plugin.playwright", "init timed out");
+      await vi.advanceTimersByTimeAsync(0);
+      raiseAlert("plugin.playwright", "init timed out");
+      await vi.advanceTimersByTimeAsync(0);
+      raiseAlert("disk", "low");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(notify.pendingAdminNotificationCount()).toBe(2);
+
+      resolveAlert("plugin.playwright", "fine now");
+      expect(notify.pendingAdminNotificationCount()).toBe(1);
+
+      const delivered: string[] = [];
+      notify.setAdminNotifier(async (text) => {
+        delivered.push(text);
+      });
+      await notify.adminNotifyFlushed();
+      expect(delivered).toEqual(["🔴 low"]);
+    } finally {
+      notify.setAdminNotifier(null);
+      notify.clearPendingAdminNotifications();
+    }
+  });
 });

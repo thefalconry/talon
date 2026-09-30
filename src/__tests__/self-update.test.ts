@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,13 +6,17 @@ import { join } from "node:path";
 import {
   runSelfUpdate,
   getRepoRoot,
+  wantsForce,
   type CommandRunner,
 } from "../core/update/self-update.js";
+import { _resetBackupScheduler } from "../core/backup/scheduler.js";
+import type { UpdateCheckpoint } from "../core/backup/index.js";
 import { BOOT_SMOKE_FLAG, BOOT_SMOKE_OK } from "../core/daemon/respawn.js";
 
 /**
  * Build a runner that replies based on the command + args. `headSeq`
- * supplies successive `git rev-parse HEAD` results (before, after).
+ * supplies successive `git rev-parse HEAD` results (before, after); the
+ * remote ref resolves to the last of them, where the reset will land.
  */
 function makeRunner(opts: {
   headSeq?: string[];
@@ -22,11 +26,13 @@ function makeRunner(opts: {
   silentSmoke?: boolean;
 }): CommandRunner {
   const heads = [...(opts.headSeq ?? ["aaaaaaaaaaaa", "aaaaaaaaaaaa"])];
+  const target = heads.at(-1) ?? "aaaaaaaaaaaa";
   return async (cmd, args) => {
     opts.calls?.push([cmd, ...args]);
     const failOut = opts.fail?.(cmd, args);
     if (failOut) return { ok: false, output: failOut };
     if (cmd === "git" && args[0] === "rev-parse") {
+      if (args[1] !== "HEAD") return { ok: true, output: target };
       return { ok: true, output: heads.shift() ?? "aaaaaaaaaaaa" };
     }
     // The post-install import check: a healthy tree prints its marker.
@@ -39,6 +45,10 @@ function makeRunner(opts: {
 
 const ROOT = "/repo";
 const ENTRY = { cmd: "/usr/bin/bun", args: ["src/index.ts"] };
+const taken = async (): Promise<UpdateCheckpoint> => ({
+  status: "taken",
+  id: "20260930T000000Z-abcdef",
+});
 
 describe("runSelfUpdate", () => {
   it("verifies the new tree imports before anyone restarts into it", async () => {
@@ -46,6 +56,7 @@ describe("runSelfUpdate", () => {
     const res = await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"], calls }),
     });
     expect(res.ok).toBe(true);
@@ -63,6 +74,7 @@ describe("runSelfUpdate", () => {
     const res = await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       runner: makeRunner({
         headSeq: ["aaa111aaa111", "bbb222bbb222"],
         fail: (_cmd, args) =>
@@ -82,6 +94,7 @@ describe("runSelfUpdate", () => {
     const res = await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       runner: makeRunner({
         headSeq: ["aaa111aaa111", "bbb222bbb222"],
         // Exit 0 but silent — a runtime that died without saying so.
@@ -97,6 +110,7 @@ describe("runSelfUpdate", () => {
     const res = await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       runner: makeRunner({ headSeq: ["abc123abc123", "abc123abc123"], calls }),
     });
     expect(res.ok).toBe(true);
@@ -111,6 +125,7 @@ describe("runSelfUpdate", () => {
     const res = await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       remote: "upstream",
       branch: "dev",
       setup: ["npm run build"],
@@ -133,6 +148,7 @@ describe("runSelfUpdate", () => {
     await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       runner: makeRunner({ headSeq: ["a1", "b2"], calls }),
     });
     expect(calls).toContainEqual(["git", "fetch", "origin", "main"]);
@@ -144,6 +160,7 @@ describe("runSelfUpdate", () => {
     const res = await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       runner: makeRunner({
         headSeq: ["a1", "b2"],
         calls,
@@ -160,6 +177,7 @@ describe("runSelfUpdate", () => {
     const res = await runSelfUpdate({
       repoRoot: ROOT,
       entry: ENTRY,
+      checkpoint: taken,
       runner: makeRunner({
         headSeq: ["a1", "b2"],
         fail: (cmd) => (cmd === "npm" ? "ENOSPC" : null),
@@ -168,6 +186,116 @@ describe("runSelfUpdate", () => {
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/npm install failed/i);
     expect(res.changed).toBe(true);
+  });
+});
+
+describe("runSelfUpdate — the pre-update checkpoint", () => {
+  it("is taken after the fetch and before the reset, labelled with both commits", async () => {
+    const calls: string[][] = [];
+    const checkpoint = vi.fn(async (): Promise<UpdateCheckpoint> => {
+      calls.push(["checkpoint"]);
+      return { status: "taken", id: "snap-1" };
+    });
+    const res = await runSelfUpdate({
+      repoRoot: ROOT,
+      entry: ENTRY,
+      checkpoint,
+      runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"], calls }),
+    });
+    expect(res.ok).toBe(true);
+    expect(checkpoint).toHaveBeenCalledWith("aaa111aaa111", "bbb222bbb222");
+    const at = (pred: (c: string[]) => boolean) => calls.findIndex(pred);
+    const cp = at((c) => c[0] === "checkpoint");
+    expect(at((c) => c[1] === "fetch")).toBeLessThan(cp);
+    expect(cp).toBeLessThan(at((c) => c[1] === "reset"));
+    expect(cp).toBeLessThan(at((c) => c[1] === "clean"));
+    expect(res.checkpoint).toEqual({ status: "taken", id: "snap-1" });
+  });
+
+  it("refuses the update when it fails, and touches nothing", async () => {
+    const calls: string[][] = [];
+    const res = await runSelfUpdate({
+      repoRoot: ROOT,
+      entry: ENTRY,
+      checkpoint: async () => ({
+        status: "failed",
+        error: "Cannot read backup.encryption.passphraseFile /k: ENOENT",
+      }),
+      runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"], calls }),
+    });
+    expect(res.ok).toBe(false);
+    expect(res.checkpointRefused).toBe(true);
+    expect(res.changed).toBe(false);
+    expect(res.error).toContain("ENOENT");
+    expect(res.error).toContain("force");
+    expect(calls.some((c) => c[1] === "reset")).toBe(false);
+    expect(calls.some((c) => c[1] === "clean")).toBe(false);
+    expect(calls.some((c) => c[0] === "npm")).toBe(false);
+  });
+
+  it("goes on without one when forced, and still reports the failure", async () => {
+    const calls: string[][] = [];
+    const res = await runSelfUpdate({
+      repoRoot: ROOT,
+      entry: ENTRY,
+      force: true,
+      checkpoint: async () => ({ status: "failed", error: "disk full" }),
+      runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"], calls }),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.changed).toBe(true);
+    expect(res.checkpointRefused).toBeUndefined();
+    expect(res.checkpoint).toEqual({ status: "failed", error: "disk full" });
+    expect(calls).toContainEqual(["git", "reset", "--hard", "origin/main"]);
+  });
+
+  it("goes on when the operator turned it off in config", async () => {
+    const res = await runSelfUpdate({
+      repoRoot: ROOT,
+      entry: ENTRY,
+      checkpoint: async () => ({ status: "disabled" }),
+      runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"] }),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.checkpoint).toEqual({ status: "disabled" });
+  });
+
+  it("is not taken when the checkout is already at the remote commit", async () => {
+    const checkpoint = vi.fn(taken);
+    const res = await runSelfUpdate({
+      repoRoot: ROOT,
+      entry: ENTRY,
+      checkpoint,
+      runner: makeRunner({ headSeq: ["abc123abc123", "abc123abc123"] }),
+    });
+    expect(res.ok).toBe(true);
+    expect(res.changed).toBe(false);
+    expect(checkpoint).not.toHaveBeenCalled();
+  });
+
+  it("refuses by default when this process has no backup subsystem", async () => {
+    _resetBackupScheduler();
+    const calls: string[][] = [];
+    const res = await runSelfUpdate({
+      repoRoot: ROOT,
+      entry: ENTRY,
+      runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"], calls }),
+    });
+    expect(res.checkpointRefused).toBe(true);
+    expect(res.error).toContain("not running");
+    expect(calls.some((c) => c[1] === "reset")).toBe(false);
+  });
+});
+
+describe("wantsForce", () => {
+  it("accepts force and --force, and nothing else", () => {
+    expect(wantsForce("force")).toBe(true);
+    expect(wantsForce(" --force ")).toBe(true);
+    expect(wantsForce("FORCE")).toBe(true);
+    expect(wantsForce("")).toBe(false);
+    expect(wantsForce(undefined)).toBe(false);
+    expect(wantsForce("forced")).toBe(false);
+    expect(wantsForce("now")).toBe(false);
   });
 });
 

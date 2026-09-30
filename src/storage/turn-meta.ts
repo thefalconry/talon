@@ -121,7 +121,7 @@ export function getTurnMeta<T>(chatId: string, msgId: string): T | null {
   }
 }
 
-/** Forget a chat entirely (chat deleted / history cleared). */
+/** Forget a chat's turn meta — only the operator's history purge does. */
 export function clearTurnMeta(chatId: string): void {
   ensureLoaded();
   try {

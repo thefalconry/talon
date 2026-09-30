@@ -5,8 +5,10 @@
 import type { Bot, Context } from "grammy";
 import type { TalonConfig } from "../../../core/config/index.js";
 import { escapeHtml } from "../formatting.js";
-import { resetSession, getAllSessions } from "../../../storage/sessions.js";
-import { clearHistory } from "../../../storage/history.js";
+import { getAllSessions } from "../../../storage/sessions.js";
+import { performSessionReset } from "../../presentation/session-status.js";
+import { resolveBackendForChat } from "../model-menu.js";
+import type { Backend } from "../../../core/agent-runtime/capabilities.js";
 import { getChatSettings } from "../../../storage/chat-settings.js";
 import { formatModelLabel } from "../../presentation/format.js";
 import { replyHtmlChunked } from "./chunked-reply.js";
@@ -93,13 +95,27 @@ export async function broadcast(
   );
 }
 
-export async function killSession(ctx: Context, rest: string[]): Promise<void> {
+/** The default backend; per-chat overrides are resolved from it. */
+export type AdminGateway = { backend: Backend | null };
+
+/**
+ * `/admin kill <chatId>` — the same reset /reset performs in that chat:
+ * session store, a soft context reset (history rows are kept), pulse
+ * checkpoint, and the backend's own
+ * per-chat session (resolved through the chat's backend override).
+ */
+export async function killSession(
+  ctx: Context,
+  rest: string[],
+  _bot: Bot,
+  _config: TalonConfig,
+  gateway?: AdminGateway,
+): Promise<void> {
   const target = rest[0];
   if (!target) {
     await ctx.reply("Usage: /admin kill <chatId>");
     return;
   }
-  resetSession(target);
-  clearHistory(target);
+  await performSessionReset(target, resolveBackendForChat(target, gateway));
   await ctx.reply(`Session ${target} reset.`);
 }

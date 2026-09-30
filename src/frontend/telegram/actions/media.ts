@@ -54,8 +54,8 @@ export function resolveMediaInput(
 
 /** Telegram's hard limit on media captions, counted after entity parsing. */
 export const TELEGRAM_MAX_CAPTION = 1024;
-/** Visible length a truncated caption is cut to, leaving room for the "…". */
-const TRUNCATED_CAPTION_LEN = 1000;
+/** Below this head budget the splitter is fighting pathological markup; give up. */
+const MIN_CAPTION_HEAD = 64;
 
 /**
  * Drop every `<...>` tag in one linear pass. Only used to *measure* the
@@ -104,35 +104,76 @@ export function visibleCaptionText(html: string): string {
 export type FittedCaption = {
   caption?: string;
   parse_mode?: "HTML";
-  /** Full caption text to deliver as a follow-up message when it was cut. */
+  /** Caption text that did not fit, to deliver as follow-up message(s). */
   overflow?: string;
 };
+
+/** Visible (Telegram-counted) length of a markdown caption once rendered. */
+export function captionUnits(markdown: string): number {
+  // Telegram counts UTF-16 code units, which is what .length measures.
+  return visibleCaptionText(markdownToTelegramHtml(markdown)).length;
+}
+
+/**
+ * Split a markdown caption into the leading part that fits `max` visible
+ * units and the remainder. Splits the *markdown source* with the shared
+ * message splitter (paragraph → newline → space boundaries, surrogate-safe,
+ * ``` fences closed/reopened), so the head is rendered to HTML on its own
+ * and can never strand a tag or entity. Returns null if no clean head fits.
+ */
+export function splitCaption(
+  text: string,
+  max: number = TELEGRAM_MAX_CAPTION,
+): { head: string; rest: string } | null {
+  // Rendering usually shrinks markdown (markers and link URLs vanish), so
+  // the first try nearly always fits; shrink the budget if it does not.
+  for (let budget = max; budget >= MIN_CAPTION_HEAD;) {
+    const chunks = splitMessage(text, budget);
+    const head = chunks[0] ?? "";
+    if (head.trim() && captionUnits(head) <= max) {
+      const at = text.indexOf(head);
+      // The splitter only trims at boundaries, so the head is normally a
+      // verbatim prefix; when it closed a ``` fence it is not, and the
+      // splitter's own reopened chunks carry the remainder instead.
+      const rest =
+        at >= 0
+          ? text.slice(at + head.length).replace(/^\s+/, "")
+          : chunks.slice(1).join("\n\n");
+      return { head, rest };
+    }
+    budget = Math.floor(budget * 0.8);
+  }
+  return null;
+}
 
 /**
  * Convert a markdown caption to what Telegram accepts. Captions over 1024
  * visible characters are rejected outright ("message caption is too long"),
- * losing the media along with them — so an oversized caption is cut to a
- * plain-text preview (no parse_mode: a cut through HTML could strand a tag
- * or entity) and the full text is returned as `overflow` for the caller to
- * send as a normal, chunked text message.
+ * losing the media along with them — so an oversized caption is split: the
+ * leading part that fits rides on the media (still formatted), and the rest
+ * is returned as `overflow` for the caller to send as follow-up text.
  */
 export function fitCaption(raw: unknown): FittedCaption {
   if (!raw) return {};
   const text = String(raw);
   const html = markdownToTelegramHtml(text);
-  const visible = visibleCaptionText(html);
-  // Telegram counts UTF-16 code units, which is what .length measures.
-  if (visible.length <= TELEGRAM_MAX_CAPTION)
+  if (visibleCaptionText(html).length <= TELEGRAM_MAX_CAPTION)
     return { caption: html, parse_mode: "HTML" };
-  let cut = visible.slice(0, TRUNCATED_CAPTION_LEN);
-  // Don't strand half a surrogate pair at the cut.
-  const last = cut.charCodeAt(cut.length - 1);
-  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
-  return { caption: `${cut.trimEnd()}…`, overflow: text };
+  const split = splitCaption(text);
+  if (split) {
+    return {
+      caption: markdownToTelegramHtml(split.head),
+      parse_mode: "HTML",
+      ...(split.rest ? { overflow: split.rest } : {}),
+    };
+  }
+  // No clean boundary fits (pathological markup): send the media bare and
+  // deliver the whole caption as text rather than cut through it.
+  return { overflow: text };
 }
 
 /**
- * Deliver the full text of a caption that did not fit, threaded as a reply
+ * Deliver the part of a caption that did not fit, threaded as a reply
  * to the media it belongs to. Best-effort: the media already landed, so a
  * failure here is reported as a warning rather than failing the send.
  */
@@ -167,7 +208,7 @@ async function sendCaptionOverflow(
       `Caption overflow follow-up failed (chat=${chatId}): ${msg}`,
     );
     return {
-      warning: `Media sent with a truncated caption, but sending the full caption text failed: ${msg}`,
+      warning: `Media sent, but the rest of its caption (past Telegram's ${TELEGRAM_MAX_CAPTION}-char limit) failed to send: ${msg}`,
     };
   }
 }
@@ -176,8 +217,8 @@ function overflowResult(
   r: { message_ids: number[] } | { warning: string },
 ): Record<string, unknown> {
   return "warning" in r
-    ? { caption_truncated: true, warning: r.warning }
-    : { caption_truncated: true, caption_message_ids: r.message_ids };
+    ? { caption_split: true, warning: r.warning }
+    : { caption_split: true, caption_message_ids: r.message_ids };
 }
 
 const sendMediaFile: TelegramActionHandlers[string] = async (

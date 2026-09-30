@@ -85,6 +85,81 @@ export function buildAgentPrompt(
   );
 }
 
+/** Human time for an interruption stamp. */
+function stamp(at: number): string {
+  return new Date(at).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+
+/**
+ * The note a resumed agent receives when its own backend conversation is
+ * continued after a daemon restart. The transcript — brief, tool calls,
+ * results — is intact above it, so this only says what happened and what
+ * to be careful of.
+ */
+export function buildResumePrompt(args: {
+  interruptedAt: number;
+  elapsedMinutes: number;
+}): string {
+  return (
+    `[System: You were interrupted by a daemon restart at ` +
+    `${stamp(args.interruptedAt)} (about ${args.elapsedMinutes} min into ` +
+    `your run). Your conversation so far is intact above — continue the ` +
+    `brief from where you left off; do not start over. Anything that was ` +
+    `mid-flight when the restart hit (a shell command, a build, a tool call ` +
+    `with no result) may not have completed: check the actual state (files, ` +
+    `git status, processes) before relying on it or repeating it. Call ` +
+    `check_inbox — messages sent while you were down are still there. When ` +
+    `you are done, call report_result exactly once.]`
+  );
+}
+
+/**
+ * The activation prompt for an interrupted agent whose backend cannot
+ * resume a conversation: the original brief again, plus what the previous
+ * attempt did (the tail of its run log) so it picks up rather than redoes.
+ */
+export function buildRebriefPrompt(args: {
+  brief: string;
+  /** Re-append the pre-flight lane instruction the original spawn carried. */
+  preflight?: boolean;
+  interruptedAt: number;
+  elapsedMinutes: number;
+  logPath: string;
+  logTail: string;
+}): string {
+  const tail = args.logTail.trim()
+    ? `\n\nTail of the previous attempt's run log (full log: ` +
+      `${args.logPath}):\n\n<previous-run-log>\n${args.logTail}\n` +
+      `</previous-run-log>`
+    : `\n\n(The previous attempt's run log is at ${args.logPath}.)`;
+  return (
+    `${buildAgentPrompt(args.brief, { preflight: args.preflight === true })}\n\n` +
+    `[System: RESUMED AFTER A DAEMON RESTART. You already worked on this ` +
+    `brief for about ${args.elapsedMinutes} min before a daemon restart ` +
+    `interrupted you at ${stamp(args.interruptedAt)}; this backend could not ` +
+    `resume that conversation, so you are starting a new one. Do NOT start ` +
+    `over: read what the previous attempt did below, inspect the state it ` +
+    `left (files, branches, commits, processes) and continue from there. ` +
+    `Call check_inbox — messages sent while you were down are still there.]` +
+    tail
+  );
+}
+
+/** Run-log separator written when a restarted agent resumes. */
+export function agentResumeLogHeader(
+  record: AgentRecord,
+  model: string,
+  interruptedAt: number,
+  sessionId?: string,
+): string {
+  return (
+    `\n\n---\n\n# resumed after daemon restart — ${new Date().toISOString()}\n` +
+    `**Interrupted:** ${new Date(interruptedAt).toISOString()} ` +
+    `**Backend:** ${record.backendId} **Model:** ${model} ` +
+    `**Mode:** ${sessionId ? `session resume (${sessionId})` : "re-briefed"}\n\n`
+  );
+}
+
 /** Header line of a run log. */
 export function agentLogHeader(record: AgentRecord, model: string): string {
   return (

@@ -84,12 +84,6 @@
     "cx": 20
   },
   {
-    "file": "src/core/update/self-update.ts",
-    "name": "runSelfUpdate",
-    "lines": 162,
-    "cx": 19
-  },
-  {
     "file": "src/frontend/discord/admin.ts",
     "name": "handleAdminSubcommand",
     "lines": 156,

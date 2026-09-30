@@ -111,7 +111,8 @@ export interface ApplyRetryDecisionResult {
  *
  * Side effects (when a retry fires):
  *   - `incrementCounter('errors.<reason>')` exactly once per call.
- *   - `resetSession(chatId)` before recursion.
+ *   - `resetSession(chatId, reason)` before recursion (the old id is
+ *     archived under that reason).
  *   - For `fallback_model`: the fallback model id is spread into the
  *     recursion's params (`params.model` outranks chat settings).
  *
@@ -156,7 +157,7 @@ export async function applyRetryDecision(
       "agent",
       `[${chatId}] ${prefix}${decision.reason}, resetting ${resetNoun} and retrying`,
     );
-    resetSession(chatId);
+    resetSession(chatId, decision.reason);
     return { retry: await recurseWithRetried(params), classified };
   }
 
@@ -165,7 +166,7 @@ export async function applyRetryDecision(
       "agent",
       `[${chatId}] ${classified.reason}, falling back to ${decision.fallbackModelId}`,
     );
-    resetSession(chatId);
+    resetSession(chatId, `fallback_model:${decision.fallbackModelId}`);
     return {
       retry: await recurseWithRetried({
         ...params,
@@ -270,7 +271,7 @@ export async function* applyRetryDecisionStream(
       "agent",
       `[${chatId}] ${prefix}${decision.reason}, resetting ${resetNoun} and retrying`,
     );
-    resetSession(chatId);
+    resetSession(chatId, decision.reason);
     yield* buildRetryStream();
     return { retried: true, classified };
   }
@@ -280,7 +281,7 @@ export async function* applyRetryDecisionStream(
       "agent",
       `[${chatId}] ${classified.reason}, falling back to ${decision.fallbackModelId}`,
     );
-    resetSession(chatId);
+    resetSession(chatId, `fallback_model:${decision.fallbackModelId}`);
     yield* buildRetryStream(decision.fallbackModelId);
     return { retried: true, classified };
   }

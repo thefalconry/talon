@@ -15,6 +15,7 @@ import {
   setSessionId,
 } from "../../storage/sessions.js";
 import { log, logWarn } from "../../util/log.js";
+import { TalonError } from "../../core/errors.js";
 import type { RemoteAgentClient, RemotePermissionRule } from "./client.js";
 import type { RemoteServerState } from "./state.js";
 import {
@@ -73,32 +74,100 @@ export function buildPermissionRuleset(chatId: string): RemotePermissionRule[] {
   ];
 }
 
+/** Pull an HTTP status out of whatever shape the SDK client threw. */
+function errorStatus(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const e = err as Record<string, unknown>;
+  const cause = e.cause as Record<string, unknown> | undefined;
+  const response = e.response as Record<string, unknown> | undefined;
+  for (const candidate of [
+    e.status,
+    e.statusCode,
+    response?.status,
+    cause?.status,
+  ]) {
+    if (typeof candidate === "number") return candidate;
+  }
+  return undefined;
+}
+
+/** The error's `name`, from the thrown object or the parsed body behind it. */
+function errorNames(err: unknown): string[] {
+  if (typeof err !== "object" || err === null) return [];
+  const e = err as Record<string, unknown>;
+  const cause = e.cause as Record<string, unknown> | undefined;
+  const body = (cause?.body ?? e.body) as Record<string, unknown> | undefined;
+  return [e.name, body?.name, (e.data as Record<string, unknown>)?.name].filter(
+    (name): name is string => typeof name === "string",
+  );
+}
+
+/**
+ * True only when the server definitely says the session does not exist:
+ * an HTTP 404, or the server's `NotFoundError`. Everything else — a
+ * refused connection while the server is still starting, a 5xx, a
+ * timeout, a body that would not parse — is not proof the session is
+ * gone, and must not cost the chat its session.
+ */
+export function isRemoteSessionNotFound(err: unknown): boolean {
+  if (errorStatus(err) === 404) return true;
+  return errorNames(err).includes("NotFoundError");
+}
+
+/** Waits between `session.get` attempts on a transient failure. */
+const RESUME_RETRY_DELAYS_MS: readonly number[] = [500, 1_500];
+
 /**
  * Ensure a session exists for this chat on the remote agent server.
  *
  * Resumes the stored session id if `session.get` confirms it's still
- * alive. If the stored id is stale (any failure from `session.get`),
- * resets local state and creates a fresh session, returning the new
- * id. The fresh session is created with Talon's standard permission
- * ruleset (see {@link buildPermissionRuleset}).
+ * alive. Only a definite not-found (see {@link isRemoteSessionNotFound})
+ * resets the chat — archiving the old id — and creates a fresh session
+ * with Talon's standard permission ruleset (see
+ * {@link buildPermissionRuleset}). Any other failure is retried a couple
+ * of times and then fails the turn with the session left in place: a
+ * server that is still starting after an update must not wipe every
+ * chat's session mapping.
  */
 export async function ensureRemoteSession<TClient extends RemoteAgentClient>(
   client: TClient,
   state: RemoteServerState<TClient>,
   chatId: string,
+  retryDelaysMs: readonly number[] = RESUME_RETRY_DELAYS_MS,
 ): Promise<string> {
   const session = getSession(chatId);
 
   if (session.sessionId) {
-    try {
-      await client.session.get({ sessionID: session.sessionId });
-      return session.sessionId;
-    } catch {
-      logWarn(
-        "agent",
-        `[${chatId}] Session ${session.sessionId} expired, creating new`,
-      );
-      resetSession(chatId);
+    const sessionId = session.sessionId;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await client.session.get({ sessionID: sessionId });
+        return sessionId;
+      } catch (err) {
+        if (isRemoteSessionNotFound(err)) {
+          logWarn(
+            "agent",
+            `[${chatId}] ${state.label} session ${sessionId} not found on the server, creating new`,
+          );
+          resetSession(chatId, "remote_session_not_found");
+          break;
+        }
+        const delay = retryDelaysMs[attempt];
+        const detail = err instanceof Error ? err.message : String(err);
+        if (delay === undefined) {
+          throw new TalonError(
+            `Could not check ${state.label} session ${sessionId} (${detail}); ` +
+              `kept it — try again once the server is up`,
+            { reason: "network", retryable: true, cause: err },
+          );
+        }
+        logWarn(
+          "agent",
+          `[${chatId}] ${state.label} session check failed (${detail}); ` +
+            `retrying in ${delay}ms, session kept`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
     }
   }
 

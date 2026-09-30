@@ -1,8 +1,9 @@
 /**
  * Telegram media captions over 1024 visible characters are rejected by the
  * Bot API ("message caption is too long") and the media is lost with them.
- * The media actions now send a truncated plain-text caption and deliver the
- * full text as a follow-up text message threaded to the media.
+ * The media actions now split an oversized caption on a clean boundary: the
+ * leading part that fits rides on the media (still formatted) and the rest
+ * follows as text message(s) threaded to the media.
  */
 import { describe, it, expect, vi } from "vitest";
 
@@ -17,11 +18,14 @@ vi.mock("../core/engine/gateway.js", () => ({
 }));
 
 import {
+  captionUnits,
   fitCaption,
   mediaHandlers,
+  splitCaption,
   visibleCaptionText,
   TELEGRAM_MAX_CAPTION,
 } from "../frontend/telegram/actions/media.js";
+import { messagingHandlers } from "../frontend/telegram/actions/messaging.js";
 import type { TelegramActionContext } from "../frontend/telegram/actions/types.js";
 
 const CHAT = 4242;
@@ -36,6 +40,7 @@ function fakeContext() {
     ),
     sendRichMessage: vi.fn(async () => ({ message_id: next++ })),
     sendMessage: vi.fn(async () => ({ message_id: next++ })),
+    editMessageCaption: vi.fn(async () => true),
   };
   const ctx = {
     bot: { api },
@@ -46,6 +51,20 @@ function fakeContext() {
   } as unknown as TelegramActionContext;
   return { ctx, api };
 }
+
+/** Every tag opened in `html` is closed, in order. */
+function balanced(html: string): boolean {
+  const stack: string[] = [];
+  for (const m of html.matchAll(/<(\/?)([a-z-]+)[^>]*>/gi)) {
+    if (m[1]) {
+      if (stack.pop() !== m[2]) return false;
+    } else stack.push(m[2]!);
+  }
+  return stack.length === 0;
+}
+
+const words = (n: number, w = "word") =>
+  Array.from({ length: n }, (_, i) => `${w}${i}`).join(" ");
 
 describe("fitCaption", () => {
   it("keeps short captions as HTML", () => {
@@ -74,26 +93,76 @@ describe("fitCaption", () => {
     expect(r.overflow).toBeUndefined();
   });
 
-  it("truncates an oversized caption to plain text and returns the overflow", () => {
-    const long = `**bold** ${"x".repeat(2000)}`;
+  it("splits an oversized caption: formatted head on the media, rest as overflow", () => {
+    const long = `**Summary** of the run\n\n${words(400)}`;
     const r = fitCaption(long);
-    expect(r.parse_mode).toBeUndefined();
-    expect(r.overflow).toBe(long);
-    expect(r.caption!.length).toBeLessThanOrEqual(TELEGRAM_MAX_CAPTION);
-    expect(r.caption!.startsWith("bold x")).toBe(true);
-    expect(r.caption!.endsWith("…")).toBe(true);
-    expect(r.caption).not.toContain("<");
+    expect(r.parse_mode).toBe("HTML");
+    expect(r.caption!.startsWith("<b>Summary</b> of the run")).toBe(true);
+    expect(visibleCaptionText(r.caption!).length).toBeLessThanOrEqual(
+      TELEGRAM_MAX_CAPTION,
+    );
+    // Nothing lost, nothing duplicated: head + rest reassemble the words.
+    const headWords = visibleCaptionText(r.caption!).split(/\s+/);
+    const restWords = r.overflow!.split(/\s+/);
+    expect([...headWords, ...restWords].join(" ")).toBe(
+      long.replace(/\*\*/g, "").split(/\s+/).join(" "),
+    );
   });
 
-  it("does not split a surrogate pair at the cut", () => {
-    const r = fitCaption(`${"a".repeat(999)}${"😀".repeat(100)}`);
-    const cut = r.caption!.slice(0, -1);
-    const last = cut.charCodeAt(cut.length - 1);
+  it("never cuts through a word", () => {
+    const r = fitCaption(words(400));
+    const head = visibleCaptionText(r.caption!);
+    expect(head).toMatch(/word\d+$/);
+    expect(r.overflow).toMatch(/^word\d+/);
+    const n = Number(/(\d+)$/.exec(head)![1]);
+    expect(r.overflow!.startsWith(`word${n + 1} `)).toBe(true);
+  });
+
+  it("keeps the head's markup balanced when splitting inside formatting", () => {
+    const long = Array.from(
+      { length: 60 },
+      (_, i) => `- **item ${i}** — _detail_ [link](https://example.com/${i})`,
+    ).join("\n");
+    const r = fitCaption(long);
+    expect(r.overflow).toBeTruthy();
+    expect(balanced(r.caption!)).toBe(true);
+    expect(visibleCaptionText(r.caption!).length).toBeLessThanOrEqual(
+      TELEGRAM_MAX_CAPTION,
+    );
+  });
+
+  it("closes and reopens a code fence across the split", () => {
+    const code = Array.from({ length: 200 }, (_, i) => `line ${i};`).join("\n");
+    const r = fitCaption(`intro\n\n\`\`\`\n${code}\n\`\`\``);
+    expect(balanced(r.caption!)).toBe(true);
+    expect(r.caption).toContain("<pre>");
+    expect(r.overflow!.startsWith("```")).toBe(true);
+    expect(r.overflow).toContain("line 199;");
+  });
+
+  it("does not split a surrogate pair", () => {
+    const r = fitCaption("😀".repeat(1000));
+    const cap = visibleCaptionText(r.caption!);
+    const last = cap.charCodeAt(cap.length - 1);
     expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    expect(cap.length).toBeLessThanOrEqual(TELEGRAM_MAX_CAPTION);
+    expect(cap.length + r.overflow!.length).toBe(2000);
   });
 });
 
-describe("send_photo caption cap", () => {
+describe("splitCaption", () => {
+  it("returns the whole text as head when it fits", () => {
+    expect(splitCaption("short")).toEqual({ head: "short", rest: "" });
+  });
+
+  it("respects a custom limit", () => {
+    const s = splitCaption(words(50), 100)!;
+    expect(captionUnits(s.head)).toBeLessThanOrEqual(100);
+    expect(`${s.head} ${s.rest}`).toBe(words(50));
+  });
+});
+
+describe("send_file / send_photo caption split", () => {
   it("sends a short caption as-is with no follow-up", async () => {
     const { ctx, api } = fakeContext();
     const res = await mediaHandlers.send_photo(
@@ -111,20 +180,22 @@ describe("send_photo caption cap", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("truncates a long caption and follows up with the full text", async () => {
+  it("sends the document with the fitting head and the remainder as a reply", async () => {
     const { ctx, api } = fakeContext();
-    const long = "y".repeat(3000);
-    const res = await mediaHandlers.send_photo(
-      { action: "send_photo", url: "https://x/y.jpg", caption: long },
+    const long = words(300);
+    const res = await mediaHandlers.send_file(
+      { action: "send_file", file_id: "abc", caption: long },
       CHAT,
       ctx,
     );
-    const opts = (api.sendPhoto.mock.calls[0] as unknown[])[2] as {
+    const opts = (api.sendDocument.mock.calls[0] as unknown[])[2] as {
       caption: string;
       parse_mode?: string;
     };
-    expect(opts.caption.length).toBeLessThanOrEqual(TELEGRAM_MAX_CAPTION);
-    expect(opts.parse_mode).toBeUndefined();
+    expect(opts.parse_mode).toBe("HTML");
+    expect(visibleCaptionText(opts.caption).length).toBeLessThanOrEqual(
+      TELEGRAM_MAX_CAPTION,
+    );
     expect(api.sendRichMessage).toHaveBeenCalledTimes(1);
     const [chat, content, extra] = api.sendRichMessage.mock
       .calls[0] as unknown as [
@@ -133,31 +204,27 @@ describe("send_photo caption cap", () => {
       { reply_parameters?: { message_id: number } },
     ];
     expect(chat).toBe(CHAT);
-    expect(content.markdown).toBe(long);
+    expect(`${opts.caption} ${content.markdown}`).toBe(long);
     expect(extra.reply_parameters?.message_id).toBe(100);
     expect(res).toEqual({
       ok: true,
       message_id: 100,
-      caption_truncated: true,
+      caption_split: true,
       caption_message_ids: [101],
     });
   });
 
-  it("chunks a caption longer than one text message", async () => {
+  it("chunks a remainder longer than one text message", async () => {
     const { ctx, api } = fakeContext();
     const res = await mediaHandlers.send_file(
-      {
-        action: "send_file",
-        file_id: "abc",
-        caption: "z ".repeat(5000),
-      },
+      { action: "send_file", file_id: "abc", caption: "z ".repeat(5000) },
       CHAT,
       ctx,
     );
     expect(api.sendDocument).toHaveBeenCalledTimes(1);
     expect(api.sendRichMessage.mock.calls.length).toBeGreaterThan(1);
     expect(res!.ok).toBe(true);
-    expect(res!.caption_truncated).toBe(true);
+    expect(res!.caption_split).toBe(true);
   });
 
   it("keeps the media send ok when the follow-up fails", async () => {
@@ -165,20 +232,20 @@ describe("send_photo caption cap", () => {
     api.sendRichMessage.mockRejectedValue(new Error("boom"));
     api.sendMessage.mockRejectedValue(new Error("boom"));
     const res = await mediaHandlers.send_photo(
-      { action: "send_photo", url: "u", caption: "q".repeat(2000) },
+      { action: "send_photo", url: "u", caption: words(300) },
       CHAT,
       ctx,
     );
     expect(res!.ok).toBe(true);
     expect(res!.message_id).toBe(100);
-    expect(String(res!.warning)).toContain("truncated caption");
+    expect(String(res!.warning)).toContain("rest of its caption");
   });
 });
 
-describe("send_media_group caption cap", () => {
-  it("caps the oversized item caption and follows up after the album", async () => {
+describe("send_media_group caption split", () => {
+  it("splits the oversized item caption and follows up after the album", async () => {
     const { ctx, api } = fakeContext();
-    const long = "w".repeat(1500);
+    const long = words(250, "w");
     const res = await mediaHandlers.send_media_group(
       {
         action: "send_media_group",
@@ -194,20 +261,50 @@ describe("send_media_group caption cap", () => {
       caption?: string;
       parse_mode?: string;
     }[];
-    expect(group[0]!.caption!.length).toBeLessThanOrEqual(TELEGRAM_MAX_CAPTION);
-    expect(group[0]!.parse_mode).toBeUndefined();
+    expect(visibleCaptionText(group[0]!.caption!).length).toBeLessThanOrEqual(
+      TELEGRAM_MAX_CAPTION,
+    );
+    expect(group[0]!.parse_mode).toBe("HTML");
     expect(group[1]).toMatchObject({ caption: "short", parse_mode: "HTML" });
     const [, content, extra] = api.sendRichMessage.mock.calls[0] as unknown as [
       number,
       { markdown: string },
       { reply_parameters?: { message_id: number } },
     ];
-    expect(content.markdown).toBe(long);
+    expect(`${group[0]!.caption} ${content.markdown}`).toBe(long);
     expect(extra.reply_parameters?.message_id).toBe(100);
     expect(res).toMatchObject({
       ok: true,
       message_ids: [100, 101],
-      caption_truncated: true,
+      caption_split: true,
+    });
+  });
+});
+
+describe("edit_message is_caption", () => {
+  it("refuses an oversized caption edit with guidance instead of a 400", async () => {
+    const { ctx, api } = fakeContext();
+    const res = await messagingHandlers.edit_message(
+      { message_id: 5, is_caption: true, text: "c".repeat(1500) },
+      CHAT,
+      ctx,
+    );
+    expect(res).toMatchObject({ ok: false });
+    expect(String(res!.error)).toContain("max 1024");
+    expect(api.editMessageCaption).not.toHaveBeenCalled();
+  });
+
+  it("edits a caption that fits", async () => {
+    const { ctx, api } = fakeContext();
+    const res = await messagingHandlers.edit_message(
+      { message_id: 5, is_caption: true, text: "**new**" },
+      CHAT,
+      ctx,
+    );
+    expect(res).toEqual({ ok: true });
+    expect(api.editMessageCaption).toHaveBeenCalledWith(CHAT, 5, {
+      caption: "<b>new</b>",
+      parse_mode: "HTML",
     });
   });
 });

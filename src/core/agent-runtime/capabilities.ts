@@ -112,6 +112,13 @@ export interface ChatBackend {
  */
 export interface BackgroundRunner {
   runOneShotAgent(params: OneShotAgentParams): Promise<OneShotUsage | void>;
+  /**
+   * Whether `runOneShotAgent` honours `resumeSessionId` (and reports the
+   * handle through `onSessionId`). A sub-agent interrupted by a daemon
+   * restart resumes its conversation on such a backend; on any other it is
+   * re-briefed with its previous transcript instead.
+   */
+  readonly supportsResume?: boolean;
   evictOrphanSubprocesses?(contextLabel: string): Promise<{
     found: number;
     termed: number;

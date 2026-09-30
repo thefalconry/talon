@@ -59,7 +59,7 @@ const {
   getRecentBySenderId,
   getMessagesByUser,
   searchHistory,
-  clearHistory,
+  purgeChatHistory,
   setMessageFilePath,
   getLatestMessageId,
   loadHistory,
@@ -148,10 +148,10 @@ describe("getHistoryStats", () => {
     expect(stats.newestTimestamp).toBe(0);
   });
 
-  it("returns zeroes after clearHistory", () => {
+  it("returns zeroes after purgeChatHistory", () => {
     const id = uniqueChat();
     pushMessage(id, makeMsg({ msgId: 1, senderId: 1 }));
-    clearHistory(id);
+    purgeChatHistory(id);
 
     const stats = getHistoryStats(id);
     expect(stats.totalMessages).toBe(0);
@@ -244,7 +244,7 @@ describe("getKnownUsers", () => {
   it("returns 'No users seen yet.' for cleared chat", () => {
     const id = uniqueChat();
     pushMessage(id, makeMsg({ msgId: 1, senderId: 1 }));
-    clearHistory(id);
+    purgeChatHistory(id);
     expect(getKnownUsers(id)).toBe("No users seen yet.");
   });
 });
@@ -420,21 +420,21 @@ describe("searchHistory", () => {
   });
 });
 
-// ── clearHistory ──────────────────────────────────────────────────────────
+// ── purgeChatHistory ──────────────────────────────────────────────────────────
 
-describe("clearHistory", () => {
+describe("purgeChatHistory", () => {
   it("removes messages and subsequent getRecentHistory returns []", () => {
     const id = uniqueChat();
     pushMessage(id, makeMsg({ msgId: 1 }));
     pushMessage(id, makeMsg({ msgId: 2 }));
-    clearHistory(id);
+    purgeChatHistory(id);
     expect(getRecentHistory(id)).toEqual([]);
   });
 
   it("removal is durable (SQLite commits per write, no flush needed)", () => {
     const id = uniqueChat();
     pushMessage(id, makeMsg({ msgId: 1 }));
-    clearHistory(id);
+    purgeChatHistory(id);
 
     expect(getRecentHistory(id)).toEqual([]);
   });
@@ -444,7 +444,7 @@ describe("clearHistory", () => {
     const id2 = uniqueChat();
     pushMessage(id1, makeMsg({ msgId: 1 }));
     pushMessage(id2, makeMsg({ msgId: 2 }));
-    clearHistory(id1);
+    purgeChatHistory(id1);
 
     expect(getRecentHistory(id1)).toEqual([]);
     expect(getRecentHistory(id2)).toHaveLength(1);
@@ -503,10 +503,10 @@ describe("getLatestMessageId", () => {
     expect(getLatestMessageId("empty-latest-chat")).toBeUndefined();
   });
 
-  it("returns undefined after clearHistory", () => {
+  it("returns undefined after purgeChatHistory", () => {
     const id = uniqueChat();
     pushMessage(id, makeMsg({ msgId: 1 }));
-    clearHistory(id);
+    purgeChatHistory(id);
     expect(getLatestMessageId(id)).toBeUndefined();
   });
 

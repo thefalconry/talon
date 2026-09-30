@@ -14,16 +14,16 @@
  * the host.
  */
 
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { userHome } from "../../util/fs-path.js";
 
 /** Where the CLI caches its OAuth token. Env override for tests. */
 function agyTokenPath(override?: string): string {
   return (
     override ||
     process.env.TALON_AGY_TOKEN_FILE ||
-    join(homedir(), ".gemini", "antigravity-cli", "antigravity-oauth-token")
+    join(userHome(), ".gemini", "antigravity-cli", "antigravity-oauth-token")
   );
 }
 

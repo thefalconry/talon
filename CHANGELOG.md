@@ -1,5 +1,71 @@
 # Changelog
 
+## [5.26.6](https://github.com/thefalconry/talon/compare/v5.26.5...v5.26.6) (2026-09-30)
+
+
+### Tests
+
+* route the storage-layout user home through the home guard ([#1218](https://github.com/thefalconry/talon/issues/1218)) ([6b3db84](https://github.com/thefalconry/talon/commit/6b3db8445a9bc10c17c31c5035d4490a30045bbd))
+
+## [5.26.5](https://github.com/thefalconry/talon/compare/v5.26.4...v5.26.5) (2026-09-30)
+
+
+### Bug Fixes
+
+* **docker:** one persistent data root, old-layout detection, Claude transcript relink ([#1214](https://github.com/thefalconry/talon/issues/1214)) ([9ad2f88](https://github.com/thefalconry/talon/commit/9ad2f8818cd3e7321abe87d583894fa695781619))
+
+
+### Tests
+
+* isolate every worker from the real home; guard against ~/.talon access ([#1213](https://github.com/thefalconry/talon/issues/1213)) ([aca2d83](https://github.com/thefalconry/talon/commit/aca2d83b8f3ac96874f7aa8f94583786728cfe86))
+
+## [5.26.4](https://github.com/thefalconry/talon/compare/v5.26.3...v5.26.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* **backup,remote-server:** tiered retention guard rails; keep OpenCode/Kilo sessions on transient errors ([#1215](https://github.com/thefalconry/talon/issues/1215)) ([61c663c](https://github.com/thefalconry/talon/commit/61c663c2b8ee89ef44ccffd2ec84034bfc8bbaa6))
+
+## [5.26.3](https://github.com/thefalconry/talon/compare/v5.26.2...v5.26.3) (2026-09-30)
+
+
+### Bug Fixes
+
+* **history:** never delete chat history on switch/reset; soft reset + explicit purge ([#1211](https://github.com/thefalconry/talon/issues/1211)) ([66401b2](https://github.com/thefalconry/talon/commit/66401b24b709c08662c77efa462c12542da065dc))
+
+## [5.26.2](https://github.com/thefalconry/talon/compare/v5.26.1...v5.26.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* **backup:** refuse /update without a checkpoint, alert on a missing key, keep the key on restore ([#1207](https://github.com/thefalconry/talon/issues/1207)) ([b8b61b8](https://github.com/thefalconry/talon/commit/b8b61b8a42e98fe69fc8cc14bd8af2e541fb0044))
+* **boot:** never delete chat history on model reconcile; checkpoint on version change ([#1206](https://github.com/thefalconry/talon/issues/1206)) ([029bc5a](https://github.com/thefalconry/talon/commit/029bc5acea02f7bb3f7cf7d25c9ae03040b0eeeb))
+
+## [5.26.1](https://github.com/thefalconry/talon/compare/v5.26.0...v5.26.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* dedup queued boot alerts; let a late plugin init clear its alert ([#1201](https://github.com/thefalconry/talon/issues/1201)) ([559e547](https://github.com/thefalconry/talon/commit/559e5478b12ccd8c18c134b979ddfeccdc17ae01))
+* **models:** honour a pinned claude model, including &lt;alias&gt;[1m] ([#1203](https://github.com/thefalconry/talon/issues/1203)) ([b60d779](https://github.com/thefalconry/talon/commit/b60d779d1fb85096b08dc086f608da078ce5c582))
+* **telegram:** split long media captions instead of truncating them ([#1202](https://github.com/thefalconry/talon/issues/1202)) ([a9f184e](https://github.com/thefalconry/talon/commit/a9f184e0fae54573c621975375cfa64d07988094))
+
+## [5.26.0](https://github.com/thefalconry/talon/compare/v5.25.1...v5.26.0) (2026-09-30)
+
+
+### Features
+
+* **native:** slash commands on the native frontend ([#1196](https://github.com/thefalconry/talon/issues/1196)) ([beb4d82](https://github.com/thefalconry/talon/commit/beb4d824aa0e8fcfbb152ce395273605e7b24b15))
+* **telegram:** interactive /backup panel ([#1197](https://github.com/thefalconry/talon/issues/1197)) ([66046eb](https://github.com/thefalconry/talon/commit/66046eb794d23d36896f1a3427fb8bb9497ee168))
+
+
+### Bug Fixes
+
+* **codex,agy:** fail one-shot runs that fail upstream; resolve the ChatGPT default model ([#1162](https://github.com/thefalconry/talon/issues/1162)) ([8af58d6](https://github.com/thefalconry/talon/commit/8af58d6b5c848a8df940f5b24021457a29938813))
+* **commands:** dead buttons, hard-coded health, unvalidated effort ([#1198](https://github.com/thefalconry/talon/issues/1198)) ([942c447](https://github.com/thefalconry/talon/commit/942c447ea1205c02b4d4cbe41a379a169fc4c7a4))
+* **mesh:** let pairing links re-pair a known device ([#1195](https://github.com/thefalconry/talon/issues/1195)) ([a35c589](https://github.com/thefalconry/talon/commit/a35c58955b7a00f6cc828e6f6ddcabbb3e5ccb85))
+* **tools:** tell aborts from timeouts in the tool bridge and one-shot logs ([#1169](https://github.com/thefalconry/talon/issues/1169)) ([dfede5e](https://github.com/thefalconry/talon/commit/dfede5e549bbae0aba2b17168880822d7ec0f298))
+
 ## [5.25.1](https://github.com/thefalconry/talon/compare/v5.25.0...v5.25.1) (2026-09-30)
 
 

@@ -89,23 +89,6 @@ describe("telegram render", () => {
     ]);
   });
 
-  it("marks the canonical model button as selected for legacy aliases", () => {
-    const buttons = renderSettingsKeyboard(
-      "claude-sonnet-4-6",
-      "adaptive",
-      true,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      ["off", "low", "medium", "high", "max"],
-    )
-      .flat()
-      .map((button) => button.text);
-
-    expect(buttons).toContain("\u2713 Sonnet 4.6");
-  });
-
   it("renders only the reasoning levels registered for the active model", () => {
     const buttons = renderEffortRows(
       "adaptive",
