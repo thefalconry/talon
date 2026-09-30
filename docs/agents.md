@@ -138,7 +138,7 @@ first compiler it meets.
 | `function-size` | function-size ratchet                                     |
 | `tree`          | tree ratchet                                              |
 | `only-skip`     | no `.only()` / `.skip()` left in tests                    |
-| `tests`         | `vitest run --changed <base>` — tests related to the diff |
+| `tests`         | `vitest related <changed src>` — tests importing the diff |
 | `gitleaks`      | secrets in `<base>..HEAD`; skipped with a note if absent  |
 
 Every step runs even after one fails, so one pass shows everything red. It
@@ -149,11 +149,15 @@ green, 1 is red. `PREFLIGHT_BASE` (default `origin/main`) is the diff base,
 `PREFLIGHT_SKIP=knip,tests` skips steps, `PREFLIGHT_QUIET=1` keeps step
 output in the logs only. It needs `npm ci` done in the checkout.
 
+The changed set is everything since the merge-base with the base, plus
+staged, unstaged and untracked work. A change to `package-lock.json`,
+`vitest.config.ts` or the test harness (`src/__tests__/setup/`) runs the whole
+unit suite; a change with nothing under `src/` runs no tests. A hub module
+(e.g. `core/types.ts`) makes `vitest related` pick up most of the suite, so
+the lane is slower there — which is exactly when it is worth waiting for.
+
 It is not the whole of CI: functional/integration suites, native builds,
-coverage and the Windows/macOS matrix still only run on GitHub. A change whose
-blast radius is the whole tree (e.g. `core/types.ts`) makes `--changed` pick
-up most of the suite, so the lane is slower there — which is exactly when it
-is worth waiting for.
+coverage and the Windows/macOS matrix still only run on GitHub.
 
 **Wiring into sub-agents.** `spawn_agent` takes `preflight?: boolean`. Unset,
 it defaults on for any brief that mentions a PR (`PR`, `PRs`, "pull

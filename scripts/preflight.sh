@@ -15,7 +15,7 @@
 #   function-size  function-size ratchet
 #   tree           tree ratchet
 #   only-skip      no .only()/.skip() left in tests
-#   tests          vitest --changed <base> (only tests related to the diff)
+#   tests          vitest related <changed src files> (tests touched by the diff)
 #   gitleaks       secrets in <base>..HEAD (skipped when the binary is absent)
 #
 # Every step runs even after one fails, so one pass reports everything that
@@ -101,8 +101,45 @@ only_skip_check() {
   return 0
 }
 
+# Files this branch changes: committed since the merge-base with $BASE (so a
+# moving main never drags other people's changes in), plus staged, unstaged
+# and untracked work.
+changed_files() {
+  {
+    git diff --name-only --diff-filter=d "$BASE...HEAD"
+    git diff --name-only --diff-filter=d HEAD
+    git ls-files --others --exclude-standard
+  } | sort -u
+}
+
+# The unit tests related to the diff. `vitest related` walks the import graph
+# from the changed sources, so a leaf edit runs a handful of files and a
+# change to a hub module runs everything that imports it. A dependency or
+# test-harness change reruns the whole suite; a change with nothing under
+# src/ runs none. (Plain `vitest --changed` is not used: it treats any
+# package.json edit — even a new npm script — as "rerun everything".)
 changed_tests() {
-  "$BIN/vitest" run --changed "$BASE" --passWithNoTests --reporter=dot
+  local all=() src=()
+  mapfile -t all < <(changed_files)
+  local f
+  for f in "${all[@]}"; do
+    case "$f" in
+    package-lock.json | vitest.config.* | src/__tests__/setup/*)
+      echo "tests: $f changed — running the full unit suite"
+      "$BIN/vitest" run --reporter=dot
+      return
+      ;;
+    src/*.ts | src/*.tsx | src/*.mts | src/*.js | src/*.mjs)
+      src+=("$f")
+      ;;
+    esac
+  done
+  if [[ ${#src[@]} -eq 0 ]]; then
+    echo "tests: no changed sources under src/ — nothing to run"
+    return 0
+  fi
+  echo "tests: ${#src[@]} changed source file(s) — running related tests"
+  "$BIN/vitest" related --run --passWithNoTests --reporter=dot "${src[@]}"
 }
 
 gitleaks_check() {
