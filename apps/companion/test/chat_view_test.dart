@@ -108,4 +108,35 @@ void main() {
     // Flush AppState's debounced snapshot-save timer before teardown.
     await tester.pump(const Duration(seconds: 3));
   });
+
+  testWidgets('opens to the bottom even with a tall last message', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final now = DateTime.now();
+    final tallBody = List.generate(80, (i) => 'Line $i: A moderately long sentence explaining something detail oriented.').join('\n\n');
+    final state = await seededState({
+      'c1': [
+        msg('1', Role.user, 'hello', now.subtract(const Duration(minutes: 5))),
+        msg('2', Role.assistant, tallBody, now),
+      ],
+    });
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    final listViewFinder = find.byType(ListView);
+    expect(listViewFinder, findsOneWidget);
+    final listView = tester.widget<ListView>(listViewFinder);
+    final controller = listView.controller;
+    expect(controller, isNotNull);
+    expect(controller!.hasClients, isTrue);
+    final pos = controller.position;
+    expect(pos.pixels, equals(pos.maxScrollExtent));
+    expect(pos.maxScrollExtent, greaterThan(0));
+
+    // Flush AppState's debounced snapshot-save timer before teardown.
+    await tester.pump(const Duration(seconds: 3));
+  });
 }

@@ -217,7 +217,7 @@ jobs:
           case "${{ matrix.platform }}" in
             windows)
               # Portable zip of the raw Release folder…
-              ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows.zip" ./* )
+              ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows-$APP_VERSION.zip" ./* )
               # …plus a double-click Setup.exe (the Windows counterpart of the
               # macOS DMG), compiled from the committed .iss with Inno Setup
               # (preinstalled on windows-latest; choco is a fallback).
@@ -242,10 +242,14 @@ jobs:
               if ISCC.exe \
                   "-DAppVersion=$APP_VERSION" \
                   "-DSourceDir=$RELEASE_DIR" \
+                  "-Ftalon-companion-windows-setup-$APP_VERSION" \
                   "-O$DEST" \
                   installer/windows/talon-companion.iss; then
                 if [ -f "$DEST/talon-companion-windows-setup.exe" ]; then
-                  echo "Built talon-companion-windows-setup.exe"
+                  mv "$DEST/talon-companion-windows-setup.exe" "$DEST/talon-companion-windows-setup-$APP_VERSION.exe"
+                fi
+                if [ -f "$DEST/talon-companion-windows-setup-$APP_VERSION.exe" ]; then
+                  echo "Built talon-companion-windows-setup-$APP_VERSION.exe"
                 else
                   installer_failed "ISCC reported success but no setup.exe was written"
                 fi
@@ -288,7 +292,7 @@ jobs:
 
               STAGE=$(mktemp -d)
               cp -R "$APP" "$STAGE/"
-              OUT="$DEST/talon-companion-macos.dmg"
+              OUT="$DEST/talon-companion-macos-$APP_VERSION.dmg"
               # create-dmg drives Finder via AppleScript and can flake on CI
               # runners — never let a cosmetic failure cost the release asset:
               # fall back to the old undecorated hdiutil DMG.
@@ -310,8 +314,8 @@ jobs:
               fi
               rm -rf "$STAGE"
               ;;
-            linux)   ( cd build/linux/x64/release/bundle && tar czf "$DEST/talon-companion-linux.tar.gz" . ) ;;
-            android) cp build/app/outputs/flutter-apk/app-release.apk "$DEST/talon-companion-android.apk" ;;
+            linux)   ( cd build/linux/x64/release/bundle && tar czf "$DEST/talon-companion-linux-$APP_VERSION.tar.gz" . ) ;;
+            android) cp build/app/outputs/flutter-apk/app-release.apk "$DEST/talon-companion-android-$APP_VERSION.apk" ;;
           esac
           ls -la "$DEST"
 

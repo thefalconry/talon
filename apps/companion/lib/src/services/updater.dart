@@ -155,13 +155,16 @@ class UpdateRelease {
 
   /// The release asset this platform installs. The names are fixed by the
   /// companion workflow's packaging step — keep the two in step.
-  static String? assetNameFor(String platform) => switch (platform) {
-        'android' => 'talon-companion-android.apk',
-        'windows' => 'talon-companion-windows.zip',
-        'macos' => 'talon-companion-macos.dmg',
-        'linux' => 'talon-companion-linux.tar.gz',
-        _ => null,
-      };
+  static String? assetNameFor(String platform, [String? version]) {
+    final v = (version != null && version.isNotEmpty) ? '-$version' : '';
+    return switch (platform) {
+      'android' => 'talon-companion-android$v.apk',
+      'windows' => 'talon-companion-windows$v.zip',
+      'macos' => 'talon-companion-macos$v.dmg',
+      'linux' => 'talon-companion-linux$v.tar.gz',
+      _ => null,
+    };
+  }
 
   /// Parse a GitHub `releases/latest` payload. Returns null when the payload
   /// is unusable (no parseable tag, or no asset for this platform — e.g. a
@@ -174,14 +177,23 @@ class UpdateRelease {
     final tag = '${json['tag_name'] ?? ''}';
     final version = AppVersion.tryParse(tag);
     if (version == null) return null;
-    final wanted = assetNameFor(platform);
-    if (wanted == null) return null;
+    if (assetNameFor(platform) == null) return null;
     final assets = json['assets'];
     if (assets is! List) return null;
+
+    final bareVersion =
+        (tag.startsWith('v') || tag.startsWith('V')) ? tag.substring(1) : tag;
+    final candidates = {
+      if (bareVersion.isNotEmpty) assetNameFor(platform, bareVersion),
+      assetNameFor(platform, tag),
+      assetNameFor(platform),
+    }.whereType<String>().toSet();
+
     for (final raw in assets) {
       if (raw is! Map) continue;
       final asset = raw.cast<String, dynamic>();
-      if ('${asset['name'] ?? ''}' != wanted) continue;
+      final name = '${asset['name'] ?? ''}';
+      if (!candidates.contains(name)) continue;
       final url = '${asset['browser_download_url'] ?? ''}';
       if (url.isEmpty) continue;
       final digest = '${asset['digest'] ?? ''}'.toLowerCase();
@@ -191,7 +203,7 @@ class UpdateRelease {
         tag: tag,
         notes: '${json['body'] ?? ''}',
         pageUrl: '${json['html_url'] ?? kReleasesPageUrl}',
-        assetName: wanted,
+        assetName: name,
         assetUrl: url,
         assetSize: (asset['size'] is num) ? (asset['size'] as num).toInt() : 0,
         sha256: _sha256Hex.hasMatch(hex) ? hex : null,

@@ -161,6 +161,28 @@ void main() {
       expect(UpdateRelease.assetNameFor('unsupported'), isNull);
     });
 
+    test('assetNameFor formats with version tag when provided', () {
+      expect(UpdateRelease.assetNameFor('android', '5.22.0'),
+          'talon-companion-android-5.22.0.apk');
+      expect(UpdateRelease.assetNameFor('windows', '5.22.0'),
+          'talon-companion-windows-5.22.0.zip');
+      expect(UpdateRelease.assetNameFor('macos', '5.22.0'),
+          'talon-companion-macos-5.22.0.dmg');
+      expect(UpdateRelease.assetNameFor('linux', '5.22.0'),
+          'talon-companion-linux-5.22.0.tar.gz');
+    });
+
+    test('fromFeedJson matches versioned release assets', () {
+      final feed = _feed(
+        tag: 'v5.22.0',
+        apkBytes: apk,
+        assetName: 'talon-companion-android-5.22.0.apk',
+      );
+      final rel = UpdateRelease.fromFeedJson(feed, platform: 'android');
+      expect(rel, isNotNull);
+      expect(rel!.assetName, 'talon-companion-android-5.22.0.apk');
+    });
+
     test('a release without this platform’s build reads as nothing to do', () {
       final rel = UpdateRelease.fromFeedJson(
         _feed(tag: 'v4.2.0', apkBytes: apk),
