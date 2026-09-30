@@ -44,12 +44,17 @@ class PrivateStore {
   /// (see `FileSecretStore`).
   static const appLockFileName = 'app_lock.v1.json';
 
+  /// The on-device mesh command audit (see `MeshAudit`). Names the paths
+  /// the daemon touched here, so it is kept as private as the rest.
+  static const meshAuditFileName = 'mesh_audit.v1.jsonl';
+
   /// Every file in the support directory that must be this user's alone.
   static const privateFileNames = [
     prefsFileName,
     snapshotFileName,
     sealedSnapshotFileName,
     appLockFileName,
+    meshAuditFileName,
   ];
 
   static bool _isLinux() => !kIsWeb && Platform.isLinux;

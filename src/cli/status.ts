@@ -4,8 +4,9 @@
  */
 
 import pc from "picocolors";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { findRunningInstance } from "../core/daemon/discovery.js";
+import { files } from "../util/paths.js";
 import { printBanner, loadConfig } from "./config.js";
 import { CONFIG_FILE } from "./context.js";
 
@@ -38,6 +39,26 @@ export function formatAlertLines(health: Record<string, unknown>): string[] {
   });
 }
 
+/**
+ * The native bridge's TLS certificate fingerprint, from its discovery file —
+ * what a talon-node pins on first use, shown so an operator can compare the
+ * two. Null when the bridge is off, serves plain http, or never ran.
+ */
+export function bridgeFingerprint(
+  path: string = files.nativeBridge,
+): string | null {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as {
+      fingerprint?: unknown;
+    };
+    return typeof raw.fingerprint === "string" && raw.fingerprint
+      ? raw.fingerprint
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function showStatus(): Promise<void> {
   printBanner();
   const instance = await findRunningInstance();
@@ -60,6 +81,8 @@ export async function showStatus(): Promise<void> {
     console.log(`  ${pc.dim("Messages")}     ${h.messages}`);
     console.log(`  ${pc.dim("Queue")}        ${h.queue} pending`);
     console.log(`  ${pc.dim("Errors")}       ${h.errors}`);
+    const fingerprint = bridgeFingerprint();
+    if (fingerprint) console.log(`  ${pc.dim("Bridge TLS")}   ${fingerprint}`);
     console.log(`  ${pc.dim("Last active")}  ${h.lastActivity}\n`);
     const alerts = formatAlertLines(h);
     if (alerts.length > 0) {

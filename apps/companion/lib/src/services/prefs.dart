@@ -3,12 +3,13 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform;
+    show TargetPlatform, defaultTargetPlatform, visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/connection.dart';
+import 'connection_vault.dart';
 import 'log.dart';
 import 'private_store.dart';
 
@@ -28,6 +29,11 @@ class Prefs {
   static const _kMeshElevated = 'mesh.elevated.v1';
   static const _kMeshControlBridge = 'mesh.controlBridge.v1';
   static const _kMeshGrantsMigrated = 'mesh.grantsMigrated.v1';
+  static const _kMeshGrantsMigrated2 = 'mesh.grantsMigrated.v2';
+  static const _kMeshGrantsPerPairing = 'mesh.grantsPerPairing.v1';
+  static const _kMeshMaxConcurrent = 'mesh.maxConcurrent.v1';
+  static const _kMeshMaxQueued = 'mesh.maxQueued.v1';
+  static const _kMeshMaxWriteGiB = 'mesh.maxWriteGiB.v1';
   static const _kMeshBgAliveAt = 'mesh.bg.alive_at.v1';
   static const _kMeshBgStartedAt = 'mesh.bg.started_at.v1';
 
@@ -49,6 +55,7 @@ class Prefs {
       await SharedPreferences.getInstance(),
       snapshotFile: fileSnapshot ? await _resolveSnapshotFile() : null,
     );
+    await prefs._loadSecrets();
     await prefs._migrateMeshGrants();
     if (prefs.meshDeviceId == null || prefs.meshDeviceId!.isEmpty) {
       await prefs.setMeshDeviceId(const Uuid().v4());
@@ -67,48 +74,156 @@ class Prefs {
     }
   }
 
-  /// Device control used to default to on, for every bridge. It is now an
-  /// explicit, per-bridge grant (see [meshDeviceControl]); an install that
-  /// was already set up keeps what it had — bound to the bridge it is
-  /// connected to today — while a fresh install starts with it off.
-  /// Idempotent, so the UI and background isolates can both run it.
+  /// Device control and elevated access are on by default again, for every
+  /// bridge. Between #1064 and this, both were an opt-in, per-bridge grant
+  /// that every pairing link wiped by writing `false` — so a stored `false`
+  /// with no bridge recorded is that wipe (or the old default), not a
+  /// choice, and goes back to the default. A value stored next to a
+  /// recorded bridge was set through the settings screen (or kept from
+  /// before #1064) and stays. Installs that never ran the #1064 migration
+  /// only ever stored what the user set. Idempotent, so the UI and
+  /// background isolates can both run it.
   Future<void> _migrateMeshGrants() async {
-    if (_sp.getBool(_kMeshGrantsMigrated) ?? false) return;
-    if (onboarded) {
-      final legacy = _sp.getBool(_kMeshDeviceControl) ?? true;
-      await _sp.setBool(_kMeshDeviceControl, legacy);
-      // Before this, device control always climbed to root/Shizuku when it
-      // could; keep that for the bridge that already had it.
-      await _sp.setBool(_kMeshElevated, legacy);
-      if (legacy) {
-        await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
-      }
+    if (_sp.getBool(_kMeshGrantsMigrated2) ?? false) return;
+    final hadOptIn = _sp.getBool(_kMeshGrantsMigrated) ?? false;
+    if (hadOptIn && _sp.getString(_kMeshControlBridge) == null) {
+      await _sp.remove(_kMeshDeviceControl);
+      await _sp.remove(_kMeshElevated);
     }
-    await _sp.setBool(_kMeshGrantsMigrated, true);
+    await _sp.setBool(_kMeshGrantsMigrated2, true);
   }
 
   /// Re-read the backing store from disk. SharedPreferences caches per
   /// isolate, so the background mesh isolate must reload after the UI isolate
   /// writes (mesh toggles, a new connection profile) to observe the change.
-  Future<void> reload() => _sp.reload();
+  /// The profile's secrets are re-read from the keystore with it.
+  Future<void> reload() async {
+    await _sp.reload();
+    await _loadSecrets();
+  }
 
   ConnectionConfig get connection {
-    final raw = _sp.getString(_kConnection);
-    if (raw == null) return ConnectionConfig.defaults();
+    final json = _connectionJson();
+    if (json == null) return ConnectionConfig.defaults();
     try {
-      return ConnectionConfig.fromJson(
-        (jsonDecode(raw) as Map).cast<String, dynamic>(),
-      );
+      // A secret still in the settings file (not migrated yet, or written
+      // while the keystore was unavailable) is the newer copy and wins.
+      return ConnectionConfig.fromJson({...?_vaulted, ...json});
     } catch (_) {
       return ConnectionConfig.defaults();
     }
   }
 
   Future<void> setConnection(ConnectionConfig c) async {
-    await _sp.setString(_kConnection, jsonEncode(c.toJson()));
-    // The profile carries the bridge token: make sure the file it lands in
-    // is this user's alone (a first write may have just created it).
+    final json = c.toJson();
+    if (vault != null) {
+      final secrets = _takeSecrets(json);
+      // No keystore after all: keep them in the settings file, as before.
+      if (!await _storeSecrets(secrets)) json.addAll(secrets);
+    }
+    await _sp.setString(_kConnection, jsonEncode(json));
+    // The profile may carry the bridge token (no keystore): make sure the
+    // file it lands in is this user's alone (a first write may have just
+    // created it).
     await privateStore?.harden();
+  }
+
+  // ── Connection secrets (#1056) ────────────────────────────────────────────
+
+  /// The OS keystore that holds the profile's secrets
+  /// ([ConnectionConfig.secretKeys]) apart from the settings file. Set at
+  /// startup by every isolate that loads the profile (the UI and the mesh
+  /// foreground service); null keeps them in the settings file (tests, and
+  /// anything that never set it).
+  static ConnectionVault? vault;
+
+  /// The secrets read from [vault] at the last load/reload; null when the
+  /// vault is unset or failed.
+  Map<String, String>? _vaulted;
+
+  static bool _vaultWarned = false;
+
+  @visibleForTesting
+  static void resetVaultWarning() => _vaultWarned = false;
+
+  Map<String, dynamic>? _connectionJson() {
+    final raw = _sp.getString(_kConnection);
+    if (raw == null) return null;
+    try {
+      return (jsonDecode(raw) as Map).cast<String, dynamic>();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Remove the secret fields from [json] and return them (null values
+  /// included: a present-but-null token still means "no token").
+  static Map<String, dynamic> _takeSecrets(Map<String, dynamic> json) => {
+        for (final k in ConnectionConfig.secretKeys)
+          if (json.containsKey(k)) k: json.remove(k),
+      };
+
+  /// Read the secrets from the keystore, then move any that still sit in
+  /// the settings file into it — once, on the first run after an update,
+  /// or after a run where the keystore was unavailable.
+  Future<void> _loadSecrets() async {
+    final v = vault;
+    if (v == null) return;
+    try {
+      final raw = await v.read();
+      _vaulted = raw == null
+          ? {}
+          : (jsonDecode(raw) as Map).map((k, e) => MapEntry('$k', '$e'));
+    } catch (e) {
+      _vaultUnavailable('read', e);
+      _vaulted = null;
+      return;
+    }
+    final json = _connectionJson();
+    if (json == null) return;
+    final legacy = _takeSecrets(json);
+    if (legacy.isEmpty || !await _storeSecrets(legacy)) return;
+    // Keystore first, settings file second: a crash in between leaves a
+    // copy in both, and the next load simply repeats this.
+    await _sp.setString(_kConnection, jsonEncode(json));
+    AppLog.info('prefs', 'moved the bridge credentials into the OS keystore');
+  }
+
+  /// Replace the keystore entry with [secrets]' non-null values. False when
+  /// the keystore refused, so the caller keeps them in the settings file.
+  Future<bool> _storeSecrets(Map<String, dynamic> secrets) async {
+    final v = vault;
+    if (v == null) return false;
+    final kept = <String, String>{
+      for (final e in secrets.entries)
+        if (e.value is String) e.key: e.value as String,
+    };
+    try {
+      if (kept.isEmpty) {
+        await v.delete();
+      } else {
+        await v.write(jsonEncode(kept));
+      }
+    } catch (e) {
+      _vaultUnavailable('write', e);
+      return false;
+    }
+    _vaulted = kept;
+    return true;
+  }
+
+  static void _vaultUnavailable(String op, Object error) {
+    if (_vaultWarned) {
+      AppLog.debug('prefs', 'OS keystore $op failed', error);
+      return;
+    }
+    _vaultWarned = true;
+    AppLog.warn(
+      'prefs',
+      'OS keystore unavailable ($op); keeping the bridge credentials in the '
+          'settings file',
+      error,
+    );
   }
 
   /// Restricts the on-disk settings store to the current OS user (Linux).
@@ -240,42 +355,75 @@ class Prefs {
       _sp.setInt(_kMeshInterval, v.clamp(60, 3600));
 
   /// Whether this device answers remote shell/filesystem commands (the
-  /// "teleport" substrate) for the bridge it is connected to now.
+  /// "teleport" substrate) for the bridge it is connected to now. Default
+  /// on; the user can turn it off in settings.
   ///
-  /// Off by default, and granted per bridge: turning it on records which
-  /// bridge it was turned on for, and a profile pointed at any other bridge
-  /// (a new pairing, a different host) reads it as off until the user turns
-  /// it on again there.
-  bool get meshDeviceControl =>
-      (_sp.getBool(_kMeshDeviceControl) ?? false) &&
-      _sp.getString(_kMeshControlBridge) == connection.bridgeKey;
+  /// With [meshGrantsPerPairing] on, the grant is also tied to the bridge it
+  /// was given to: a profile pointed at any other bridge reads it as off
+  /// until the user turns it on again there.
+  bool get meshDeviceControl {
+    final on = _sp.getBool(_kMeshDeviceControl) ?? true;
+    if (!meshGrantsPerPairing) return on;
+    return on && _sp.getString(_kMeshControlBridge) == connection.bridgeKey;
+  }
 
   Future<void> setMeshDeviceControl(bool v) async {
     await _sp.setBool(_kMeshDeviceControl, v);
-    if (v) {
-      await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
-    } else {
-      await _sp.setBool(_kMeshElevated, false);
-    }
+    if (v) await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
   }
 
   /// Whether device control may climb to an elevated tier (root, or
-  /// Shizuku's shell UID) on Android. Off by default and never on without
-  /// [meshDeviceControl] for the same bridge; while off, commands run as the
-  /// app itself and nothing asks the root manager or Shizuku for a grant.
+  /// Shizuku's shell UID) on Android. Default on, never on without
+  /// [meshDeviceControl]; while off, commands run as the app itself and
+  /// nothing asks the root manager or Shizuku for a grant.
   bool get meshElevated =>
-      meshDeviceControl && (_sp.getBool(_kMeshElevated) ?? false);
+      meshDeviceControl && (_sp.getBool(_kMeshElevated) ?? true);
 
   Future<void> setMeshElevated(bool v) => _sp.setBool(_kMeshElevated, v);
 
-  /// Withdraw device control and elevation — done whenever a pairing link
-  /// points the app at a bridge, so a newly paired bridge always starts with
-  /// neither, whatever the previous one had.
-  Future<void> revokeMeshGrants() async {
+  /// Opt-in restriction: every pairing starts with device control and
+  /// elevated access off, and a grant only holds for the bridge it was given
+  /// to. Default off — the grants are the user's, not the bridge's.
+  bool get meshGrantsPerPairing =>
+      _sp.getBool(_kMeshGrantsPerPairing) ?? false;
+
+  Future<void> setMeshGrantsPerPairing(bool v) async {
+    await _sp.setBool(_kMeshGrantsPerPairing, v);
+    // Turning it on keeps whatever the current bridge already has.
+    if (v) await _sp.setString(_kMeshControlBridge, connection.bridgeKey);
+  }
+
+  /// Whether a bridge paired now would get device control straight away —
+  /// what the pairing dialog tells the user.
+  bool get meshDeviceControlOnPairing =>
+      !meshGrantsPerPairing && (_sp.getBool(_kMeshDeviceControl) ?? true);
+
+  /// Run whenever a pairing link (or a forgotten connection) points the app
+  /// at a bridge. A no-op by default; with [meshGrantsPerPairing] on it
+  /// withdraws device control and elevation, so the new bridge starts with
+  /// neither, even at the same address.
+  Future<void> resetMeshGrantsForPairing() async {
+    if (!meshGrantsPerPairing) return;
     await _sp.setBool(_kMeshDeviceControl, false);
     await _sp.setBool(_kMeshElevated, false);
     await _sp.remove(_kMeshControlBridge);
   }
+
+  /// User overrides for the mesh command limits; null keeps the built-in
+  /// default (`MeshService.maxConcurrentCommands` / `maxQueuedCommands`,
+  /// `DeviceExec.maxWriteBytes`).
+  int? get meshMaxConcurrent => _sp.getInt(_kMeshMaxConcurrent);
+  Future<void> setMeshMaxConcurrent(int v) =>
+      _sp.setInt(_kMeshMaxConcurrent, v.clamp(1, 64));
+
+  int? get meshMaxQueued => _sp.getInt(_kMeshMaxQueued);
+  Future<void> setMeshMaxQueued(int v) =>
+      _sp.setInt(_kMeshMaxQueued, v.clamp(0, 1024));
+
+  /// Largest file a mesh write may produce, in GiB.
+  int? get meshMaxWriteGiB => _sp.getInt(_kMeshMaxWriteGiB);
+  Future<void> setMeshMaxWriteGiB(int v) =>
+      _sp.setInt(_kMeshMaxWriteGiB, v.clamp(1, 1024));
 
   int? get meshBgAliveAt => _sp.getInt(_kMeshBgAliveAt);
   Future<void> setMeshBgAliveAt(int epochMs) =>

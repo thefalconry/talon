@@ -72,6 +72,32 @@ successful authenticated connect (TOFU) and enforced afterwards; pre-seed it
 via `--fingerprint` for a fully pinned first contact (`/health` on the
 bridge reports it).
 
+When the node pins a certificate on first use it logs a banner with the
+fingerprint. Compare it with the `Bridge TLS` line of `talon status` on the
+daemon host. If they differ, stop the node, delete `fingerprint` from the
+config and reconnect with `--fingerprint <the daemon's value>`.
+
+### Strict TLS (opt-in)
+
+Trust-on-first-use stays the default. To refuse any bridge whose
+fingerprint was not configured up front, pass `--strict-tls` to `run` or
+`install` (saved as `"strictTls": true` in the config):
+
+```sh
+./talon-node install --bridge https://<daemon-host>:19880 --token <token> \
+  --fingerprint <sha256 from talon status> --strict-tls
+```
+
+With strict TLS on, the node:
+
+- refuses to start (and `install` refuses) without a `fingerprint`, or with
+  a plain `http://` bridge URL;
+- rejects the TLS handshake with an unpinned bridge instead of adopting the
+  certificate it sees.
+
+`talon-node status` shows the mode on its `tls mode:` line.
+`--strict-tls=false` turns it back off.
+
 ### Local command policy
 
 The optional `policy` block controls what the mesh may do on this host. Only
@@ -100,6 +126,22 @@ touch the config directory or the node's own binary.
 
 Paths are checked after resolving symlinks. Path limits only mean something
 with `disableExec`, because a shell can reach any file.
+
+### Command audit
+
+Every mesh command the node runs is logged to `audit.jsonl` next to
+`config.json` (0600, the newest 500–999 entries). One JSON line per command:
+
+```json
+{"time":"2026-09-28T10:00:00Z","commandId":"…","name":"exec","target":"sha256:…","ok":true,"durationMs":12,"credential":"device:0123456789abcdef"}
+```
+
+`target` is the path a filesystem command touched (`from -> to` for
+`move`), or the SHA-256 of an `exec` command line. File contents and command
+lines are never recorded. `credential` names the bearer the node was using
+(`device:<credential id>`, `shared`), never the secret. `talon-node status`
+shows the last 10 entries; `talon-node audit [-n 50] [--json]` prints more.
+Writing the log never delays or fails a command.
 
 ## How it plugs in
 
@@ -165,9 +207,15 @@ it matches:
 `update_node` (daemon-side mesh tool) streams a replacement binary to the
 node, which re-hashes it, atomically swaps its own binary, and restarts into
 it — an in-place `execve` on Linux/macOS (same pid, no supervisor
-crash-accounting), a rename-aside + relaunch on Windows. A truncated or
-mismatched binary is refused before the swap, so the running node is never
-left broken. With no `binary_path` the daemon resolves the right build
+crash-accounting), a rename-aside + relaunch on Windows. The command must
+carry the binary's `sha256` (the daemon always sends it); a missing digest,
+or a truncated or mismatched binary, is refused before the swap, so the
+running node is never left broken. The node also reads the pushed binary's
+embedded version and refuses an older release, or the exact build it is
+already running, unless the command passes `allow_downgrade: true` (the
+`update_node` tool's parameter of the same name). A different build of the
+same release (a dev checkout at a newer commit) is allowed. With no
+`binary_path` the daemon resolves the right build
 itself from the node's registered platform/arch (nodes advertise
 `runtime.GOARCH`) — source build in a dev checkout, else the digest-verified
 release download. Confirm with `get_device_status` once `appVersion`

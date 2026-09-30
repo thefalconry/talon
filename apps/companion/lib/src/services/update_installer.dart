@@ -149,7 +149,8 @@ class PlatformUpdateInstaller implements UpdateInstaller {
 
   // ── Android ───────────────────────────────────────────────────────────────
 
-  /// Two paths, best first.
+  /// Two paths, best first — both behind the signer check: the APK must be
+  /// this package and carry this install's signing key, or nothing installs.
   ///
   /// With root or Shizuku the APK installs silently through the same pipeline
   /// the daemon's remote `update_device` uses — `pm install -r` keeps the data,
@@ -164,6 +165,8 @@ class PlatformUpdateInstaller implements UpdateInstaller {
     File artifact,
     UpdateRelease release,
   ) async {
+    final signer = await _checkApkSigner(artifact);
+    if (signer != null) return signer;
     final silent = await _exec.installApk(
       artifact.path,
       sha256: release.sha256,
@@ -204,6 +207,33 @@ class PlatformUpdateInstaller implements UpdateInstaller {
       );
     } catch (e) {
       return InstallOutcome.failed('Could not start the installer: $e');
+    }
+  }
+
+  /// Self-update only: the downloaded APK must be this package, signed by the
+  /// key this install runs under (UpdateBridge.checkSelfUpdateApk). Returns
+  /// the refusal, or null to go ahead. The mesh's `install_apk` installs any
+  /// app and deliberately does not go through this.
+  Future<InstallOutcome?> _checkApkSigner(File artifact) async {
+    try {
+      final verdict = await _channel.invokeMapMethod<String, dynamic>(
+        'checkSelfUpdateApk',
+        {'path': artifact.path},
+      );
+      if (verdict?['ok'] == true) return null;
+      return InstallOutcome.failed(
+        '${verdict?['message'] ?? 'Could not check the update\'s signer.'} '
+        'Nothing was installed.',
+      );
+    } on MissingPluginException {
+      return const InstallOutcome.manual(
+        'This build cannot install updates itself — open the release page '
+        'and install the APK.',
+      );
+    } catch (e) {
+      return InstallOutcome.failed(
+        "Could not check the update's signer: $e. Nothing was installed.",
+      );
     }
   }
 

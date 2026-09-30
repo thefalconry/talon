@@ -51,6 +51,15 @@ import {
 } from "../links/node-binaries.js";
 import { MeshRegistry } from "./registry.js";
 import {
+  auditErrorText,
+  auditIssuer,
+  hashCommandArgs,
+  MeshAuditLog,
+  type MeshAuditEntry,
+  type MeshAuditQuery,
+} from "../audit.js";
+import { logWarn } from "../../../util/log.js";
+import {
   DeviceCredentialStore,
   type CredentialAdminContext,
 } from "../credentials/index.js";
@@ -97,6 +106,12 @@ export type MeshServiceOptions = {
    * without one (tests, embedders) links carry the shared bridge token.
    */
   credentials?: DeviceCredentialStore;
+  /**
+   * Where every dispatched command is recorded (who, which device, which
+   * command, an args hash, outcome, duration). Absent (tests, embedders) =
+   * nothing is recorded.
+   */
+  audit?: MeshAuditLog;
 };
 
 const DEFAULT_FRESH_FIX_TIMEOUT_MS = 8_000;
@@ -143,6 +158,8 @@ export class MeshService {
   private loading: Promise<void> | null = null;
   /** Per-device credentials (null = shared-token-only mesh). */
   readonly credentials: DeviceCredentialStore | null;
+  /** The command audit (null = commands are not recorded). */
+  private readonly audit: MeshAuditLog | null;
   /** `native.legacySharedToken` as the bridge last reported it. */
   private legacySharedToken = true;
 
@@ -167,6 +184,7 @@ export class MeshService {
       resolveNode: this.resolveNode,
     });
     this.credentials = options.credentials ?? null;
+    this.audit = options.audit ?? null;
     const store = this.credentials;
     this.links = new BridgeLinks(
       this.resolveNode,
@@ -354,13 +372,76 @@ export class MeshService {
   /**
    * Push one command to a device and await its result (or time out). The
    * low-level primitive under every command tool; exposed for tests and
-   * future tools.
+   * future tools. Every dispatch lands in the command audit.
    */
   sendCommand(
     device: DeviceInfo,
     name: string,
     params: Record<string, unknown> = {},
     timeoutMs = this.commandTimeoutMs,
+  ): Promise<DeviceCommandResult> {
+    const finishAudit = this.beginAudit(device, name, params);
+    const pending = this.deliverCommand(device, name, params, timeoutMs);
+    if (!finishAudit) return pending;
+    // The delivery promise only ever resolves, so this adds no rejection.
+    return pending.then((result) => {
+      finishAudit(result);
+      return result;
+    });
+  }
+
+  /**
+   * Open the audit record for one dispatch. The issuer is read now, while
+   * the issuing turn's scope is live. Returns the completion hook, or null
+   * when nothing is audited. Never throws: a broken audit must not stop a
+   * command.
+   */
+  private beginAudit(
+    device: DeviceInfo,
+    name: string,
+    params: Record<string, unknown>,
+  ): ((result: DeviceCommandResult) => void) | null {
+    const audit = this.audit;
+    if (!audit) return null;
+    try {
+      const startedAt = Date.now();
+      const base = {
+        time: new Date(startedAt).toISOString(),
+        issuer: auditIssuer(),
+        deviceId: device.id,
+        deviceName: device.name,
+        command: name,
+        argsHash: hashCommandArgs(params),
+      };
+      return (result) => {
+        try {
+          audit.record({
+            ...base,
+            ok: result.ok,
+            ...(result.ok ? {} : { error: auditErrorText(result.message) }),
+            durationMs: Date.now() - startedAt,
+          });
+        } catch (err) {
+          logWarn("mesh", `mesh.audit event=record_failed err=${String(err)}`);
+        }
+      };
+    } catch (err) {
+      logWarn("mesh", `mesh.audit event=record_failed err=${String(err)}`);
+      return null;
+    }
+  }
+
+  /** `talon mesh audit`: the newest recorded dispatches, oldest first. */
+  readAudit(query: MeshAuditQuery = {}): Promise<MeshAuditEntry[]> {
+    return this.audit ? this.audit.read(query) : Promise.resolve([]);
+  }
+
+  /** Deliver one command; resolves with its result, a timeout, or a loss. */
+  private deliverCommand(
+    device: DeviceInfo,
+    name: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
   ): Promise<DeviceCommandResult> {
     const command: DeviceCommand = {
       id: randomUUID(),
@@ -732,8 +813,14 @@ export class MeshService {
     query: unknown,
     localApkPath: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
-    return this.files.updateDeviceApp(query, localApkPath, remotePath);
+    return this.files.updateDeviceApp(
+      query,
+      localApkPath,
+      remotePath,
+      allowDowngrade,
+    );
   }
 
   /** `update_node`: remote self-update for a headless talon-node. */
@@ -741,8 +828,14 @@ export class MeshService {
     query: unknown,
     localBinaryPath?: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
-    return this.files.updateNodeBinary(query, localBinaryPath, remotePath);
+    return this.files.updateNodeBinary(
+      query,
+      localBinaryPath,
+      remotePath,
+      allowDowngrade,
+    );
   }
 
   // ── Provisioning + pairing (see links/bridge-links.ts) ────────────────────
@@ -784,8 +877,12 @@ export class MeshService {
   }
 
   /** GET /node/install — serve a grant's installer script (single-use). */
-  openNodeInstall(token: string): { script: string; filename: string } | null {
-    return this.links.openNodeInstall(token);
+  openNodeInstall(
+    token: string,
+    os?: string | null,
+    arch?: string | null,
+  ): Promise<{ script: string; filename: string } | null> {
+    return this.links.openNodeInstall(token, os, arch);
   }
 
   /** GET /node/binary — serve a grant's binary (single-use). */
@@ -1170,6 +1267,7 @@ let instance: MeshService | null = null;
 export function getMeshService(): MeshService {
   instance ??= new MeshService(undefined, {
     credentials: new DeviceCredentialStore(),
+    audit: new MeshAuditLog(),
   });
   return instance;
 }

@@ -17,10 +17,12 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
 import {
   BRIDGE_PROTOCOL_VERSION,
@@ -31,6 +33,10 @@ import {
   type DeviceLocation,
 } from "../frontend/native/protocol.js";
 import { MeshRegistry } from "../core/mesh/index.js";
+import {
+  DeviceFiles,
+  type DeviceFilesHost,
+} from "../core/mesh/transfers/device-files.js";
 import {
   sanitizeCapabilities,
   toDeviceInfo,
@@ -50,6 +56,8 @@ const eventsFixture = JSON.parse(
 type CommandEntry = {
   run: boolean;
   nodeUnsupported?: boolean;
+  /** A streamed transfer: runs against a fake /devices/file. */
+  transfer?: boolean;
   expectOk: boolean;
   dataKeys: string[];
   command: DeviceCommand;
@@ -69,6 +77,8 @@ const meshFixture = JSON.parse(
   resultOk: DeviceCommandResult;
   resultError: DeviceCommandResult;
   sandboxFiles: Record<string, string>;
+  /** The body the fake bridge serves for a push token. */
+  transferBody: string;
   commands: CommandEntry[];
 };
 
@@ -358,5 +368,90 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
     expect(toDeviceLocation(meshFixture.location)).toEqual(
       meshFixture.location,
     );
+  });
+});
+
+describe("streamed transfer commands (mesh_v1.json, transfer: true)", () => {
+  const sample = (name: string) => {
+    const entry = meshFixture.commands.find((c) => c.command.name === name);
+    if (!entry?.transfer) throw new Error(`no transfer sample for ${name}`);
+    return entry;
+  };
+
+  /** DeviceFiles whose "device" moves the bytes through the real transfer
+   *  store and records the params the daemon sent. */
+  function daemonSide(): {
+    files: DeviceFiles;
+    sent: Record<string, Record<string, unknown>>;
+  } {
+    const sent: Record<string, Record<string, unknown>> = {};
+    const device = {
+      id: "dev_node01",
+      name: "rack-01",
+      capabilities: ["upload_file", "download_file"],
+    } as DeviceInfo;
+    const body = Buffer.from(meshFixture.transferBody);
+    const digest = createHash("sha256").update(body).digest("hex");
+    let files!: DeviceFiles;
+    const host: DeviceFilesHost = {
+      load: async () => {},
+      resolveDevice: () => ({ target: device }),
+      dispatchCommand: async (_q, name, params) => {
+        sent[name] = params;
+        if (name === "upload_file") {
+          await files.acceptFileUpload(
+            String(params.token),
+            Readable.from([body]),
+          );
+        }
+        const data =
+          name === "upload_file"
+            ? { bytes: body.length, sha256: digest }
+            : { bytesWritten: body.length, sha256: digest };
+        return {
+          target: device,
+          result: { commandId: "c", deviceId: device.id, ok: true, data },
+        };
+      },
+      commandTimeoutMs: 30_000,
+      resolveNode: (async () => {
+        throw new Error("unused");
+      }) as unknown as DeviceFilesHost["resolveNode"],
+    };
+    files = new DeviceFiles(host);
+    return { files, sent };
+  }
+
+  it("download_file carries the fixture's params, sha256 of the body included", async () => {
+    const { files, sent } = daemonSide();
+    const dir = await mkdtemp(join(tmpdir(), "talon-conf-xfer-"));
+    const src = join(dir, "body.bin");
+    await writeFile(src, meshFixture.transferBody);
+    const res = await files.pushFileToDevice("dev_node01", src, "/tmp/x");
+    expect(res.ok).toBe(true);
+    const want = sample("download_file").command.params;
+    expect(Object.keys(sent.download_file).sort()).toEqual(
+      Object.keys(want).sort(),
+    );
+    expect(sent.download_file.sha256).toBe(want.sha256);
+  });
+
+  it("upload_file carries exactly the fixture's params", async () => {
+    const { files, sent } = daemonSide();
+    const dir = await mkdtemp(join(tmpdir(), "talon-conf-xfer-"));
+    const res = await files.pullFileFromDevice(
+      "dev_node01",
+      "/tmp/read.txt",
+      join(dir, "pulled.txt"),
+    );
+    expect(res.ok).toBe(true);
+    expect(Object.keys(sent.upload_file).sort()).toEqual(
+      Object.keys(sample("upload_file").command.params).sort(),
+    );
+  });
+
+  it("both transfer results name the digest the daemon verifies", () => {
+    expect(sample("upload_file").dataKeys).toContain("sha256");
+    expect(sample("download_file").dataKeys).toContain("sha256");
   });
 });

@@ -169,5 +169,87 @@ void main() {
     expect(n(const {}, 'application/zip'), 'abc.zip');
     expect(n(const {}, 'application/octet-stream'), 'abc');
     expect(n(const {}, 'image/png', u: 'http://x/media'), 'media.png');
+    expect(n(const {}, 'text/x-patch', u: 'http://x/media?id=mmuk3t376'),
+        'mmuk3t376.patch');
+    expect(n(const {}, 'text/x-diff', u: 'http://x/media?id=mmuk3t376'),
+        'mmuk3t376.diff');
+    expect(
+        n(const {}, 'text/x-patch',
+            u: 'http://x/media?id=m1&filename=0001-fix.patch'),
+        '0001-fix.patch');
+    expect(
+        n({'content-disposition': 'attachment; filename="0001-fix.patch"'},
+            'text/x-diff'),
+        '0001-fix.patch');
+  });
+
+  test('openLink with explicit name uses the declared name', () async {
+    final file = await opener().openLink(
+      url: '${url('m42')}&ct=text/x-diff',
+      name: '0001-fix.patch',
+      headers: const {'Authorization': 'Bearer secret'},
+    );
+
+    expect(file.path, endsWith('${Platform.pathSeparator}0001-fix.patch'));
+  });
+
+  test('save copies the download into Downloads without overwriting',
+      () async {
+    final downloads = Directory.systemTemp.createTempSync('talon-dl-');
+    addTearDown(() => downloads.deleteSync(recursive: true));
+    File('${downloads.path}${Platform.pathSeparator}report.pdf')
+        .writeAsStringSync('older file');
+    final o = AttachmentOpener(
+      cacheRoot: () async => cache,
+      launch: (file, mime) async => true,
+      downloadsRoot: () async => downloads,
+    );
+    final saved = await o.save(
+      url: url('s'),
+      name: 'report.pdf',
+      mimeType: 'application/pdf',
+      headers: const {'Authorization': 'Bearer secret'},
+    );
+    expect(saved.location, endsWith('report (1).pdf'));
+    expect(File(saved.location).existsSync(), isTrue);
+    // The existing file is untouched.
+    expect(
+      File('${downloads.path}${Platform.pathSeparator}report.pdf')
+          .readAsStringSync(),
+      'older file',
+    );
+  });
+
+  test('save reports a missing Downloads folder instead of pretending',
+      () async {
+    final o = AttachmentOpener(
+      cacheRoot: () async => cache,
+      launch: (file, mime) async => true,
+      downloadsRoot: () async => null,
+    );
+    await expectLater(
+      o.save(
+        url: url('t'),
+        name: 't.bin',
+        mimeType: 'application/octet-stream',
+        headers: const {'Authorization': 'Bearer secret'},
+      ),
+      throwsA(isA<AttachmentException>()),
+    );
+  });
+
+  test('uniqueTarget counts up before the extension', () {
+    final dir = Directory.systemTemp.createTempSync('talon-uniq-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final sep = Platform.pathSeparator;
+    expect(AttachmentOpener.uniqueTarget(dir, 'a.txt').path,
+        '${dir.path}${sep}a.txt');
+    File('${dir.path}${sep}a.txt').writeAsStringSync('x');
+    File('${dir.path}${sep}a (1).txt').writeAsStringSync('x');
+    expect(AttachmentOpener.uniqueTarget(dir, 'a.txt').path,
+        '${dir.path}${sep}a (2).txt');
+    File('${dir.path}${sep}noext').writeAsStringSync('x');
+    expect(AttachmentOpener.uniqueTarget(dir, 'noext').path,
+        '${dir.path}${sep}noext (1)');
   });
 }

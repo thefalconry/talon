@@ -217,8 +217,7 @@ void main() {
       final attachments = ComposerAttachments()
         ..uploader =
             uploaderRecording(uploadedNames, streamedBytes: streamedBytes);
-      attachments
-          .addPaths([write('archive.zip', 64).path, write('s.png').path]);
+      attachments.addPaths([write('archive.zip', 64).path, write('s.png').path]);
       List<Attachment>? sentWith;
 
       await tester.pumpWidget(host(Composer(
@@ -233,8 +232,8 @@ void main() {
       // Both staged files are visible, and both went up on staging — before
       // anything was sent.
       expect(find.text('archive.zip'), findsOneWidget);
-      expect(
-          find.bySemanticsLabel(RegExp('Remove archive.zip')), findsOneWidget);
+      expect(find.bySemanticsLabel(RegExp('Remove archive.zip')),
+          findsOneWidget);
       await settle(tester);
       expect(uploadedNames, ['archive.zip', 's.png']);
       // Both uploads run at once, so the smaller file can finish streaming
@@ -407,7 +406,7 @@ void main() {
       expect(find.text('shot.png'), findsNothing);
     });
 
-    testWidgets('tapping a chip opens it with the auth header', (tester) async {
+    testWidgets('tapping a chip saves it with the auth header', (tester) async {
       final fake = _RecordingOpener();
       AttachmentOpener.instance = fake;
       addTearDown(AttachmentOpener.reset);
@@ -436,13 +435,73 @@ void main() {
 
       expect(fake.calls, hasLength(1));
       final call = fake.calls.single;
+      expect(call.kind, 'save');
       expect(call.url, 'http://host/media?id=logs');
       expect(call.url, isNot(contains('token')));
       expect(call.headers, {'Authorization': 'Bearer secret'});
       expect(call.mimeType, 'application/zip');
     });
 
-    testWidgets('a failed open says so', (tester) async {
+    testWidgets('long-pressing a chip opens it instead of saving',
+        (tester) async {
+      final fake = _RecordingOpener();
+      AttachmentOpener.instance = fake;
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm5',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        files: const [
+          BubbleFile(
+            name: 'notes.txt',
+            sizeLabel: '',
+            mimeType: 'text/plain',
+            url: 'http://host/media?id=notes',
+          ),
+        ],
+      )));
+      await tester.longPress(find.text('notes.txt'));
+      await tester.pump();
+
+      expect(fake.calls.single.kind, 'open');
+    });
+
+    testWidgets('a saved file offers to open it', (tester) async {
+      AttachmentOpener.instance = _RecordingOpener();
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm6',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        files: const [
+          BubbleFile(
+            name: 'a.pdf',
+            sizeLabel: '',
+            mimeType: 'application/pdf',
+            url: 'http://host/media?id=a',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('a.pdf'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Saved to Download/a.pdf'), findsOneWidget);
+      expect(find.widgetWithText(SnackBarAction, 'Open'), findsOneWidget);
+    });
+
+    testWidgets('a failed save says so', (tester) async {
       AttachmentOpener.instance = _RecordingOpener(fail: true);
       addTearDown(AttachmentOpener.reset);
 
@@ -467,7 +526,7 @@ void main() {
       await tester.tap(find.text('x.bin'));
       await tester.pump();
       await tester.pump();
-      expect(find.textContaining("Couldn't open x.bin"), findsOneWidget);
+      expect(find.textContaining("Couldn't save x.bin"), findsOneWidget);
     });
 
     testWidgets('parses attachments off the wire', (tester) async {
@@ -527,17 +586,19 @@ void main() {
               'https://other/media?id=a%2Fb&token=secret', base),
           'http://host:8080/media?id=a%2Fb');
       // A trailing slash on the base doesn't double up.
-      expect(MessageBubble.bridgeMediaUrl('http://x/media?id=q', '$base/'),
+      expect(
+          MessageBubble.bridgeMediaUrl('http://x/media?id=q', '$base/'),
           'http://host:8080/media?id=q');
       // Not a media link: other path, no id, non-http scheme.
-      expect(
-          MessageBubble.bridgeMediaUrl('http://host:8080/other', base), isNull);
-      expect(
-          MessageBubble.bridgeMediaUrl('http://host:8080/media', base), isNull);
-      expect(
-          MessageBubble.bridgeMediaUrl('ftp://host/media?id=q', base), isNull);
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/other', base),
+          isNull);
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/media', base),
+          isNull);
+      expect(MessageBubble.bridgeMediaUrl('ftp://host/media?id=q', base),
+          isNull);
       // No configured bridge base: nothing is ever treated as in-app.
-      expect(MessageBubble.bridgeMediaUrl('http://host:8080/media?id=q', ''),
+      expect(
+          MessageBubble.bridgeMediaUrl('http://host:8080/media?id=q', ''),
           isNull);
     });
 
@@ -554,13 +615,12 @@ void main() {
         botName: 'Talon',
       )));
       await tester.pump();
-      final style =
-          DefaultSelectionStyle.of(tester.element(find.text('copy me')));
+      final style = DefaultSelectionStyle.of(
+          tester.element(find.text('copy me')));
       // Not the theme default (accent at 40%), which is invisible on the
       // accent bubble.
       expect(style.selectionColor, MessageBubble.userSelectionColor);
-      expect(
-          style.selectionColor,
+      expect(style.selectionColor,
           isNot(Theme.of(tester.element(find.text('copy me')))
               .textSelectionTheme
               .selectionColor));
@@ -587,7 +647,8 @@ class _OpenCall {
   final String url;
   final String mimeType;
   final Map<String, String> headers;
-  const _OpenCall(this.url, this.mimeType, this.headers);
+  final String kind;
+  const _OpenCall(this.url, this.mimeType, this.headers, {required this.kind});
 }
 
 class _RecordingOpener extends AttachmentOpener {
@@ -602,8 +663,24 @@ class _RecordingOpener extends AttachmentOpener {
     required String mimeType,
     Map<String, String> headers = const {},
   }) async {
-    calls.add(_OpenCall(url, mimeType, headers));
+    calls.add(_OpenCall(url, mimeType, headers, kind: 'open'));
     if (fail) throw const AttachmentException('No app could open it.');
     return File(name);
+  }
+
+  @override
+  Future<SavedAttachment> save({
+    required String url,
+    required String name,
+    required String mimeType,
+    Map<String, String> headers = const {},
+  }) async {
+    calls.add(_OpenCall(url, mimeType, headers, kind: 'save'));
+    if (fail) throw const AttachmentException('Disk full.');
+    return SavedAttachment(
+      file: File(name),
+      mimeType: mimeType,
+      location: 'Download/$name',
+    );
   }
 }

@@ -24,9 +24,18 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
 
+/** Who a turn acts for — recorded by audits of what the turn did. */
+export type TurnIssuer = {
+  /** The sender's operator key, else display name; absent when unknown. */
+  readonly sender?: string;
+  /** What started the turn: message, cron, trigger, pulse, agent. */
+  readonly source?: string;
+};
+
 export type TurnLogScope = {
   readonly turnId: string;
   readonly chatId: string;
+  readonly issuer: TurnIssuer;
   /** False once the turn has settled — the scope then tags nothing. */
   open: boolean;
 };
@@ -41,8 +50,11 @@ function mintTurnId(): string {
 }
 
 /** A fresh scope for a turn that has been accepted but not yet started. */
-export function createTurnScope(chatId: string): TurnLogScope {
-  return { turnId: mintTurnId(), chatId, open: true };
+export function createTurnScope(
+  chatId: string,
+  issuer: TurnIssuer = {},
+): TurnLogScope {
+  return { turnId: mintTurnId(), chatId, issuer, open: true };
 }
 
 /**
@@ -82,4 +94,13 @@ export function runInChatTurnScope<T>(
 export function currentTurnId(): string | undefined {
   const scope = storage.getStore();
   return scope?.open ? scope.turnId : undefined;
+}
+
+/** The live turn for the current async chain — who is acting — if any. */
+export function currentTurn():
+  { turnId: string; chatId: string; issuer: TurnIssuer } | undefined {
+  const scope = storage.getStore();
+  return scope?.open
+    ? { turnId: scope.turnId, chatId: scope.chatId, issuer: scope.issuer }
+    : undefined;
 }

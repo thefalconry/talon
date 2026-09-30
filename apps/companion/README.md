@@ -63,6 +63,25 @@ info → Run anyway**. Its Inno Setup script lives at
 `installer/windows/talon-companion.iss` and is compiled in
 `.github/workflows/companion.yml`.
 
+## Installing (Linux)
+
+Four options are published for each release:
+
+- **AppImage** (`talon-companion-linux-<version>.AppImage`): standalone portable
+  executable. Make it executable (`chmod +x talon-companion-linux-*.AppImage`)
+  and run it directly on any modern distribution.
+- **Debian / Ubuntu package** (`talon-companion_<version>_amd64.deb`): standard
+  `.deb` package. Install with `sudo dpkg -i talon-companion_*.deb` or
+  `sudo apt install ./talon-companion_*.deb`.
+- **Fedora / RHEL / openSUSE package** (`talon-companion-<version>-1.x86_64.rpm`):
+  standard `.rpm` package. Install with `sudo dnf install ./talon-companion-*.rpm`
+  or `sudo rpm -i talon-companion-*.rpm`.
+- **Portable archive** (`talon-companion-linux-<version>.tar.gz`): unpack anywhere
+  and run `talon_companion`.
+
+Packaging manifests and scripts live under `installer/linux/` and run in
+`.github/workflows/companion.yml`.
+
 ## Updates
 
 *Settings → Updates* shows what's running, what's available, and one button to

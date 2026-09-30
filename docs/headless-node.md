@@ -63,7 +63,7 @@ The one-command path — ask the model for an install link
 new host:
 
 ```sh
-curl -fsSk "https://<daemon>:19880/node/install?provision=<token>" | sh
+curl -fsSk --pinnedpubkey "sha256//<bridge-key-pin>" "https://<daemon>:19880/node/install?provision=<token>" | sh
 ```
 
 The bridge serves a generated installer over a single-use, expiring grant
@@ -71,7 +71,19 @@ token (`src/core/mesh/links/node-provision.ts`): it downloads the matching
 talon-node binary from the same bridge, verifies its sha256 against the
 digest baked into the script, installs it, pre-pins the bridge TLS
 fingerprint, embeds the bearer token, and registers the boot service.
-Windows grants produce a PowerShell installer with the same flow. The two
+Windows grants produce a PowerShell installer with the same flow.
+
+Over HTTPS both fetches are pinned to the bridge's own key, so a man in the
+middle can't swap the script or read the grant's credential. curl gets
+`--pinnedpubkey` (the base64 SHA-256 of the key's SPKI); `-k` stays because
+the certificate is self-signed and curl would otherwise reject the chain,
+but curl enforces the pin with or without `-k`. PowerShell (Windows
+PowerShell 5.1 and pwsh 7) compiles a small certificate check that compares
+the presented certificate's SHA-256 with the fingerprint talon-node pins
+afterwards. Over plain HTTP there is nothing to pin. `bridge_url` and
+`native.publicUrl` must be plain http(s) URLs without quotes, `$`,
+backticks, backslashes, `%` or whitespace, since they are written into the
+generated scripts. The two
 routes (`GET /node/install`, `GET /node/binary`) are deliberately pre-auth —
 the fresh host holds no credential yet; the grant token is the entire
 authorization, exactly like streamed-transfer tokens.

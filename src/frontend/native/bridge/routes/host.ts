@@ -122,6 +122,8 @@ export type BridgeServerHandlers = {
   liveTurnEvents(): BridgeEvent[];
   /** Resolve a media id to an absolute file path (or null if unknown). */
   mediaPath(id: string): string | null;
+  /** Best-effort original file name for a media id (or null if unknown). */
+  mediaName?(id: string): string | null;
   /** Register/update one mesh device. */
   registerDevice(body: Record<string, unknown>): Promise<DeviceInfo>;
   /** Store the last-known location for one mesh device. */
@@ -149,8 +151,18 @@ export type BridgeServerHandlers = {
     token: string,
     format: "html" | "json",
   ): { contentType: string; body: string } | null;
-  /** Resolve a node-provisioning token to its installer script, or null. */
-  openNodeInstall(token: string): { script: string; filename: string } | null;
+  /**
+   * Resolve a node-provisioning token to its installer script, or null. An
+   * auto link passes the os/arch its host reported.
+   */
+  openNodeInstall(
+    token: string,
+    os?: string | null,
+    arch?: string | null,
+  ):
+    | { script: string; filename: string }
+    | null
+    | Promise<{ script: string; filename: string } | null>;
   /** Resolve a node-provisioning token to the binary to stream, or null. */
   openNodeBinary(token: string): { path: string; size: number } | null;
 };

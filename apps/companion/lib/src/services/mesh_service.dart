@@ -4,6 +4,7 @@ import 'dart:io' show Directory, File, Platform;
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:crypto/crypto.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -15,6 +16,7 @@ import 'bridge_client.dart';
 import 'command_wake_lock.dart';
 import 'device_exec.dart';
 import 'log.dart';
+import 'mesh_audit.dart';
 import 'prefs.dart';
 import 'sandbox.dart';
 
@@ -119,7 +121,7 @@ class MeshService {
   final Prefs prefs;
   final BridgeClient client;
   final DeviceExec _exec;
-  final MeshLocationProvider _locationProvider;
+  final Future<MeshFix?> Function({bool live}) _locationProvider;
   final MeshBatteryProvider _batteryProvider;
   final MeshNameProvider _nameProvider;
   final MeshVersionProvider _versionProvider;
@@ -128,6 +130,7 @@ class MeshService {
   final MeshSystemInfoProvider _systemInfoProvider;
   final MeshRegisteredCallback? _onRegistered;
   final CommandApprover? _approver;
+  final MeshAudit _audit;
 
   StreamSubscription<Map<String, dynamic>>? _events;
   Timer? _heartbeat;
@@ -147,8 +150,13 @@ class MeshService {
     DeviceExec? deviceExec,
     MeshRegisteredCallback? onRegistered,
     CommandApprover? approver,
+    MeshAudit? audit,
   }) : _approver = approver,
-       _locationProvider = locationProvider ?? _defaultLocation,
+       _audit = audit ?? MeshAudit(),
+       // A function literal in an initializer list must be parenthesized.
+       _locationProvider = locationProvider != null
+           ? (({bool live = false}) => locationProvider())
+           : _defaultLocation,
        _batteryProvider = batteryProvider ?? _defaultBattery,
        _nameProvider = nameProvider ?? _defaultName,
        _versionProvider = versionProvider ?? _defaultVersion,
@@ -157,15 +165,15 @@ class MeshService {
        _systemInfoProvider = systemInfoProvider ?? _defaultSystemInfo,
        _onRegistered = onRegistered,
        _exec = deviceExec ?? DeviceExec() {
-    // Mesh commands climb to root/Shizuku only with the user's elevation
-    // grant for this bridge; without it they run as the app and nothing asks
-    // the root manager or Shizuku for anything.
+    // Mesh commands climb to root/Shizuku unless the user turned elevated
+    // access off; then they run as the app and nothing asks the root manager
+    // or Shizuku for anything.
     _exec.allowElevation = () => elevationAllowed(prefs);
+    _exec.writeLimit = () => maxWriteBytesFor(prefs);
   }
 
   /// Whether mesh commands may use root or Shizuku: device control is live
-  /// ([deviceControlAllowed]) AND the user turned elevated access on for this
-  /// bridge. Off by default and after every new pairing.
+  /// ([deviceControlAllowed]) AND elevated access is on (the default).
   static bool elevationAllowed(Prefs prefs, {bool? sandboxed}) =>
       deviceControlAllowed(prefs, sandboxed: sandboxed) && prefs.meshElevated;
 
@@ -198,8 +206,7 @@ class MeshService {
     // ignition) the root grant would otherwise be acquired mid-command, with
     // the root manager's dialog appearing while someone is driving and the
     // command blocked behind it. Fire-and-forget: nothing here gates the mesh.
-    // Only once the user has granted elevated access for this bridge — never
-    // as a side effect of merely connecting.
+    // Skipped only when the user turned elevated access off.
     if (elevationAllowed(prefs)) {
       unawaited(
         _exec.ensureRootReady().catchError(
@@ -268,10 +275,10 @@ class MeshService {
     await _onRegistered?.call();
   }
 
-  Future<void> sendOneFix() async {
+  Future<void> sendOneFix({bool live = false}) async {
     if (!prefs.meshSharing) return;
     try {
-      final fix = await _locationProvider();
+      final fix = await _locationProvider(live: live);
       if (fix == null) return;
       final battery = await _batteryProvider();
       await client.postLocation({
@@ -297,26 +304,38 @@ class MeshService {
       return;
     }
     try {
-      await sendOneFix();
+      await sendOneFix(live: true);
     } catch (e) {
       AppLog.warn('mesh', 'locate handling failed', e);
     }
   }
 
-  /// How many mesh commands run at once; up to [maxQueuedCommands] more wait
-  /// for a slot, and anything beyond that is answered "busy" straight away.
-  /// Bounds what a burst of frames (a buggy or compromised daemon) can pile
-  /// onto the device.
+  /// Default for how many mesh commands run at once; up to
+  /// [maxQueuedCommands] more wait for a slot, and anything beyond that is
+  /// answered "busy" straight away. Bounds what a burst of frames (a buggy or
+  /// compromised daemon) can pile onto the device. Both are overridable in
+  /// Settings → Mesh (`Prefs.meshMaxConcurrent` / `meshMaxQueued`).
   static const int maxConcurrentCommands = 4;
   static const int maxQueuedCommands = 16;
+
+  int get _maxConcurrent => prefs.meshMaxConcurrent ?? maxConcurrentCommands;
+  int get _maxQueued => prefs.meshMaxQueued ?? maxQueuedCommands;
+
+  static const int _gib = 1024 * 1024 * 1024;
+
+  /// The per-file mesh write cap: the user's setting, or the default.
+  static int maxWriteBytesFor(Prefs prefs) {
+    final gib = prefs.meshMaxWriteGiB;
+    return gib == null ? DeviceExec.maxWriteBytes : gib * _gib;
+  }
 
   int _commandsInFlight = 0;
   final Queue<Map<String, dynamic>> _queuedCommands = Queue();
 
   void _admitCommand(Map<String, dynamic> event) {
-    if (_commandsInFlight < maxConcurrentCommands) {
+    if (_commandsInFlight < _maxConcurrent) {
       _runCommand(event);
-    } else if (_queuedCommands.length < maxQueuedCommands) {
+    } else if (_queuedCommands.length < _maxQueued) {
       _queuedCommands.add(event);
     } else {
       unawaited(_answerBusy(event));
@@ -347,8 +366,8 @@ class MeshService {
         'commandId': id,
         'deviceId': myId,
         'ok': false,
-        'message': 'Device is busy ($maxConcurrentCommands commands running, '
-            '$maxQueuedCommands queued) — try again shortly.',
+        'message': 'Device is busy ($_maxConcurrent commands running, '
+            '$_maxQueued queued) — try again shortly.',
       });
     } catch (e) {
       AppLog.warn('mesh', 'busy result post failed', e);
@@ -369,6 +388,7 @@ class MeshService {
     final params = event['params'] is Map
         ? (event['params'] as Map).cast<String, dynamic>()
         : <String, dynamic>{};
+    final clock = Stopwatch()..start();
 
     var ok = false;
     String? message;
@@ -381,7 +401,7 @@ class MeshService {
       }
       switch (name) {
         case 'locate':
-          await sendOneFix();
+          await sendOneFix(live: true);
           ok = true;
           message = 'Fresh fix reported.';
           break;
@@ -410,13 +430,21 @@ class MeshService {
             message = 'No such file: $upPath';
             break;
           }
+          // Hashed as it streams (no second read), so the daemon can check
+          // what arrived against what was sent.
+          final upDigest = _DigestSink();
+          final upHash = sha256.startChunkedConversion(upDigest);
           final sent = await client.uploadFile(
             upToken,
-            src.openRead(),
+            src.openRead().map((chunk) {
+              upHash.add(chunk);
+              return chunk;
+            }),
             await src.length(),
           );
+          upHash.close();
           ok = true;
-          data = {'bytes': sent};
+          data = {'bytes': sent, 'sha256': upDigest.hex};
           break;
         case 'download_file': // streamed push: daemon → device, one HTTP GET
           if (!_deviceControl) {
@@ -434,24 +462,40 @@ class MeshService {
           final dest = File(downPath);
           await Directory(dest.parent.path).create(recursive: true);
           // Stream to a temp file and rename, so a dropped connection can't
-          // leave a half-written destination.
+          // leave a half-written destination. The bytes are hashed as they
+          // are written; when the daemon sent the payload's sha256 (older
+          // daemons don't), a mismatch deletes the temp file instead.
+          final wantSha = params['sha256'] is String
+              ? (params['sha256'] as String).trim().toLowerCase()
+              : '';
           final part = File('$downPath.part');
           final sink = part.openWrite();
+          final downDigest = _DigestSink();
+          final downHash = sha256.startChunkedConversion(downDigest);
           var received = 0;
           int written;
           try {
             written = await client.downloadFile(downToken, (chunk) async {
               received += chunk.length;
-              if (received > DeviceExec.maxWriteBytes) {
+              final cap = _exec.writeLimit();
+              if (received > cap) {
                 throw StateError(
-                  'download exceeds the ${DeviceExec.maxWriteBytes}-byte '
+                  'download exceeds the $cap-byte '
                   'write cap',
                 );
               }
+              downHash.add(chunk);
               sink.add(chunk);
             });
             await sink.flush();
             await sink.close();
+            downHash.close();
+            if (wantSha.isNotEmpty && wantSha != downDigest.hex) {
+              throw StateError(
+                'integrity check failed (expected sha256 $wantSha, got '
+                '${downDigest.hex}) — the download was discarded',
+              );
+            }
             await part.rename(downPath);
           } catch (e) {
             await sink.close().catchError((_) {});
@@ -459,7 +503,7 @@ class MeshService {
             rethrow;
           }
           ok = true;
-          data = {'bytesWritten': written};
+          data = {'bytesWritten': written, 'sha256': downDigest.hex};
           break;
         default:
           // Exec/filesystem commands (the teleport substrate) — only when the
@@ -487,6 +531,7 @@ class MeshService {
       AppLog.warn('mesh', 'device_command "$name" failed', e);
     }
 
+    final elapsed = clock.elapsed;
     try {
       await client.postCommandResult({
         'commandId': id,
@@ -498,6 +543,22 @@ class MeshService {
     } catch (e) {
       AppLog.warn('mesh', 'command result post failed', e);
     }
+    // After the answer is sent, and never awaited: the audit can neither
+    // delay nor fail a command (record() swallows its own errors).
+    unawaited(
+      _audit.record(
+        MeshAudit.entryFor(
+          commandId: id,
+          name: name,
+          params: params,
+          ok: ok,
+          message: message,
+          data: data,
+          elapsed: elapsed,
+          token: client.config.token,
+        ),
+      ),
+    );
   }
 
   Future<String?> _defaultApprover(String command) =>
@@ -539,7 +600,7 @@ class MeshService {
     if (!prefs.meshSharing || !prefs.meshPeriodic) return;
     _periodic = Timer.periodic(
       Duration(seconds: prefs.meshIntervalSeconds),
-      (_) => unawaited(sendOneFix()),
+      (_) => unawaited(sendOneFix(live: false)),
     );
   }
 
@@ -552,7 +613,7 @@ class MeshService {
     return 'linux';
   }
 
-  static Future<MeshFix?> _defaultLocation() async {
+  static Future<MeshFix?> _defaultLocation({bool live = false}) async {
     if (kIsWeb || Platform.isLinux) return null;
     try {
       var serviceEnabled = await Geolocator.isLocationServiceEnabled();
@@ -571,10 +632,36 @@ class MeshService {
           await Geolocator.requestPermission();
         }
       }
+
+      // Check last known location first only for periodic/background fixes to
+      // avoid spinning up GNSS radio unnecessarily. On-demand locate ("find my
+      // phone") always requests a fresh live fix at high accuracy.
+      if (!live) {
+        try {
+          final lastKnown = await Geolocator.getLastKnownPosition();
+          if (lastKnown != null) {
+            final ageMs = DateTime.now().millisecondsSinceEpoch -
+                lastKnown.timestamp.millisecondsSinceEpoch;
+            // Re-use last known fix if it is fresh (< 60s old)
+            if (ageMs >= 0 && ageMs < 60000) {
+              return MeshFix(
+                lat: lastKnown.latitude,
+                lon: lastKnown.longitude,
+                accuracyM: lastKnown.accuracy,
+                altitudeM: lastKnown.altitude,
+                speedMps: lastKnown.speed,
+                headingDeg: lastKnown.heading,
+                ts: lastKnown.timestamp.millisecondsSinceEpoch,
+              );
+            }
+          }
+        } catch (_) {}
+      }
+
       final pos = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 15),
+        locationSettings: LocationSettings(
+          accuracy: live ? LocationAccuracy.high : LocationAccuracy.medium,
+          timeLimit: Duration(seconds: live ? 15 : 10),
         ),
       );
       return MeshFix(
@@ -592,11 +679,12 @@ class MeshService {
     }
   }
 
+  static final Battery _battery = Battery();
+
   static Future<MeshBattery> _defaultBattery() async {
     try {
-      final battery = Battery();
-      final level = await battery.batteryLevel;
-      final state = await battery.batteryState;
+      final level = await _battery.batteryLevel;
+      final state = await _battery.batteryState;
       return MeshBattery(
         percent: level >= 0 ? level : null,
         charging: state == BatteryState.charging || state == BatteryState.full,
@@ -606,32 +694,44 @@ class MeshService {
     }
   }
 
+  static String? _cachedName;
+
   static Future<String> _defaultName() async {
+    if (_cachedName != null) return _cachedName!;
     try {
       final info = DeviceInfoPlugin();
       if (!kIsWeb && Platform.isAndroid) {
         final d = await info.androidInfo;
-        return '${d.manufacturer} ${d.model}'.trim();
+        final name = '${d.manufacturer} ${d.model}'.trim();
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isIOS) {
         final d = await info.iosInfo;
-        return d.name;
+        final name = d.name;
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isMacOS) {
         final d = await info.macOsInfo;
-        return d.computerName;
+        final name = d.computerName;
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isWindows) {
         final d = await info.windowsInfo;
-        return d.computerName;
+        final name = d.computerName;
+        _cachedName = name;
+        return name;
       }
       if (!kIsWeb && Platform.isLinux) {
         final d = await info.linuxInfo;
         final host = Platform.localHostname.trim();
-        if (host.isNotEmpty && host != 'localhost') {
-          return '${d.prettyName} ($host)';
-        }
-        return d.prettyName;
+        final name = (host.isNotEmpty && host != 'localhost')
+            ? '${d.prettyName} ($host)'
+            : d.prettyName;
+        _cachedName = name;
+        return name;
       }
     } catch (_) {
       /* fall through */
@@ -639,13 +739,24 @@ class MeshService {
     return 'Talon companion';
   }
 
+  static String? _cachedVersion;
+
   static Future<String> _defaultVersion() async {
+    if (_cachedVersion != null) return _cachedVersion!;
     try {
       final info = await PackageInfo.fromPlatform();
-      return '${info.version}+${info.buildNumber}';
+      final ver = '${info.version}+${info.buildNumber}';
+      _cachedVersion = ver;
+      return ver;
     } catch (_) {
       return 'unknown';
     }
+  }
+
+  @visibleForTesting
+  static void resetStaticCaches() {
+    _cachedName = null;
+    _cachedVersion = null;
   }
 
   /// Best-effort find-my-device with no extra plugins: a burst of system
@@ -729,4 +840,19 @@ class MeshService {
 class _CommandDenied implements Exception {
   final String message;
   const _CommandDenied(this.message);
+}
+
+/// Receives the digest of a chunked SHA-256 conversion, so a transfer can
+/// hash its bytes as they stream past instead of re-reading the file.
+class _DigestSink implements Sink<Digest> {
+  Digest? _value;
+
+  /// Lowercase hex, once the conversion has been closed.
+  String get hex => _value.toString();
+
+  @override
+  void add(Digest data) => _value = data;
+
+  @override
+  void close() {}
 }

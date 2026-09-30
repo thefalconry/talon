@@ -33,6 +33,7 @@ import { createNativeRuntime, type NativeRuntime } from "./runtime.js";
 import { BridgeServer, type BridgeCredentials } from "./bridge/server.js";
 import {
   DEFAULT_COMPANION_SCOPES,
+  FORMER_COMPANION_SCOPES,
   type MeshScope,
 } from "../../core/mesh/credentials/index.js";
 import { isLoopbackHost, loadOrCreateBridgeTlsIdentity } from "./bridge/tls.js";
@@ -104,6 +105,28 @@ function bridgeCredentials(
       companionScopes: listen.companionScopes,
     },
   };
+}
+
+/**
+ * Companions paired while the default was device + client get the current
+ * default too — unless the operator set `native.companionScopes` (their
+ * choice then stands) or set that device's scopes by hand.
+ */
+async function adoptCompanionDefault(
+  config: TalonConfig,
+  mesh: NativeRuntime["mesh"],
+): Promise<void> {
+  if (config.native?.companionScopes || !mesh.credentials) return;
+  const moved = await mesh.credentials.adoptDefaultScopes(
+    FORMER_COMPANION_SCOPES,
+    DEFAULT_COMPANION_SCOPES,
+  );
+  if (moved > 0) {
+    log(
+      "native",
+      `Granted the default companion scopes (${DEFAULT_COMPANION_SCOPES.join(", ")}) to ${moved} credential(s) issued under the old device + client default; set native.companionScopes to narrow them.`,
+    );
+  }
 }
 
 /**
@@ -189,6 +212,7 @@ export function createNativeFrontend(
 
     async init() {
       await mesh.load();
+      await adoptCompanionDefault(config, mesh);
       unregisterMeshTransport = registerMeshTransport(runtime, server);
       // Mesh tool actions (list_devices / get_device_location) are shared
       // gateway actions — no native-only cases here.
@@ -226,6 +250,7 @@ export function createNativeFrontend(
         );
       }
       const fingerprint = server.getFingerprint();
+      const spkiPin = server.getSpkiPin();
       // Tell the mesh how this bridge is reachable — everything a generated
       // node installer needs (make_node_install_link fails cleanly without it).
       mesh.setBridgeInfo({
@@ -234,6 +259,7 @@ export function createNativeFrontend(
         port: server.getPort(),
         ...(listen.token ? { token: listen.token } : {}),
         ...(fingerprint ? { fingerprint } : {}),
+        ...(spkiPin ? { spkiPin } : {}),
         ...(config.native?.publicUrl
           ? { publicUrl: config.native.publicUrl }
           : {}),

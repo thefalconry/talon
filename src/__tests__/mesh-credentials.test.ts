@@ -21,6 +21,8 @@ import {
   credentialAdmin,
   credentialOverview,
   isDeviceCredentialToken,
+  DEFAULT_COMPANION_SCOPES,
+  FORMER_COMPANION_SCOPES,
   type CredentialAdminContext,
 } from "../core/mesh/credentials/index.js";
 import { MeshRegistry, MeshService } from "../core/mesh/index.js";
@@ -229,6 +231,77 @@ describe("DeviceCredentialStore", () => {
     expect(store.authenticate(token)?.scopes).toEqual(["device", "operator"]);
   });
 
+  it("adopts a widened default for credentials still on the old one", async () => {
+    const { store, file } = await tempStore();
+    const phone = await store.mint({
+      deviceId: "phone",
+      scopes: FORMER_COMPANION_SCOPES,
+      origin: "pair",
+    });
+    const node = await store.mint({
+      deviceId: "node",
+      scopes: ["device"],
+      origin: "install",
+    });
+    const narrowed = await store.mint({
+      deviceId: "tablet",
+      scopes: ["device", "client", "operator"],
+      origin: "pair",
+    });
+    // An operator narrowed this one by hand: it keeps its scopes.
+    await store.setScopes("tablet", ["device", "client"]);
+
+    const moved = await store.adoptDefaultScopes(
+      FORMER_COMPANION_SCOPES,
+      DEFAULT_COMPANION_SCOPES,
+    );
+    expect(moved).toBe(1);
+    expect(store.authenticate(phone.token)?.scopes).toEqual([
+      "device",
+      "client",
+      "operator",
+    ]);
+    expect(store.authenticate(node.token)?.scopes).toEqual(["device"]);
+    expect(store.authenticate(narrowed.token)?.scopes).toEqual([
+      "device",
+      "client",
+    ]);
+    // Persisted, and idempotent across a restart.
+    const again = new DeviceCredentialStore(file);
+    expect(
+      await again.adoptDefaultScopes(
+        FORMER_COMPANION_SCOPES,
+        DEFAULT_COMPANION_SCOPES,
+      ),
+    ).toBe(0);
+    expect(again.authenticate(narrowed.token)?.scopes).toEqual([
+      "device",
+      "client",
+    ]);
+  });
+
+  it("a re-issued credential keeps hand-set scopes", async () => {
+    const { store } = await tempStore();
+    await store.mint({
+      deviceId: "tablet",
+      scopes: ["device", "client", "operator"],
+      origin: "pair",
+    });
+    await store.setScopes("tablet", ["device", "client"]);
+    const rotated = await store.mint({
+      deviceId: "tablet",
+      scopes: ["device", "client"],
+      origin: "rotate",
+    });
+    expect(rotated.credential.scopesSetAt).toBeTypeOf("number");
+    expect(
+      await store.adoptDefaultScopes(
+        FORMER_COMPANION_SCOPES,
+        DEFAULT_COMPANION_SCOPES,
+      ),
+    ).toBe(0);
+  });
+
   it("tracks devices still on the shared token until they hold a credential", async () => {
     const { store } = await tempStore();
     expect(store.noteLegacy("old-phone")).toBe(true);
@@ -390,10 +463,31 @@ describe("mesh service with credentials", () => {
     expect(isDeviceCredentialToken(minted.token)).toBe(true);
     expect(minted.token).not.toBe("shared-secret");
     const cred = svc.credentials!.authenticate(minted.token);
+    // Every scope by default, as the shared token had.
     expect(cred).toMatchObject({
       deviceId: null,
-      scopes: ["device", "client"],
+      scopes: [...DEFAULT_COMPANION_SCOPES],
     });
+    expect(DEFAULT_COMPANION_SCOPES).toEqual(["device", "client", "operator"]);
+  });
+
+  it("pairing links honour a narrowed native.companionScopes", async () => {
+    const svc = await service();
+    await svc.load();
+    svc.setBridgeInfo({
+      scheme: "https",
+      host: "10.0.0.2",
+      port: 19880,
+      token: "shared-secret",
+      fingerprint: "f".repeat(64),
+      companionScopes: ["device", "client"],
+    });
+    const minted = svc.makeCompanionPairLink("Phone");
+    if (!minted.ok) throw new Error(minted.text);
+    expect(svc.credentials!.authenticate(minted.token)?.scopes).toEqual([
+      "device",
+      "client",
+    ]);
   });
 
   it("node installers carry a device-only credential", async () => {
@@ -402,7 +496,7 @@ describe("mesh service with credentials", () => {
     bridge(svc);
     const minted = await svc.makeNodeInstallLink("linux", "amd64");
     const grant = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
-    const script = svc.openNodeInstall(grant)!.script;
+    const script = (await svc.openNodeInstall(grant))!.script;
     expect(script).not.toContain("shared-secret");
     const token = /--token "([^"]+)"/.exec(script)![1]!;
     expect(svc.credentials!.authenticate(token)?.scopes).toEqual(["device"]);

@@ -240,6 +240,10 @@ class AppState extends ChangeNotifier {
   /// bridge file first; legacy managed mode can still supervise a daemon when
   /// explicitly configured; everywhere, open the event stream and load chats.
   Future<void> start() async {
+    // Paused in the background (Android, foreground service owns the
+    // connection): nothing — network changes, timers — may reopen the UI
+    // stream until resumeUiStream() clears the flag and calls start().
+    if (_uiStreamPaused) return;
     _reconnect?.cancel();
     final epoch = ++_epoch;
     AppLog.info('app_state', 'connect attempt ${config.host}:${config.port}');
@@ -534,7 +538,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _scheduleReconnect() {
-    if (_disposed) return;
+    if (_disposed || _uiStreamPaused) return;
     _reconnect?.cancel();
     AppLog.info('app_state', 'reconnect in ${_backoffMs}ms');
     _reconnect = Timer(Duration(milliseconds: _backoffMs), () {
@@ -574,7 +578,7 @@ class AppState extends ChangeNotifier {
     _mesh = null;
     _client?.dispose();
     _client = null;
-    await prefs.revokeMeshGrants();
+    await prefs.resetMeshGrantsForPairing();
     await prefs.setOnboarded(false);
     config = ConnectionConfig.defaults();
     _activeConfig = null;
@@ -601,6 +605,15 @@ class AppState extends ChangeNotifier {
     final approver = commandApprover;
     if (approver != null) return approver(name);
     return MeshService.defaultApproval(prefs, name);
+  }
+
+  /// Look at the certificate [candidate]'s bridge presents without sending
+  /// its token — the connect screen's first step for a hand-typed TLS host,
+  /// so the user can confirm the fingerprint before [applyConfig] hands the
+  /// token to it (and to the background mesh isolate).
+  Future<CertificateProbe> probeCertificate(ConnectionConfig candidate) {
+    AppLog.info('app_state', 'probing certificate at ${candidate.baseUrl}');
+    return BridgeClient.probeCertificate(candidate);
   }
 
   /// Apply a new connection profile and reconnect from scratch.
@@ -671,13 +684,12 @@ class AppState extends ChangeNotifier {
     final msgs = _messages[chatId];
     if (msgs == null || msgs.isEmpty) return 0;
     // Oldest server-assigned id (local system notes have non-numeric ids).
+    // The minimum, not the first: the first numeric id is only the oldest
+    // when the list is in order.
     int? oldest;
     for (final m in msgs) {
       final n = int.tryParse(m.id);
-      if (n != null) {
-        oldest = n;
-        break;
-      }
+      if (n != null && (oldest == null || n < oldest)) oldest = n;
     }
     if (oldest == null) return 0;
 
@@ -693,7 +705,9 @@ class AppState extends ChangeNotifier {
       if (page.length < _historyPageSize) _historyExhausted.add(chatId);
       final existing = msgs.map((m) => m.id).toSet();
       final fresh = page.where((m) => !existing.contains(m.id)).toList();
-      msgs.insertAll(0, fresh);
+      msgs
+        ..insertAll(0, fresh)
+        ..sort(compareMessageOrder);
       return fresh.length;
     } catch (e) {
       AppLog.warn('app_state', 'older-history fetch failed', e);
@@ -1022,9 +1036,31 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Let device control use root/Shizuku for the current bridge (Android).
+  /// Let device control use root/Shizuku (Android). On by default.
   Future<void> setMeshElevated(bool on) async {
     await prefs.setMeshElevated(on);
+    notifyListeners();
+    await _meshPrefsChanged();
+    notifyListeners();
+  }
+
+  /// Opt-in: start every new pairing without device control or elevation.
+  Future<void> setMeshGrantsPerPairing(bool on) async {
+    await prefs.setMeshGrantsPerPairing(on);
+    notifyListeners();
+    await _meshPrefsChanged();
+    notifyListeners();
+  }
+
+  /// Override one of the mesh command limits (null leaves it unchanged).
+  Future<void> setMeshLimits({
+    int? concurrent,
+    int? queued,
+    int? writeGiB,
+  }) async {
+    if (concurrent != null) await prefs.setMeshMaxConcurrent(concurrent);
+    if (queued != null) await prefs.setMeshMaxQueued(queued);
+    if (writeGiB != null) await prefs.setMeshMaxWriteGiB(writeGiB);
     notifyListeners();
     await _meshPrefsChanged();
     notifyListeners();
@@ -1661,14 +1697,23 @@ class AppState extends ChangeNotifier {
       // the bottom of the chat each time the app was reopened. Keep a system
       // notice only while it's genuinely the newest thing in the conversation;
       // once real history has moved past it, it has expired.
+      //
+      // Since the first fetch is a bounded window (the newest
+      // [_historyInitialSize]), "not in the window" also matches OLDER
+      // scrollback paged in earlier and old snapshot rows, and appending them
+      // pinned week-old messages below the newest on every reconnect. Only
+      // messages genuinely newer than the window survive the merge; older
+      // ones are dropped (scrolling up pages them back in, in order).
       final histIds = hist.map((m) => m.id).toSet();
       final newestTs = hist.isEmpty ? 0 : hist.last.ts;
-      final extras = (_messages[chatId] ?? const <ClientMessage>[]).where(
-        (m) =>
-            !histIds.contains(m.id) &&
-            (m.role != Role.system || m.ts >= newestTs),
-      );
-      _messages[chatId] = [...hist, ...extras];
+      final newestId = _maxServerId(hist);
+      final extras = (_messages[chatId] ?? const <ClientMessage>[]).where((m) {
+        if (histIds.contains(m.id)) return false;
+        final n = int.tryParse(m.id);
+        if (n != null && newestId != null) return n > newestId;
+        return m.ts >= newestTs;
+      });
+      _messages[chatId] = [...hist, ...extras]..sort(compareMessageOrder);
       _loadedHistory.add(chatId);
     } catch (_) {
       /* leave existing messages; stream will fill in */
@@ -1826,7 +1871,10 @@ class AppState extends ChangeNotifier {
                 .map(_map)
                 .whereType<Map<String, dynamic>>()
                 .map(ClientMessage.fromJson)
-                .toList();
+                .toList()
+              // Snapshots written before the merge fix can hold rows out of
+              // order; restoring them sorted heals those chats.
+              ..sort(compareMessageOrder);
           }
         });
       }
@@ -1849,7 +1897,7 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  void _saveSnapshot() {
+  Future<void> _saveSnapshot() async {
     final snapshot = <String, dynamic>{
       'chats': chats.map((c) => c.toSnapshotJson()).toList(),
       'messages': {
@@ -1866,16 +1914,22 @@ class AppState extends ChangeNotifier {
       },
     };
     // Encoded and written off the UI isolate, to its own file (Prefs).
-    unawaited(prefs.saveSnapshot(snapshot));
+    await prefs.saveSnapshot(snapshot);
+  }
+
+  /// Flush the offline snapshot immediately and await completion (for clean
+  /// termination / exit without truncation or loss).
+  Future<void> flushSnapshot() async {
+    if (_disposed) return;
+    _snapshotTimer?.cancel();
+    _snapshotTimer = null;
+    await _saveSnapshot();
   }
 
   /// Write the offline snapshot now (app paused/hidden), instead of waiting
   /// for the debounce.
   void persistSnapshot() {
-    if (_disposed) return;
-    _snapshotTimer?.cancel();
-    _snapshotTimer = null;
-    _saveSnapshot();
+    unawaited(flushSnapshot());
   }
 
   @override
@@ -1921,9 +1975,50 @@ class AppState extends ChangeNotifier {
   static List<dynamic> _list(Object? value) =>
       value is List ? value : const <dynamic>[];
 
+  /// Highest server-assigned (numeric) id in [msgs], or null if none.
+  static int? _maxServerId(List<ClientMessage> msgs) {
+    int? max;
+    for (final m in msgs) {
+      final n = int.tryParse(m.id);
+      if (n != null && (max == null || n > max)) max = n;
+    }
+    return max;
+  }
+
+  bool _uiStreamPaused = false;
+
+  /// Whether the UI isolate's streaming connection is currently paused while
+  /// running in the background.
+  bool get uiStreamPaused => _uiStreamPaused;
+
+  /// Pause the UI isolate's streaming connection when the app is placed in
+  /// the background on Android, avoiding redundant network traffic and battery
+  /// drain while the foreground service maintains notifications and mesh connectivity.
+  void pauseUiStream() {
+    if (_uiStreamPaused || _disposed) return;
+    _uiStreamPaused = true;
+    _reconnect?.cancel();
+    _reconnect = null;
+    _sub?.cancel();
+    _sub = null;
+    _client?.dispose();
+    _client = null;
+    _setConn(ConnState.idle, null);
+    AppLog.info('app_state', 'UI stream paused for background battery savings');
+  }
+
+  /// Resume the UI isolate's connection when the app returns to the foreground.
+  void resumeUiStream() {
+    if (!_uiStreamPaused || _disposed) return;
+    _uiStreamPaused = false;
+    AppLog.info('app_state', 'UI stream resuming from background');
+    unawaited(start());
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    _uiStreamPaused = false;
     _reconnect?.cancel();
     _networkDebounce?.cancel();
     _networkWatch?.cancel();

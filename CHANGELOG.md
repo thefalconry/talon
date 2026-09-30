@@ -1,5 +1,92 @@
 # Changelog
 
+## [5.23.0](https://github.com/thefalconry/talon/compare/v5.22.0...v5.23.0) (2026-09-30)
+
+
+### Features
+
+* **companion:** save attachments to Downloads by default ([6e50616](https://github.com/thefalconry/talon/commit/6e5061698b286584e603d024f558e380800d3bb5))
+
+
+### Bug Fixes
+
+* **companion:** clean linux shutdown and optimize android background battery ([2ef8950](https://github.com/thefalconry/talon/commit/2ef89505326bdfa6f9d81fad817ebe1b3e86613f))
+* **companion:** downloaded file naming, snackbar timeout, and linux appimage/deb/rpm packages ([df220bf](https://github.com/thefalconry/talon/commit/df220bf8b4b99975da78f2eed1313d3101599e82))
+* **companion:** drop [@visible](https://github.com/visible)ForTesting where it now trips analyze ([30a2e64](https://github.com/thefalconry/talon/commit/30a2e64b6a4c022552943791b5bb794f45278eab))
+* **companion:** keep chat history in order across reconnects ([1a7e6bf](https://github.com/thefalconry/talon/commit/1a7e6bf64f48f596ce7a44f6da95e19e04e027d4))
+* **companion:** keep the UI stream paused through network changes ([b4b0641](https://github.com/thefalconry/talon/commit/b4b06412ddafd5b860e7cf1ccbb7481d87fe45ec))
+* **companion:** keep unversioned release assets; cap the scroll settle loop ([e7aa677](https://github.com/thefalconry/talon/commit/e7aa67792dd16aebd01aa5058676b2661ebdf4a7))
+* **companion:** make the shutdown and battery changes compile ([eda7327](https://github.com/thefalconry/talon/commit/eda7327ecfe300b93e9b4cf9c82d22b5b5948a2e))
+* **companion:** scroll to bottom reliably, combine queued messages, and theme top menu ([b18010f](https://github.com/thefalconry/talon/commit/b18010fff64b49abc813ab448f07e7e4103576a8))
+* **companion:** versioned release artifact names and multi-frame scroll settling ([de68a76](https://github.com/thefalconry/talon/commit/de68a766c94d6e7989800707caa4105f8a9a1b7a))
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump the production-dependencies group with 2 updates ([#1148](https://github.com/thefalconry/talon/issues/1148)) ([e77f3ab](https://github.com/thefalconry/talon/commit/e77f3ab3589416315f5da282fd812d420c718cdc))
+
+
+### Tests
+
+* **native:** drive the real /send handler for combined follow-ups ([f229c5d](https://github.com/thefalconry/talon/commit/f229c5dd30b44465b4c19dee2233a05565cce675))
+
+
+### Continuous Integration
+
+* **companion:** drop the Linux debug bundle ([0f1f1b0](https://github.com/thefalconry/talon/commit/0f1f1b0818edcf2938a38d64457598020deb2815))
+* **companion:** pin and digest-check nfpm and appimagetool ([b4e3450](https://github.com/thefalconry/talon/commit/b4e3450e4eea9051c30e42f9709dc33e97999e58))
+* **companion:** upload a Linux debug bundle on PRs and manual runs ([807b68b](https://github.com/thefalconry/talon/commit/807b68bf781dac497dedd35b1752496d59597cfe))
+
+## [5.22.0](https://github.com/thefalconry/talon/compare/v5.21.0...v5.22.0) (2026-09-29)
+
+
+### Features
+
+* **companion:** keep the bridge token and client certificate in the OS keystore ([#1125](https://github.com/thefalconry/talon/issues/1125)) ([484a830](https://github.com/thefalconry/talon/commit/484a830209232923a54cd46c2357dc7284cd1041))
+* **mesh:** auto-detect os/arch in node install links ([#1143](https://github.com/thefalconry/talon/issues/1143)) ([709d283](https://github.com/thefalconry/talon/commit/709d283e1e4c8594f3b7a1c2a18d7521fb9a1ec6))
+
+
+### Bug Fixes
+
+* **companion:** make disabled switches look disabled ([#1134](https://github.com/thefalconry/talon/issues/1134)) ([90231e8](https://github.com/thefalconry/talon/commit/90231e8216afb6830d8c84b816c82ad89caa1680))
+* **companion:** visible text selection in the user's own bubble ([#1138](https://github.com/thefalconry/talon/issues/1138)) ([29b2f33](https://github.com/thefalconry/talon/commit/29b2f3397d1669b833ee77d88d916404d57ff50f))
+
+
+### Miscellaneous Chores
+
+* **deps:** bump claude-agent-sdk to 0.3.284 (Sonnet 5.5) ([#1144](https://github.com/thefalconry/talon/issues/1144)) ([b2852de](https://github.com/thefalconry/talon/commit/b2852de6c8d3b46677b92cadfb19204777c24246))
+
+## [5.21.0](https://github.com/thefalconry/talon/compare/v5.20.1...v5.21.0) (2026-09-29)
+
+
+### Features
+
+* **companion:** collapse tool calls into a Claude-style group dropdown ([#1133](https://github.com/thefalconry/talon/issues/1133)) ([44d54e2](https://github.com/thefalconry/talon/commit/44d54e229d6c28b5f1babf9015826b2d2db5f043))
+* **companion:** confirm a hand-typed bridge's certificate before sending the token ([#1123](https://github.com/thefalconry/talon/issues/1123)) ([9314277](https://github.com/thefalconry/talon/commit/9314277716362293245d798f7318828f2f13f316))
+* **companion:** ship a Windows .exe installer ([#1132](https://github.com/thefalconry/talon/issues/1132)) ([4915e5f](https://github.com/thefalconry/talon/commit/4915e5f280511b692fa4ef54972847812e4d94c9))
+* **mesh:** audit every device command and read it with talon mesh audit ([#1128](https://github.com/thefalconry/talon/issues/1128)) ([7a6afde](https://github.com/thefalconry/talon/commit/7a6afde5e571faea48a14c2e4180043d5caf61e3))
+* **mesh:** on-device command audit on talon-node and the companion ([#1122](https://github.com/thefalconry/talon/issues/1122)) ([40ec0cd](https://github.com/thefalconry/talon/commit/40ec0cda6d2bdb21c5271f6a4caa89ff449eb590))
+* **mesh:** sha256 payload digests on streamed device transfers ([#1127](https://github.com/thefalconry/talon/issues/1127)) ([f48cbed](https://github.com/thefalconry/talon/commit/f48cbedb3bd8add40763bf0b58f0ca635ce9fe09))
+* **node:** opt-in strict TLS and a loud TOFU banner ([#1131](https://github.com/thefalconry/talon/issues/1131)) ([58a2887](https://github.com/thefalconry/talon/commit/58a28874e13cf3493c5e305efceb9582ca64513c))
+
+
+### Bug Fixes
+
+* **companion:** follow Linux desktop theme mode and dynamic accent colors ([#1135](https://github.com/thefalconry/talon/issues/1135)) ([8d351f2](https://github.com/thefalconry/talon/commit/8d351f21050afd3a2b8f582465528be64205c0e6))
+* **companion:** keep the bridge token out of URLs ([#1119](https://github.com/thefalconry/talon/issues/1119)) ([ea246a1](https://github.com/thefalconry/talon/commit/ea246a13328bd5d7cc9f1c5b0a863789885e00a8))
+* **companion:** show the build commit next to the app version ([#1137](https://github.com/thefalconry/talon/issues/1137)) ([e170ce1](https://github.com/thefalconry/talon/commit/e170ce1dee58203de2a17972a8693c2a123231ee))
+* **companion:** unblock typing '?' and move keyboard help to Settings ([#1136](https://github.com/thefalconry/talon/issues/1136)) ([c794cb0](https://github.com/thefalconry/talon/commit/c794cb09789ba91d55cd86fb5655b221177ac2bd))
+* **mesh:** pin the bridge key in node installers and refuse shell-unsafe URLs ([#1121](https://github.com/thefalconry/talon/issues/1121)) ([8183bcd](https://github.com/thefalconry/talon/commit/8183bcda1fcb76844bd4030bddfb1f4b613fbba3))
+* **security:** restore maximum-permission defaults, restrictions opt-in ([#1126](https://github.com/thefalconry/talon/issues/1126)) ([d610639](https://github.com/thefalconry/talon/commit/d61063956fc99deb867f51cd6a43e9659a76b073))
+* **update:** verify companion and node updates without a release key ([#1129](https://github.com/thefalconry/talon/issues/1129)) ([009d580](https://github.com/thefalconry/talon/commit/009d580e317fe1e341b41c13394458fbcc9f0d18))
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump ip-address from 10.4.0 to 10.7.2 ([#1142](https://github.com/thefalconry/talon/issues/1142)) ([a60ecca](https://github.com/thefalconry/talon/commit/a60eccaf0df4e85ad5b73c858b2e3f749f18727b))
+* **deps:** Bump the production-dependencies group with 4 updates ([#1140](https://github.com/thefalconry/talon/issues/1140)) ([7290300](https://github.com/thefalconry/talon/commit/7290300d8c3657aa35543451d59fc73f97534dcb))
+* **deps:** Bump undici ([#1141](https://github.com/thefalconry/talon/issues/1141)) ([c942f7c](https://github.com/thefalconry/talon/commit/c942f7c77dc9d863cec4d6e4c722041b03cd95b0))
+
 ## [5.20.1](https://github.com/thefalconry/talon/compare/v5.20.0...v5.20.1) (2026-09-28)
 
 

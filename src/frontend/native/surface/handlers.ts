@@ -119,7 +119,19 @@ export function buildBridgeHandlers(
       // which `runTurn` sets synchronously, so even a rapid second /send from
       // any client is caught here rather than starting a concurrent turn.
       if (isBusy(runtime, entry.id)) {
-        setQueued(runtime, entry.id, { text, attachments });
+        const existing = runtime.queuedByChat.get(entry.id);
+        if (existing) {
+          const combinedText = [existing.text.trim(), text.trim()]
+            .filter(Boolean)
+            .join("\n\n");
+          const combinedAttachments = [...existing.attachments, ...attachments];
+          setQueued(runtime, entry.id, {
+            text: combinedText,
+            attachments: combinedAttachments,
+          });
+        } else {
+          setQueued(runtime, entry.id, { text, attachments });
+        }
         return;
       }
       startTurn(runtime, entry, text, { attachments });
@@ -180,6 +192,7 @@ export function buildBridgeHandlers(
       readLogEntries(files.log, { limit: lines, minLevel, component }),
     liveTurnEvents: () => liveTurnEvents(runtime),
     mediaPath: (id) => runtime.media.get(id) ?? null,
+    mediaName: (id) => runtime.uploads.get(id)?.name ?? null,
     // Mesh routes are thin transport shims over the shared core service —
     // storeLocation wakes any pending fresh-fix waiters inside the service.
     registerDevice: (body) => mesh.register(body),
@@ -191,7 +204,7 @@ export function buildBridgeHandlers(
     openFileDownload: (token, fromDeviceId) =>
       mesh.openFileDownload(token, fromDeviceId),
     openCompanionPair: (token, format) => mesh.openCompanionPair(token, format),
-    openNodeInstall: (token) => mesh.openNodeInstall(token),
+    openNodeInstall: (token, os, arch) => mesh.openNodeInstall(token, os, arch),
     openNodeBinary: (token) => mesh.openNodeBinary(token),
   };
 }

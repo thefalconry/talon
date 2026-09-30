@@ -1,7 +1,8 @@
 /// This device's mesh membership: location sharing, periodic reporting,
 /// device control and its Android privilege ladder, desktop start-at-login,
-/// and the registered device list. The switches are all prefs-backed and
-/// about *this* machine; the ladder is read from the platform bridges.
+/// the on-device command audit, and the registered device list. The
+/// switches are all prefs-backed and about *this* machine; the ladder is
+/// read from the platform bridges.
 library;
 
 import 'dart:async';
@@ -16,9 +17,12 @@ import '../../services/autostart.dart';
 import '../../services/device_exec.dart';
 import '../../services/log.dart';
 import '../../services/mesh_background.dart';
+import '../../services/mesh_service.dart';
+import '../../services/prefs.dart';
 import '../../services/sandbox.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
+import 'mesh_audit_section.dart';
 import 'settings_widgets.dart';
 
 class MeshCard extends StatefulWidget {
@@ -230,8 +234,7 @@ class _MeshCardState extends State<MeshCard> {
                     ? 'Needs Location sharing on — that is what registers '
                         'this device with the mesh.'
                     : 'Let the connected Talon run shell + file commands on '
-                        'this device (teleport). Granted to this bridge only — '
-                        'pairing with another one turns it off again.',
+                        'this device (teleport).',
             // Shown off (not just greyed) while sharing is off: device
             // control can't work then, so a lit switch would be a lie.
             prefs.meshDeviceControl && prefs.meshSharing && !isFlatpak,
@@ -252,6 +255,18 @@ class _MeshCardState extends State<MeshCard> {
             ),
             if (prefs.meshElevated) _privilegeRow(),
           ],
+          if (!isFlatpak) ...[
+            settingsSwitchRow(
+              'Ask again for each pairing',
+              'Start every newly paired bridge with device control and '
+                  'elevated access off, until you turn them on for it.',
+              prefs.meshGrantsPerPairing,
+              (v) => widget.state.setMeshGrantsPerPairing(v),
+            ),
+            if (prefs.meshDeviceControl) ..._limitRows(prefs),
+          ],
+          const Divider(height: 22),
+          const MeshAuditSection(),
           const Divider(height: 22),
           Row(
             children: [
@@ -278,6 +293,42 @@ class _MeshCardState extends State<MeshCard> {
         ],
       ),
     );
+  }
+
+  /// The device-control limits, each overridable: commands at once, commands
+  /// waiting for a slot, and the largest file a mesh write may produce
+  /// (stepped in powers of two).
+  List<Widget> _limitRows(Prefs prefs) {
+    final running =
+        prefs.meshMaxConcurrent ?? MeshService.maxConcurrentCommands;
+    final queued = prefs.meshMaxQueued ?? MeshService.maxQueuedCommands;
+    final writeGiB =
+        MeshService.maxWriteBytesFor(prefs) ~/ (1024 * 1024 * 1024);
+    return [
+      settingsIntervalRow(
+        'Commands at once',
+        '$running',
+        running,
+        min: 1,
+        onChange: (n) => widget.state.setMeshLimits(concurrent: n),
+      ),
+      settingsIntervalRow(
+        'Commands waiting',
+        '$queued',
+        queued,
+        min: 0,
+        onChange: (n) => widget.state.setMeshLimits(queued: n),
+      ),
+      // Stepped in powers of two: the row's value is the exponent.
+      settingsIntervalRow(
+        'Largest file write',
+        '$writeGiB GiB',
+        writeGiB.bitLength - 1,
+        min: 0,
+        onChange: (step) =>
+            widget.state.setMeshLimits(writeGiB: 1 << step.clamp(0, 10)),
+      ),
+    ];
   }
 
   SettingsHealth _meshBackgroundHealth(MeshForegroundHealthKind kind) {

@@ -30,6 +30,7 @@ import {
 import { routeAllows } from "../frontend/native/bridge/credentials/principal.js";
 import type { AuthGuardPolicy } from "../frontend/native/bridge/auth-guard.js";
 import {
+  DEFAULT_COMPANION_SCOPES,
   DeviceCredentialStore,
   type MeshScope,
 } from "../core/mesh/credentials/index.js";
@@ -537,7 +538,7 @@ describe("migration off the shared token", () => {
     expect(again.body.credential).toBeUndefined();
   });
 
-  it("caps in-band grants: node → device, companion → policy; operator never by default", async () => {
+  it("caps in-band grants: node → device, companion → a narrowed policy", async () => {
     const { port } = await setup();
     const node = await call(port, "POST", "/auth/upgrade", SHARED, {
       deviceId: "n",
@@ -561,6 +562,30 @@ describe("migration off the shared token", () => {
       deviceId: "",
     });
     expect(bad.status).toBe(400);
+  });
+
+  it("with the default policy a companion upgrade carries operator, even when it asks for device + client", async () => {
+    const { port } = await setup({
+      companionScopes: [...DEFAULT_COMPANION_SCOPES],
+    });
+    const phone = await call(port, "POST", "/auth/upgrade", SHARED, {
+      deviceId: "p",
+      client: "companion",
+      scopes: ["device", "client"],
+    });
+    expect(phone.body.scopes).toEqual(["device", "client", "operator"]);
+    const node = await call(port, "POST", "/auth/upgrade", SHARED, {
+      deviceId: "n",
+      client: "node",
+      scopes: ["device"],
+    });
+    expect(node.body.scopes).toEqual(["device"]);
+    const deviceOnly = await call(port, "POST", "/auth/upgrade", SHARED, {
+      deviceId: "d",
+      client: "companion",
+      scopes: ["device"],
+    });
+    expect(deviceOnly.body.scopes).toEqual(["device"]);
   });
 
   it("rotation: flagged on the heartbeat, re-issued in-band, old credential dies on the new one's first use", async () => {

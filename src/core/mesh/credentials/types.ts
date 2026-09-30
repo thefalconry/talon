@@ -7,7 +7,7 @@
  * the secret plus the metadata below; the plaintext exists once, in the reply
  * or link that hands it to the device.
  *
- * Scopes (least privilege — see docs/mesh-credentials.md):
+ * Scopes (see docs/mesh-credentials.md):
  *
  *   device    register/heartbeat/report as ITSELF, receive and answer its
  *             own commands, move the files the daemon asked it to move.
@@ -22,8 +22,22 @@
 const MESH_SCOPES = ["device", "client", "operator"] as const;
 export type MeshScope = (typeof MESH_SCOPES)[number];
 
-/** What a paired or upgraded companion gets unless the operator widens it. */
+/**
+ * What a paired or upgraded companion gets unless the operator narrows it
+ * (`native.companionScopes`): everything, as with the shared token.
+ */
 export const DEFAULT_COMPANION_SCOPES: readonly MeshScope[] = [
+  "device",
+  "client",
+  "operator",
+];
+
+/**
+ * The companion default before `operator` joined it. Credentials still
+ * holding exactly this (and never set by hand) are moved to the current
+ * default on startup — see `DeviceCredentialStore.adoptDefaultScopes`.
+ */
+export const FORMER_COMPANION_SCOPES: readonly MeshScope[] = [
   "device",
   "client",
 ];
@@ -55,6 +69,11 @@ export type DeviceCredentialRecord = {
   /** Hex SHA-256 of the whole token. */
   tokenHash: string;
   scopes: MeshScope[];
+  /**
+   * When an operator last set this device's scopes by hand (`talon mesh
+   * scopes`). Such a credential keeps its scopes when a default changes.
+   */
+  scopesSetAt?: number;
   origin: CredentialOrigin;
   createdAt: number;
   lastUsedAt?: number;

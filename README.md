@@ -493,6 +493,7 @@ Config file: `~/.talon/config.json`
 | `dreamModel`               | ---          | Model for dream / memory consolidation (falls back to `model`)                                                          |
 | `dreamEffort`              | ---          | Reasoning effort for the dream agent — same levels as `heartbeatEffort`                                                 |
 | `braveApiKey`              | ---          | Brave Search API key                                                                                                    |
+| `fetchUrl`                 | ---          | `fetch_url` reaches every address by default, LAN and loopback included. `{ "allowPrivateNetworks": false }` opts into the SSRF guard (refuses private, loopback, link-local and metadata addresses on every redirect hop) — worth it on a cloud VM |
 | `timezone`                 | ---          | IANA timezone (e.g. `"Europe/London"`)                                                                                  |
 | `plugins`                  | `[]`         | External plugin packages                                                                                                |
 | `disabledToolTags`         | ---          | Hide whole tool groups from the model (e.g. `["stickers", "web"]`) — each registered tool costs context tokens per session |
@@ -505,7 +506,7 @@ Config file: `~/.talon/config.json`
 | `apiId` / `apiHash`        | ---          | Telegram API credentials for full message history                                                                       |
 | `whatsapp`                 | ---          | WhatsApp frontend: pairing, allowlists, group policy ([above](#whatsapp))                                               |
 | `discord`                  | ---          | Discord frontend: bot token, application ID, guild / channel allowlists                                                 |
-| `native`                   | ---          | Client bridge: host, port, token, TLS ([above](#desktop--mobile-app))                                                   |
+| `native`                   | ---          | Client bridge: host, port, token, TLS ([above](#desktop--mobile-app)). `companionScopes` (default all three) narrows what a paired companion's credential may do ([docs/mesh-credentials.md](docs/mesh-credentials.md)) |
 | `nativeTools`              | `false`      | Swap the SDK's built-in Read/Write/Edit/Bash/Glob/Grep for Talon's own — these also route to a teleported device        |
 | `fuse`                     | `"auto"`     | Mount the `talon://` namespace with FUSE live views; falls back to a symlink farm where the host can't                  |
 | `github`                   | ---          | GitHub plugin config (see above)                                                                                        |

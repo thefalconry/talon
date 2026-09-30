@@ -98,7 +98,7 @@ jobs:
         # Linux implementation (the app lock's record lives in the Secret
         # Service); the runtime libsecret-1-0 ships with every desktop and
         # the Flatpak runtime.
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev libayatana-appindicator3-dev libsecret-1-dev
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgtk-3-dev libayatana-appindicator3-dev libsecret-1-dev file
 
       - name: Set up Java
         if: matrix.platform == 'android'
@@ -217,7 +217,7 @@ jobs:
           case "${{ matrix.platform }}" in
             windows)
               # Portable zip of the raw Release folder…
-              ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows.zip" ./* )
+              ( cd build/windows/x64/runner/Release && 7z a "$DEST/talon-companion-windows-$APP_VERSION.zip" ./* )
               # …plus a double-click Setup.exe (the Windows counterpart of the
               # macOS DMG), compiled from the committed .iss with Inno Setup
               # (preinstalled on windows-latest; choco is a fallback).
@@ -242,10 +242,14 @@ jobs:
               if ISCC.exe \
                   "-DAppVersion=$APP_VERSION" \
                   "-DSourceDir=$RELEASE_DIR" \
+                  "-Ftalon-companion-windows-setup-$APP_VERSION" \
                   "-O$DEST" \
                   installer/windows/talon-companion.iss; then
                 if [ -f "$DEST/talon-companion-windows-setup.exe" ]; then
-                  echo "Built talon-companion-windows-setup.exe"
+                  mv "$DEST/talon-companion-windows-setup.exe" "$DEST/talon-companion-windows-setup-$APP_VERSION.exe"
+                fi
+                if [ -f "$DEST/talon-companion-windows-setup-$APP_VERSION.exe" ]; then
+                  echo "Built talon-companion-windows-setup-$APP_VERSION.exe"
                 else
                   installer_failed "ISCC reported success but no setup.exe was written"
                 fi
@@ -288,7 +292,7 @@ jobs:
 
               STAGE=$(mktemp -d)
               cp -R "$APP" "$STAGE/"
-              OUT="$DEST/talon-companion-macos.dmg"
+              OUT="$DEST/talon-companion-macos-$APP_VERSION.dmg"
               # create-dmg drives Finder via AppleScript and can flake on CI
               # runners — never let a cosmetic failure cost the release asset:
               # fall back to the old undecorated hdiutil DMG.
@@ -310,9 +314,23 @@ jobs:
               fi
               rm -rf "$STAGE"
               ;;
-            linux)   ( cd build/linux/x64/release/bundle && tar czf "$DEST/talon-companion-linux.tar.gz" . ) ;;
-            android) cp build/app/outputs/flutter-apk/app-release.apk "$DEST/talon-companion-android.apk" ;;
+            linux)
+              ./installer/linux/package-linux.sh \
+                --bundle build/linux/x64/release/bundle \
+                --version "$APP_VERSION" \
+                --dest "$DEST"
+              ;;
+            android) cp build/app/outputs/flutter-apk/app-release.apk "$DEST/talon-companion-android-$APP_VERSION.apk" ;;
           esac
+          # Every companion already installed looks for the UNversioned asset
+          # names when it checks for updates, and so does the Flatpak
+          # manifest's update checker. Ship an unversioned copy of each asset
+          # too, until installs older than the versioned-name updater have
+          # aged out; dropping them would strand those installs silently.
+          for f in "$DEST"/talon-companion-*-"$APP_VERSION".*; do
+            [ -e "$f" ] || continue
+            cp "$f" "${f/-$APP_VERSION/}"
+          done
           ls -la "$DEST"
 
       - name: Upload workflow artifact

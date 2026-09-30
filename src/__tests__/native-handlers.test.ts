@@ -214,6 +214,33 @@ describe("bridge send", () => {
     await settle(4);
   });
 
+  it("combines follow-ups sent while busy instead of replacing the queue", async () => {
+    let release!: () => void;
+    vi.mocked(execute).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return {
+        text: "",
+        durationMs: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        bridgeMessageCount: 1,
+      };
+    });
+    const chat = handlers.createChat();
+    handlers.send(chat.id, "first", undefined);
+    handlers.send(chat.id, "second", undefined);
+    handlers.send(chat.id, "  third  ", undefined);
+
+    expect(harness.runtime.queuedByChat.get(chat.id)).toMatchObject({
+      text: "second\n\nthird",
+    });
+    expect(vi.mocked(execute)).toHaveBeenCalledOnce();
+    release();
+    await settle(4);
+  });
+
   it("runs a queued follow-up before a message sent as the turn settles", async () => {
     let release!: () => void;
     vi.mocked(execute).mockImplementationOnce(async () => {
@@ -420,7 +447,7 @@ describe("bridge mesh routes", () => {
     ["acceptFileUpload", "acceptFileUpload", ["tok", {}, "phone"]],
     ["openFileDownload", "openFileDownload", ["tok", "phone"]],
     ["openCompanionPair", "openCompanionPair", ["tok", "png"]],
-    ["openNodeInstall", "openNodeInstall", ["tok"]],
+    ["openNodeInstall", "openNodeInstall", ["tok", "linux", "arm64"]],
     ["openNodeBinary", "openNodeBinary", ["tok"]],
   ];
 

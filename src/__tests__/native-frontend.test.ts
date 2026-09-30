@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -552,7 +553,10 @@ describe("native mesh bridge routes", () => {
         ok: true,
         bytes: payload.length,
       });
-      await expect(pull.done).resolves.toBe(payload.length);
+      await expect(pull.done).resolves.toEqual({
+        bytes: payload.length,
+        sha256: createHash("sha256").update(payload).digest("hex"),
+      });
       const onDisk = await readFile(dest);
       expect(onDisk.equals(payload)).toBe(true);
 
@@ -613,7 +617,10 @@ describe("native mesh bridge routes", () => {
         { method: "POST", headers: auth, body: payload },
       );
       expect(real.status).toBe(200);
-      await expect(pull.done).resolves.toBe(payload.length);
+      await expect(pull.done).resolves.toEqual({
+        bytes: payload.length,
+        sha256: createHash("sha256").update(payload).digest("hex"),
+      });
 
       const src = join(dir, "bound-src.bin");
       await fsWriteFile(src, payload);

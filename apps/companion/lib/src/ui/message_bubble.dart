@@ -1,5 +1,3 @@
-import 'dart:io' show File;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -311,7 +309,8 @@ class MessageBubble extends StatelessWidget {
                   builder: (context) => MarkdownBody(
                     data: message.text.isEmpty ? '…' : message.text,
                     builders: {'code': CodeElementBuilder()},
-                    onTapLink: (_, href, __) => _onTapLink(context, href),
+                    onTapLink: (text, href, _) =>
+                        _onTapLink(context, href, text: text),
                     styleSheet: talonMarkdownStyle(),
                   ),
                 ),
@@ -334,23 +333,56 @@ class MessageBubble extends StatelessWidget {
   /// A tapped link in message text. A bridge attachment link (`/media?id=…`)
   /// is fetched in-app through the authenticated media stack, so the bearer
   /// token never rides in a browser-visible URL and mTLS still applies, then
-  /// opened locally. Everything else opens in the browser.
-  void _onTapLink(BuildContext context, String? href) {
+  /// saved to Downloads (with an Open action). Everything else opens in the
+  /// browser.
+  void _onTapLink(BuildContext context, String? href, {String? text}) {
     if (href == null) return;
     final media = bridgeMediaUrl(href, mediaBaseUrl);
     if (media != null) {
       final messenger = ScaffoldMessenger.maybeOf(context);
+      final suggestedName = _nameFromLink(text, href);
       AttachmentOpener.instance
-          .openLink(url: media, headers: mediaHeaders)
+          .saveLink(
+            url: media,
+            headers: mediaHeaders,
+            name: suggestedName,
+          )
+          .then((saved) => showSavedSnackBar(messenger, saved))
           .catchError((Object e) {
         messenger?.showSnackBar(
-          SnackBar(content: Text("Couldn't open link: $e")),
+          SnackBar(
+            duration: const Duration(seconds: 3),
+            content: Text("Couldn't save link: $e"),
+          ),
         );
-        return File('');
       });
       return;
     }
     launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
+  }
+
+  /// Extracts a clean file name from a tapped link label or query string,
+  /// or null if the link does not specify a filename.
+  static String? _nameFromLink(String? text, String href) {
+    final uri = Uri.tryParse(href);
+    final queryName =
+        uri?.queryParameters['filename'] ?? uri?.queryParameters['name'];
+    if (queryName != null && queryName.trim().isNotEmpty) {
+      return AttachmentOpener.safeName(queryName.trim());
+    }
+    if (text != null) {
+      final t = text.trim();
+      if (t.isNotEmpty &&
+          !t.startsWith('http://') &&
+          !t.startsWith('https://') &&
+          !t.contains('/') &&
+          !t.contains(r'\') &&
+          t.contains('.') &&
+          !t.endsWith('.')) {
+        return AttachmentOpener.safeName(t);
+      }
+    }
+    return null;
   }
 
   /// The URL to fetch in-app for a `/media?id=…` link, or null when [href]
@@ -376,7 +408,14 @@ class MessageBubble extends StatelessWidget {
     final base = baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
-    return '$base/media?id=${Uri.encodeQueryComponent(id)}';
+    final filename =
+        link.queryParameters['filename'] ?? link.queryParameters['name'];
+    final q = [
+      'id=${Uri.encodeQueryComponent(id)}',
+      if (filename != null && filename.isNotEmpty)
+        'filename=${Uri.encodeQueryComponent(filename)}',
+    ].join('&');
+    return '$base/media?$q';
   }
 
   /// Selection highlight for text inside the user's own bubble. White, so
@@ -487,8 +526,7 @@ class _InlineImage extends StatelessWidget {
               // bubble (a phone, a long file name beside it) a hard 200px
               // placeholder overflows its own row.
               errorBuilder: (context, _, __) => Container(
-                constraints:
-                    const BoxConstraints(maxWidth: 200, minHeight: 110),
+                constraints: const BoxConstraints(maxWidth: 200, minHeight: 110),
                 padding: const EdgeInsets.symmetric(
                     horizontal: TalonSpace.sm, vertical: TalonSpace.sm),
                 alignment: Alignment.center,
@@ -714,11 +752,60 @@ class _FileChip extends StatefulWidget {
   State<_FileChip> createState() => _FileChipState();
 }
 
-/// Tapping downloads the file with the auth header and opens the local copy
-/// (see [AttachmentOpener]); the trailing icon turns into a spinner while
+/// "Saved to …" with an Open action for the cached copy.
+void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved) {
+  messenger?.showSnackBar(
+    SnackBar(
+      duration: const Duration(seconds: 3),
+      content: Text('Saved to ${saved.location}'),
+      action: SnackBarAction(
+        label: 'Open',
+        onPressed: () {
+          AttachmentOpener.instance
+              .openLocal(saved.file, saved.mimeType)
+              .catchError((Object e) {
+            messenger.showSnackBar(SnackBar(
+              duration: const Duration(seconds: 3),
+              content: Text('$e'),
+            ));
+          });
+        },
+      ),
+    ),
+  );
+}
+
+/// Tapping downloads the file with the auth header and saves it to the
+/// user's Downloads (see [AttachmentOpener]), offering to open it; a
+/// long-press opens it directly. The trailing icon turns into a spinner while
 /// the download runs, and a failure says so in a snackbar.
 class _FileChipState extends State<_FileChip> {
   bool _busy = false;
+
+  Future<void> _save() async {
+    if (_busy) return;
+    final file = widget.file;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _busy = true);
+    try {
+      final saved = await AttachmentOpener.instance.save(
+        url: file.url,
+        name: file.name,
+        mimeType: file.mimeType,
+        headers: widget.headers,
+      );
+      showSavedSnackBar(messenger, saved);
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          content: Text("Couldn't save ${file.name}: $e"),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _open() async {
     if (_busy) return;
@@ -750,11 +837,13 @@ class _FileChipState extends State<_FileChip> {
         onAccent ? Colors.white.withValues(alpha: 0.75) : TalonColors.textFaint;
     return Semantics(
       button: true,
-      label: 'Attached file ${file.name}, ${file.sizeLabel}. Open',
+      label: 'Attached file ${file.name}, ${file.sizeLabel}. Save to Downloads',
+      onLongPressHint: 'Open',
       child: Tooltip(
-        message: 'Open ${file.name}',
+        message: 'Save ${file.name} to Downloads (long-press to open)',
         child: GestureDetector(
-          onTap: _open,
+          onTap: _save,
+          onLongPress: _open,
           child: Container(
             constraints: const BoxConstraints(maxWidth: 280),
             padding: const EdgeInsets.symmetric(
@@ -807,7 +896,7 @@ class _FileChipState extends State<_FileChip> {
                         strokeWidth: 1.6, color: faint),
                   )
                 else
-                  Icon(Icons.open_in_new_rounded, size: 14, color: faint),
+                  Icon(Icons.download_rounded, size: 14, color: faint),
               ],
             ),
           ),

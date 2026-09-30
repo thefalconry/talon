@@ -56,6 +56,22 @@ Instead, use [GitHub's private vulnerability reporting](https://github.com/thefa
   (0700) on every boot; `config.json`, `talon.log`, `talon.db`, and the
   Telegram session file are clamped to 0600.
 
+## Defaults: full capability, restrictions opt-in
+
+Talon is built to be powerful out of the box. Every capability is on by
+default; the restrictions below exist for operators who want them and are
+off until you turn them on.
+
+| Capability | Default | Opt-in restriction |
+| --- | --- | --- |
+| `fetch_url` reaching LAN / loopback / link-local addresses | allowed | `fetchUrl.allowPrivateNetworks: false` (SSRF guard, every redirect hop checked) |
+| Companion credential scopes | `device`, `client`, `operator` | `native.companionScopes: ["device", "client"]`, or `talon mesh scopes <device> <list>` for one device |
+| Companion device control (remote shell / files) | on | Settings → Mesh → Device control |
+| Companion elevated access (root / Shizuku), root warmed at mesh start | on | Settings → Mesh → Elevated access |
+| Grants carried over to a newly paired bridge | yes | Settings → Mesh → Ask again for each pairing |
+| Companion command limits | 4 running, 16 waiting, 4 GiB per file write | Settings → Mesh (any value) |
+| talon-node command limits | 8 workers, 4 GiB per file write | `policy` block in the node's `config.json` ([apps/node/README.md](apps/node/README.md)) |
+
 ## Scope
 
 Talon is an AI agent with tool access (file system, web, messaging). Security issues of particular interest include:

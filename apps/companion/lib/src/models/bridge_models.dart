@@ -120,6 +120,20 @@ class Attachment {
   }
 }
 
+/// Display order for a chat's messages: oldest first by timestamp, ties
+/// broken by server id (numeric ids ascending, local/system notes after),
+/// then by id text. A total order, since `List.sort` isn't stable.
+int compareMessageOrder(ClientMessage a, ClientMessage b) {
+  final byTs = a.ts.compareTo(b.ts);
+  if (byTs != 0) return byTs;
+  final na = int.tryParse(a.id);
+  final nb = int.tryParse(b.id);
+  if (na != null && nb != null) return na.compareTo(nb);
+  if (na != null) return -1;
+  if (nb != null) return 1;
+  return a.id.compareTo(b.id);
+}
+
 class ClientMessage {
   final String id;
   final String chatId;

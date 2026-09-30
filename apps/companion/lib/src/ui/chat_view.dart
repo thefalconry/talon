@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
@@ -76,6 +77,7 @@ class _ChatViewState extends State<ChatView> {
   /// message (like any chat app), not the top of the scrollback.
   String? _anchoredChatId;
   bool _pendingJumpToBottom = false;
+  int _settleToken = 0;
 
   /// Whether the user has scrolled up into history far enough that a
   /// jump-to-latest affordance is useful.
@@ -237,20 +239,68 @@ class _ChatViewState extends State<ChatView> {
     if (chatId != _anchoredChatId) {
       _anchoredChatId = chatId;
       _pendingJumpToBottom = true;
+      _settleToken++;
     }
+    final token = _settleToken;
+    final historyLoading = widget.state.isHistoryLoading(chatId);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      final pos = _scroll.position;
+      if (!mounted || !_scroll.hasClients) return;
       if (_pendingJumpToBottom) {
-        _scroll.jumpTo(pos.maxScrollExtent);
-        // Only consider it settled once there's something to anchor to, so an
-        // async history load right after the switch still snaps to newest.
-        if (messageCount > 0) _pendingJumpToBottom = false;
+        void settle(int retry, double lastExtent, int stableFrames) {
+          if (!mounted || !_scroll.hasClients || _settleToken != token) return;
+          final pos = _scroll.position;
+          // If the user actively touches or scrolls during settle, yield to the gesture.
+          if (pos.userScrollDirection != ScrollDirection.idle) {
+            _pendingJumpToBottom = false;
+            return;
+          }
+          // Hard cap: content that keeps growing (a streaming reply) must not
+          // keep this loop alive frame after frame. Live growth is followed
+          // by the near-bottom rule below once settling gives up.
+          if (retry >= 60) {
+            if (messageCount > 0 && !historyLoading) {
+              _pendingJumpToBottom = false;
+            }
+            return;
+          }
+          if (!pos.hasContentDimensions) {
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, lastExtent, stableFrames),
+            );
+            return;
+          }
+          final currentExtent = pos.maxScrollExtent;
+          if (pos.pixels < currentExtent) {
+            _scroll.jumpTo(currentExtent);
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, 0),
+            );
+          } else if ((currentExtent - lastExtent).abs() > 0.5) {
+            // Extent changed or just jumped; wait for next frame to check stability.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, 0),
+            );
+          } else if (stableFrames < 2 && retry < 40) {
+            // Extent unchanged across 1 frame; confirm stability on a 2nd consecutive frame
+            // so multi-pass layouts (tall markdown bubbles, code highlighters) finish.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, stableFrames + 1),
+            );
+          } else {
+            // Settled: position is at maximum extent and extent has stabilized.
+            if (messageCount > 0 && !historyLoading) {
+              _pendingJumpToBottom = false;
+            }
+          }
+        }
+
+        settle(0, -1.0, 0);
         return;
       }
+      final pos = _scroll.position;
       // Otherwise follow live growth only when the user is already near the
       // bottom, so we never yank them up while they're reading scrollback.
-      if (pos.maxScrollExtent - pos.pixels < 260) {
+      if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 260) {
         _scroll.animateTo(
           pos.maxScrollExtent,
           duration: const Duration(milliseconds: 160),
@@ -294,7 +344,12 @@ class _ChatViewState extends State<ChatView> {
                     children: [
                       _QueuedBar(state: widget.state, chatId: chat.id),
                       Composer(
-                        onSend: widget.state.sendMessage,
+                        onSend: (text, {attachments = const []}) {
+                          _pendingJumpToBottom = true;
+                          _settleToken++;
+                          return widget.state
+                              .sendMessage(text, attachments: attachments);
+                        },
                         attachments: _attachments,
                         enabled: widget.state.conn == ConnState.connected,
                         running: widget.state.isTurnRunning(chat.id),
@@ -401,7 +456,11 @@ class _ChatViewState extends State<ChatView> {
     if (msgs.isEmpty && !showActivity) {
       return _ConversationEmpty(
         onPrompt: widget.state.conn == ConnState.connected
-            ? (p) => widget.state.sendMessage(p)
+            ? (p) {
+                _pendingJumpToBottom = true;
+                _settleToken++;
+                widget.state.sendMessage(p);
+              }
             : null,
       );
     }
@@ -893,10 +952,17 @@ class _ChatMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      icon: Icon(Icons.more_vert,
-          size: TalonDensity.d(20, 24), color: TalonColors.textDim),
+      icon: Icon(Icons.menu,
+          size: TalonDensity.d(20, 24), color: TalonColors.accent),
+      tooltip: 'Conversation menu',
       iconSize: TalonDensity.d(20, 24),
       color: TalonColors.surfaceHi,
+      surfaceTintColor: Colors.transparent,
+      elevation: 6,
+      shape: RoundedRectangleBorder(
+        borderRadius: TalonRadius.rMd,
+        side: BorderSide(color: TalonColors.glassStroke),
+      ),
       onSelected: (v) async {
         switch (v) {
           case 'reset':
@@ -953,9 +1019,10 @@ class _MenuRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = danger ? TalonColors.bad : TalonColors.text;
+    final iconColor = danger ? TalonColors.bad : TalonColors.accent;
     return Row(
       children: [
-        Icon(icon, size: 17, color: color),
+        Icon(icon, size: 17, color: iconColor),
         const SizedBox(width: 10),
         Text(label, style: TextStyle(color: color, fontSize: 13.5)),
       ],

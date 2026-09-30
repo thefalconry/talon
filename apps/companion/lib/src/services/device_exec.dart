@@ -47,11 +47,11 @@ class DeviceExec {
   final bool Function() _isAndroid;
 
   /// Whether this executor may use (or ask for) root or Shizuku at all.
-  /// The mesh points this at the user's per-bridge elevation grant (see
-  /// `Prefs.meshElevated`); while it answers false, commands run as the app
-  /// and no root/Shizuku grant dialog is ever raised on their behalf. The
-  /// settings screen and the app's own updater keep the default, since the
-  /// user is driving those directly.
+  /// The mesh points this at the user's elevated-access setting (see
+  /// `Prefs.meshElevated`, default on); while it answers false, commands run
+  /// as the app and no root/Shizuku grant dialog is ever raised on their
+  /// behalf. The settings screen and the app's own updater keep the default,
+  /// since the user is driving those directly.
   bool Function() allowElevation = _always;
   static bool _always() => true;
   Future<bool>? _pendingShizukuPermission;
@@ -123,9 +123,14 @@ class DeviceExec {
 
   static const int _maxChunkBytes = 256 * 1024;
 
-  /// Largest file a mesh write (write_file chunks, download_file) may
-  /// produce on this device.
-  static const int maxWriteBytes = 2 * 1024 * 1024 * 1024;
+  /// Default for the largest file a mesh write (write_file chunks,
+  /// download_file) may produce on this device — the same 4 GiB as
+  /// talon-node. The mesh points [writeLimit] at the user's setting.
+  static const int maxWriteBytes = 4 * 1024 * 1024 * 1024;
+
+  /// The per-file mesh write cap in force (see [maxWriteBytes]).
+  int Function() writeLimit = _defaultWriteLimit;
+  static int _defaultWriteLimit() => maxWriteBytes;
   static const Duration _shizukuPermissionWait = Duration(seconds: 12);
 
   /// How long a root probe's answer is trusted before asking the bridge again.
@@ -394,6 +399,7 @@ class DeviceExec {
           _str(params['path']) ?? '',
           sha256: _str(params['sha256']),
           delayMs: _int(params['delayMs']),
+          allowDowngrade: params['allow_downgrade'] == true,
         );
       default:
         return null;
@@ -570,12 +576,15 @@ class DeviceExec {
   ///
   /// `pm install -r` also refuses a differently-signed APK, so a wrong or
   /// tampered file can't hijack the app — it just fails the reinstall — and,
-  /// without `-d`, refuses a lower versionCode, so an older signed build
-  /// can't be rolled back onto the device either.
+  /// by default, refuses a lower versionCode, so an older signed build can't
+  /// be rolled back onto the device by accident. [allowDowngrade] (the
+  /// command's `allow_downgrade: true`) adds `-d` for a deliberate rollback;
+  /// Android itself may still refuse it for a non-debuggable package.
   Future<CommandOutcome> installApk(
     String path, {
     String? sha256,
     int? delayMs,
+    bool allowDowngrade = false,
   }) async {
     if (!_isAndroid()) {
       return CommandOutcome.fail('install_apk is only supported on Android.');
@@ -637,7 +646,7 @@ class DeviceExec {
     final sleepSecs = (delay / 1000).ceil();
     try {
       await _elevatedExec(
-        'setsid sh -c ${_shQuote(installApkWorker(stagedDir, expected, sleepSecs))} '
+        'setsid sh -c ${_shQuote(installApkWorker(stagedDir, expected, sleepSecs, allowDowngrade: allowDowngrade))} '
         '>/dev/null 2>&1 &',
         5000,
       );
@@ -652,6 +661,7 @@ class DeviceExec {
         'staged': true,
         'stagedPath': staged,
         'delayMs': delay,
+        'allowDowngrade': allowDowngrade,
         'log': logPath,
         'via': (!_rootDemoted && _lastRoot?['tier'] == 'root')
             ? 'root'
@@ -690,18 +700,24 @@ class DeviceExec {
 
   /// The detached install worker: wait (so the mesh ack flushes before pm
   /// tears the app down), re-check the digest right before handing the file
-  /// to pm, then `pm install -r` — keep data, same-or-newer only: no `-d`, so
-  /// an older (validly signed) build can never be rolled back on. The staged
-  /// APK is removed afterwards; the log stays beside it.
+  /// to pm, then `pm install -r` — keep data, same-or-newer only unless
+  /// [allowDowngrade] adds `-d` for an explicit rollback. The staged APK is
+  /// removed afterwards; the log stays beside it.
   @visibleForTesting
-  static String installApkWorker(String dir, String expected, int sleepSecs) {
+  static String installApkWorker(
+    String dir,
+    String expected,
+    int sleepSecs, {
+    bool allowDowngrade = false,
+  }) {
     final apk = _shQuote('$dir/update.apk');
     final log = _shQuote('$dir/install.log');
     final want = _shQuote(expected);
+    final flags = allowDowngrade ? '-r -d' : '-r';
     return 'sleep $sleepSecs; '
         'if [ -z $want ] || '
         '[ "\$(sha256sum $apk | cut -d" " -f1)" = $want ]; then '
-        'pm install -r $apk > $log 2>&1; echo "exit=\$?" >> $log; '
+        'pm install $flags $apk > $log 2>&1; echo "exit=\$?" >> $log; '
         'else echo "integrity check failed before install" > $log; fi; '
         'rm -f $apk';
   }
@@ -771,13 +787,14 @@ class DeviceExec {
       final file = File(path);
       await file.parent.create(recursive: true);
       final bytes = base64Decode(b64);
-      // Capped per file: a mesh write never grows a file past maxWriteBytes.
+      // Capped per file: a mesh write never grows a file past writeLimit.
       // Below that, writes proceed until a real limit fails them (disk full,
       // permissions), and that exception is surfaced verbatim below.
-      if ((truncate ? 0 : offset) + bytes.length > maxWriteBytes) {
+      final cap = writeLimit();
+      if ((truncate ? 0 : offset) + bytes.length > cap) {
         return CommandOutcome.fail(
           'write_file refused: the file would exceed the '
-          '$maxWriteBytes-byte limit for mesh writes.',
+          '$cap-byte limit for mesh writes (Settings → Mesh).',
         );
       }
       // Write at the offset the daemon asked for — never blind-append. The
