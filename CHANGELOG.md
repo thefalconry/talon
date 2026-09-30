@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.26.4](https://github.com/thefalconry/talon/compare/v5.26.3...v5.26.4) (2026-09-30)
+
+
+### Bug Fixes
+
+* **backup,remote-server:** tiered retention guard rails; keep OpenCode/Kilo sessions on transient errors ([#1215](https://github.com/thefalconry/talon/issues/1215)) ([61c663c](https://github.com/thefalconry/talon/commit/61c663c2b8ee89ef44ccffd2ec84034bfc8bbaa6))
+
 ## [5.26.3](https://github.com/thefalconry/talon/compare/v5.26.2...v5.26.3) (2026-09-30)
 
 
