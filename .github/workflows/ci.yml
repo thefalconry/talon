@@ -1279,6 +1279,27 @@ jobs:
           docker run --rm --user 568:568 talon:ci sh -c \
             'git --version && rg --version && command -v claude && id -un'
 
+      # The default layout is one data root at /data, with no HOME override;
+      # a container started with only the OLD layout's mount
+      # (/home/bun/.talon holding a Talon install) must stay on it rather
+      # than boot an empty Talon from /data.
+      - name: Smoke-test data-root layout and old-layout detection
+        run: |
+          set -eux
+          data="$(mktemp -d)"
+          sudo chown 1000:1000 "$data"
+          test "$(docker run --rm -v "$data:/data" talon:ci sh -c 'echo $HOME:$TALON_CONTAINER')" = "/data:1"
+          sudo test -f "$data/.talon/config.json"
+          legacy="$(mktemp -d)"
+          echo '{}' > "$legacy/config.json"
+          sudo chown -R 1000:1000 "$legacy"
+          out="$(docker run --rm -v "$legacy:/home/bun/.talon" talon:ci sh -c 'echo $HOME:$TALON_LAYOUT' 2>&1)"
+          echo "$out"
+          echo "$out" | grep -q 'found Talon data at /home/bun/.talon'
+          echo "$out" | tail -n1 | grep -qx '/home/bun:legacy'
+          # The operator's old config was left alone.
+          test "$(sudo cat "$legacy/config.json")" = '{}'
+
   # ── Tarball / publish dry-run ─────────────────────────────────
   # `npm pack --dry-run` would just list files. Our custom checker
   # *additionally* asserts on the contents — no .env, no test fixtures,

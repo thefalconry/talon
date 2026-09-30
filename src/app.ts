@@ -212,6 +212,14 @@ const { config } = await withConfigGuard(() =>
   ),
 );
 
+// Before any backend resumes a session: carry Claude transcripts over a
+// Talon-home move (their project slug is the cwd), and in a container
+// alert when a backend's session store isn't on a persistent volume.
+await bootPhase("storage layout", async () => {
+  const { runStorageLayoutChecks } = await import("./core/layout/index.js");
+  await runStorageLayoutChecks(config as unknown as Record<string, unknown>);
+});
+
 // Record this process as the daemon. The gateway port is appended once
 // the gateway binds (it may fall back from the default on EADDRINUSE).
 const bootedAt = new Date().toISOString();
