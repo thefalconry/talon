@@ -545,11 +545,18 @@ ThemeData buildTalonTheme() {
           // themselves — TalonType styles do. A bare TextStyle here silently
           // drops the family for everything that inherits bodyMedium.
           bodyMedium: TalonType.body,
-          titleMedium: const TextStyle(
+          // Carries its own colour: DropdownButton draws its closed label
+          // and menu items in titleMedium, and a colourless style here fell
+          // back to white on the light menu.
+          titleMedium: TextStyle(
             fontFamily: _fontFamily,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
+            color: TalonColors.text,
           ),
         ),
+    // Dropdown menus paint on canvasColor — match the popup menus.
+    canvasColor: TalonColors.surfaceHi,
     splashFactory: InkSparkle.splashFactory,
     // Predictive back on Android: route pops (conversation → chat list,
     // Settings → home) track the back gesture and peel away with the system
