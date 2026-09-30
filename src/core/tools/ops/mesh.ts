@@ -265,4 +265,25 @@ export const meshTools: ToolDefinition[] = [
     execute: (params, bridge) => bridge("make_node_install_link", params),
     tag: "mesh",
   },
+  {
+    name: "make_companion_pair_link",
+    description:
+      "Mint a single-use pairing link that connects a Talon companion app (Android, macOS, Windows, Linux) to this daemon's bridge — the agent-tool twin of Telegram's /mesh pair. Returns the link (open it on the device: it fills the companion's connection form) plus the values to type in by hand when the link doesn't open the app: bridge URL, bearer token (a fresh per-device credential that binds to the first device registering with it), and TLS certificate fingerprint. The link expires in 10 minutes and serves once. A device that already holds a live credential must have it revoked before it can pair again. Requires the native bridge running on a non-loopback bind with a token.",
+    schema: {
+      label: z
+        .string()
+        .optional()
+        .describe(
+          "What the companion should call this connection (e.g. the bot's name). Default: none — the app picks.",
+        ),
+      bridge_url: z
+        .string()
+        .optional()
+        .describe(
+          "Bridge base URL as reachable FROM the device (e.g. https://talon.example.org behind a reverse proxy). Default: native.publicUrl when set, else derived from the bridge bind.",
+        ),
+    },
+    execute: (params, bridge) => bridge("make_companion_pair_link", params),
+    tag: "mesh",
+  },
 ];

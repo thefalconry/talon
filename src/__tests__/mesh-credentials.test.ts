@@ -471,6 +471,33 @@ describe("mesh service with credentials", () => {
     expect(DEFAULT_COMPANION_SCOPES).toEqual(["device", "client", "operator"]);
   });
 
+  it("make_companion_pair_link returns the link plus URL, token and fingerprint", async () => {
+    const svc = await service();
+    await svc.load();
+    bridge(svc);
+    const result = svc.makeCompanionPairLinkText("Phone");
+    expect(result.ok).toBe(true);
+    const text = result.text ?? "";
+    expect(text).toMatch(/https:\/\/10\.0\.0\.2:19880\/pair\?grant=/);
+    expect(text).toContain("Bridge URL: https://10.0.0.2:19880");
+    expect(text).toContain(`Certificate SHA-256: ${"f".repeat(64)}`);
+    expect(text).toContain("expires in 10 minutes");
+    const token = /Token: (\S+)/.exec(text)![1]!;
+    expect(isDeviceCredentialToken(token)).toBe(true);
+    expect(text).not.toContain("shared-secret");
+    // The typed-in token is the same live credential the link carries.
+    expect(svc.credentials!.authenticate(token)).toMatchObject({
+      deviceId: null,
+    });
+  });
+
+  it("make_companion_pair_link fails cleanly without a bridge", async () => {
+    const svc = await service();
+    await svc.load();
+    const result = svc.makeCompanionPairLinkText();
+    expect(result.ok).toBe(false);
+  });
+
   it("pairing links honour a narrowed native.companionScopes", async () => {
     const svc = await service();
     await svc.load();

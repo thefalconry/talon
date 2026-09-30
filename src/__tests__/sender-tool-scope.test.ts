@@ -362,6 +362,42 @@ describe("credential-bearing tools", () => {
     expect(textOf(res)).toMatch(/operator's private chat/);
     expect(calls).toEqual([]);
   });
+
+  it("treat make_companion_pair_link the same way: refused for guests, DM-only for the operator", async () => {
+    const PAIR =
+      "https://bridge/pair?grant=g  Token: tdc1.0123456789abcdef.s3cr3t";
+    const calls = stubBridge((action) =>
+      action === "make_companion_pair_link"
+        ? { ok: true, text: PAIR }
+        : { ok: true },
+    );
+    const client = await hubClient(GROUP);
+    let release = enterTurnScope(GROUP, "guest");
+    try {
+      const res = await client.callTool({
+        name: "make_companion_pair_link",
+        arguments: {},
+      });
+      expect(textOf(res)).not.toContain("s3cr3t");
+      expect(calls).toEqual([]);
+    } finally {
+      release();
+    }
+    release = enterTurnScope(GROUP, "operator");
+    try {
+      const res = await client.callTool({
+        name: "make_companion_pair_link",
+        arguments: {},
+      });
+      expect(textOf(res)).not.toContain("s3cr3t");
+      const sends = calls.filter((c) => c.action === "send_message");
+      expect(sends).toHaveLength(1);
+      expect(sends[0].body._chatId).toBe(String(ADMIN));
+      expect(sends[0].body.text).toBe(PAIR);
+    } finally {
+      release();
+    }
+  });
 });
 
 // ── Telegram: group allowlist + batching ────────────────────────────────────

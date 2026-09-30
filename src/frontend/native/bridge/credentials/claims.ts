@@ -11,6 +11,7 @@
  * operator can see which devices still need upgrading.
  */
 
+import { logWarn } from "../../../../util/log.js";
 import type { BridgeCredentials, BridgePrincipal } from "./principal.js";
 
 export type ClaimResult =
@@ -42,7 +43,16 @@ export function claimDevice(
   if (claimed === undefined) return { ok: true, deviceId: undefined };
   const bind = credentials?.authority.bind(principal.credentialId, claimed);
   if (!bind || !bind.ok) {
-    return { ok: false, error: bind?.error ?? "Credential cannot be bound" };
+    const error = bind?.error ?? "Credential cannot be bound";
+    // The companion only sees a 403; without this line a pairing that
+    // authenticated fine but could not bind (typically: the device kept its
+    // id through a reinstall/wipe and its old credential is still live)
+    // leaves no trace on the daemon side.
+    logWarn(
+      "native",
+      `bridge.auth event=bind_refused credential=${principal.credentialId} device=${claimed}: ${error}`,
+    );
+    return { ok: false, error };
   }
   // The rest of this request (and the SSE session it may open) acts as the
   // device it just became.
