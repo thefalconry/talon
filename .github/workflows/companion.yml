@@ -220,6 +220,52 @@ jobs:
             echo "TALON_ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
           } >> "$GITHUB_ENV"
 
+      # Stable macOS signing identity (docs/companion-macos-signing.md):
+      # import the persistent self-signed "Talon Companion" certificate into
+      # a throwaway keychain so the Package step signs every release with the
+      # same identity. Missing secret → ad-hoc with a visible warning (fatal
+      # on nothing: a release still ships, it just can't keep keychain items
+      # across the update).
+      - name: Set up macOS signing identity
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          SIGNING_P12: ${{ secrets.TALON_MAC_SIGNING_P12 }}
+          SIGNING_PASSWORD: ${{ secrets.TALON_MAC_SIGNING_PASSWORD }}
+          IS_RELEASE: ${{ github.event_name == 'release' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SIGNING_P12" ]; then
+            MSG="TALON_MAC_SIGNING_P12 is not set — signing ad-hoc. Keychain items (bridge credential, app lock) will not survive this update on users' Macs."
+            if [ "$IS_RELEASE" = "true" ]; then
+              echo "::warning::$MSG"
+            else
+              echo "$MSG"
+            fi
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/talon-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          P12="$RUNNER_TEMP/talon-signing.p12"
+          printf '%s' "$SIGNING_P12" | base64 -d > "$P12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$SIGNING_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Prepend to the user search list so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          # Self-signed, so not "valid" for policy purposes (no -v): match by
+          # name among all codesigning identities.
+          if ! security find-identity -p codesigning "$KEYCHAIN" | grep -q '"Talon Companion"'; then
+            echo "::error::TALON_MAC_SIGNING_P12 has no \"Talon Companion\" codesigning identity"
+            security find-identity -p codesigning "$KEYCHAIN"
+            exit 1
+          fi
+          echo "TALON_MAC_SIGNING_IDENTITY=Talon Companion" >> "$GITHUB_ENV"
+          echo "TALON_MAC_SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
       - name: Build
         shell: bash
         run: ${{ matrix.build }} --build-name="$APP_VERSION" --build-number="$APP_BUILD_NUMBER" --dart-define=TALON_COMMIT="${GITHUB_SHA:0:7}"
@@ -307,13 +353,25 @@ jobs:
               # instead of a bare white window with a blank symlink).
               APP="build/macos/Build/Products/Release/Talon.app"
 
-              # Ad-hoc re-sign the whole bundle (free, no Apple account).
-              # It can't remove Gatekeeper's first-open warning — that needs
-              # paid notarization — but it keeps the signature seal coherent
-              # so arm64 Macs don't refuse the binary outright. The DMG
-              # background documents the right-click → Open escape hatch.
-              codesign --force --deep --sign - "$APP"
+              # Re-sign the whole bundle with the stable "Talon Companion"
+              # identity imported by the step above (docs/companion-macos-
+              # signing.md). The keychain ties the bridge credential and the
+              # app-lock record to the app's designated requirement; an ad-hoc
+              # signature changes on every build, so each update was a
+              # "different app" to the keychain (Allow/Deny prompt, or an
+              # unreadable lock record → "Reset and erase"). A persistent
+              # certificate keeps the requirement — and those items — stable
+              # across updates. Without the secret (PRs, forks) it falls back
+              # to ad-hoc. Neither removes Gatekeeper's first-open warning —
+              # that needs paid notarization; the DMG background documents
+              # the right-click → Open escape hatch.
+              IDENTITY="${TALON_MAC_SIGNING_IDENTITY:--}"
+              codesign --force --deep --sign "$IDENTITY" "$APP"
+              # --deep doesn't carry entitlements; seal the outer bundle again
+              # with the Runner's release entitlements.
+              codesign --force --sign "$IDENTITY" --entitlements macos/Runner/Release.entitlements "$APP"
               codesign --verify --deep --strict "$APP"
+              codesign --display --requirements - "$APP" 2>&1 | tail -n 1
 
               # Volume icon: build a .icns from the committed 1024px app icon.
               ICONSET="$RUNNER_TEMP/talon.iconset"
