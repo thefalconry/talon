@@ -6,8 +6,12 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:talon_companion/src/models/bridge_models.dart';
+import 'package:talon_companion/src/security/app_lock/app_lock_controller.dart';
+import 'package:talon_companion/src/security/app_lock/secret_store.dart';
+import 'package:talon_companion/src/ui/app_lock/app_lock_gate.dart';
 import 'package:talon_companion/src/ui/settings_screen.dart';
 
+import '../app_lock_harness.dart';
 import 'chat_fixtures.dart';
 import 'golden_harness.dart';
 
@@ -64,7 +68,17 @@ void main() {
     );
     state.appConfig = _config;
     addTearDown(state.dispose);
-    await tester.pumpWidget(goldenApp(SettingsScreen(state: state)));
+    // An installed-but-unset app lock, so its section renders as on device.
+    final lock = AppLockController(
+      prefs: state.prefs,
+      store: MemorySecretStore(),
+      sealedSnapshots: MemorySealedSnapshotStore(),
+      deriver: const FakeDeriver(),
+    );
+    await tester.pumpWidget(goldenApp(AppLockScope(
+      controller: lock,
+      child: SettingsScreen(state: state),
+    )));
     if (tapChapter != null) {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.text(tapChapter).first);
@@ -74,7 +88,7 @@ void main() {
 
   // Tall viewports so the whole page is visible in one image.
   testWidgets('phone · settings (full)', (tester) async {
-    await render(tester, 'phone_settings_full', phone: true, height: 4200);
+    await render(tester, 'phone_settings_full', phone: true, height: 6400);
   });
 
   testWidgets('phone · settings (fold)', (tester) async {
@@ -83,7 +97,7 @@ void main() {
 
   testWidgets('phone · settings (light, full)', (tester) async {
     await render(tester, 'phone_settings_full_light',
-        phone: true, height: 4200, brightness: Brightness.light);
+        phone: true, height: 6400, brightness: Brightness.light);
   });
 
   testWidgets('desktop · settings', (tester) async {
