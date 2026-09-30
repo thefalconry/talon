@@ -365,7 +365,7 @@ describe("credential-bearing tools", () => {
 
   it("treat make_companion_pair_link the same way: refused for guests, DM-only for the operator", async () => {
     const PAIR =
-      "https://bridge/pair?grant=g  Token: tdc1.0123456789abcdef.s3cr3t";
+      "https://bridge/pair?grant=g  Token: tdc1.0123456789abcdef.s3cr3t"; // gitleaks:allow — fixture token, not a credential
     const calls = stubBridge((action) =>
       action === "make_companion_pair_link"
         ? { ok: true, text: PAIR }
