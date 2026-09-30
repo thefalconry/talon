@@ -31,6 +31,7 @@ import { isChatGptModelMismatchError } from "./auth.js";
 import { chatGptFallbackFor, isCodexOAuthIncompat } from "./models.js";
 import { markOAuthIncompat } from "./oauth-incompat.js";
 import { toCodexReasoningEffort } from "./effort.js";
+import { abortLogLine } from "../../util/abort-reason.js";
 
 /**
  * Resolve the effective model for a one-shot run, applying the same
@@ -165,7 +166,9 @@ export async function runOneShotAgent(
       /abort/i.test(err instanceof Error ? err.message : String(err))
     ) {
       const ts = new Date().toISOString().slice(11, 19);
-      await appendLog(`\n### [${ts}] Aborted\nRun aborted by timeout.\n`);
+      await appendLog(
+        `\n### [${ts}] Aborted\n${abortLogLine(abortController.signal)}\n`,
+      );
       return;
     }
     const msg = err instanceof Error ? err.message : String(err);

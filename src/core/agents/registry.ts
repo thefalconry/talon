@@ -26,6 +26,7 @@ import type { AgentSettledEvent, AgentSpawnedEvent } from "../bus/events.js";
 import type { ReasoningEffortLevel } from "../types.js";
 import { bus } from "../bus/index.js";
 import { logWarn } from "../../util/log.js";
+import { RunKilledError } from "../../util/abort-reason.js";
 
 /** Settled agents kept for status queries after they leave the live map. */
 const DEFAULT_HISTORY_LIMIT = 100;
@@ -224,7 +225,7 @@ export class AgentRegistry {
     // right after start() and settles the run as "killed".
     if (entry.killRequested) {
       try {
-        binding.abort.abort();
+        binding.abort.abort(new RunKilledError(`agent ${id} killed`));
       } catch (err) {
         logWarn(
           "agents",
@@ -312,7 +313,7 @@ export class AgentRegistry {
     if (!entry.killRequested) {
       entry.killRequested = true;
       try {
-        entry.abort?.abort();
+        entry.abort?.abort(new RunKilledError(`agent ${id} killed`));
       } catch (err) {
         // An abort hook must not be able to break the kill path — but a
         // throwing one may leave the agent running, so say so.

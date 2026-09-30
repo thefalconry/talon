@@ -11,6 +11,7 @@
 import { Agent, fetch as undiciFetch } from "undici";
 import { isBunRuntime } from "../../util/runtime.js";
 import { gatewayAuthHeaders } from "../engine/gateway-auth.js";
+import { logWarn } from "../../util/log.js";
 import type { BridgeFunction } from "./types.js";
 
 /** Default wall-clock budget for a bridge action. */
@@ -59,6 +60,26 @@ function dispatcher(): Agent {
 /** Built-in fetch's default dispatcher fails headers slower than this. */
 const BUILTIN_FETCH_HEADERS_CEILING_MS = 300_000;
 
+/** Best-effort one-line description of an abort's reason / error cause. */
+function describeAbort(err: Error, signal: AbortSignal): string {
+  const parts: string[] = [];
+  if (err.message) parts.push(err.message);
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause instanceof Error && cause.message)
+    parts.push(`cause: ${cause.name}: ${cause.message}`);
+  else if (cause !== undefined && cause !== null)
+    parts.push(`cause: ${String(cause)}`);
+  if (signal.aborted && signal.reason !== undefined) {
+    const r = signal.reason as { name?: string; message?: string };
+    const reason =
+      r instanceof Error || (r && typeof r === "object" && "name" in r)
+        ? `${r.name}: ${r.message ?? ""}`
+        : String(signal.reason);
+    if (!parts.some((p) => p.includes(reason))) parts.push(`reason: ${reason}`);
+  }
+  return parts.join("; ") || err.name || "unknown abort";
+}
+
 /**
  * Create a bridge caller bound to a default URL and chat.
  *
@@ -88,13 +109,15 @@ export function createBridge(
         : null;
     const effectiveChatId = explicitChatId ?? chatId;
     const timeoutMs = LONG_ACTION_TIMEOUTS_MS[action] ?? DEFAULT_TIMEOUT_MS;
+    const signal = AbortSignal.timeout(timeoutMs);
+    const startedAt = Date.now();
     const init = {
       method: "POST",
       headers: { "Content-Type": "application/json", ...gatewayAuthHeaders() },
       // chat_id stays in body when set — gateway uses its presence as the
       // "explicit routing" signal. _chatId is the routing key either way.
       body: JSON.stringify({ action, ...params, _chatId: effectiveChatId }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     };
     // Minimal common surface of DOM Response and undici's Response.
     let resp: {
@@ -118,11 +141,37 @@ export function createBridge(
           : await fetch(`${bridgeUrl}/action`, init);
     } catch (err) {
       const cause = err as Error & { name?: string };
+      const elapsedMs = Date.now() - startedAt;
       if (cause.name === "TimeoutError" || cause.name === "AbortError") {
+        // Only call it a timeout when the budget actually ran out: the
+        // deadline signal fired (a TimeoutError, thrown or as the signal's
+        // reason) or the full budget elapsed. Anything earlier — a dropped socket, a daemon
+        // restart, a cancelled request — is an abort with its own cause,
+        // and mislabelling it as "did not complete within 3600s" after
+        // 780s sends the diagnosis in the wrong direction.
+        const reasonName = (signal.reason as { name?: string } | undefined)
+          ?.name;
+        const timedOut =
+          cause.name === "TimeoutError" ||
+          (signal.aborted && reasonName === "TimeoutError") ||
+          elapsedMs >= timeoutMs;
+        const detail = describeAbort(cause, signal);
+        logWarn(
+          "bridge",
+          `tool bridge "${action}" ${timedOut ? "timed out" : "aborted"} after ${elapsedMs}ms (budget ${timeoutMs}ms): ${detail}`,
+        );
+        if (timedOut) {
+          throw new Error(
+            `"${action}" did not complete within ${Math.round(timeoutMs / 1000)}s. ` +
+              `The operation may still be running on the daemon — check its ` +
+              `outcome (e.g. list the target directory) before retrying.`,
+          );
+        }
         throw new Error(
-          `"${action}" did not complete within ${Math.round(timeoutMs / 1000)}s. ` +
+          `"${action}" was aborted after ${Math.round(elapsedMs / 1000)}s ` +
+            `(${elapsedMs}ms; before its ${Math.round(timeoutMs / 1000)}s budget): ${detail}. ` +
             `The operation may still be running on the daemon — check its ` +
-            `outcome (e.g. list the target directory) before retrying.`,
+            `outcome before retrying.`,
         );
       }
       throw new Error(

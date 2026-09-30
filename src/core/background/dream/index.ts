@@ -319,12 +319,13 @@ If commands fail, log the error and continue — this stage is optional.`
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     const t = setTimeout(() => {
+      const err = new Error("Dream agent timed out");
       try {
-        abortController.abort();
+        abortController.abort(err);
       } catch {
         /* ignore */
       }
-      reject(new Error("Dream agent timed out"));
+      reject(err);
     }, DREAM_TIMEOUT_MS);
     t.unref(); // Don't prevent Node.js from exiting cleanly during shutdown
     timeoutHandle = t;

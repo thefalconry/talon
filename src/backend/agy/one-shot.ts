@@ -33,6 +33,7 @@ import {
   type AgyResult,
   type AgyStepUpdate,
 } from "./events.js";
+import { abortLogLine } from "../../util/abort-reason.js";
 
 const ts = (): string => new Date().toISOString().slice(11, 19);
 
@@ -257,11 +258,14 @@ export async function runOneShotAgent(
       appendLog,
       ...(onAssistantText ? { onAssistantText } : {}),
       aborted: abortController.signal.aborted,
+      abortSignal: abortController.signal,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (abortController.signal.aborted || /abort/i.test(msg)) {
-      await appendLog(`\n### [${ts()}] Aborted\nRun aborted by timeout.\n`);
+      await appendLog(
+        `\n### [${ts()}] Aborted\n${abortLogLine(abortController.signal)}\n`,
+      );
       return;
     }
     logWarn("agent", `agy one-shot run failed: ${msg}`);
@@ -278,10 +282,14 @@ async function settleOneShot(inputs: {
   appendLog: (text: string) => Promise<void>;
   onAssistantText?: OneShotAgentParams["onAssistantText"];
   aborted: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<OneShotUsage | void> {
   const { outcome, appendLog } = inputs;
   if (inputs.aborted) {
-    await appendLog(`\n### [${ts()}] Aborted\nRun aborted by timeout.\n`);
+    const line = inputs.abortSignal
+      ? abortLogLine(inputs.abortSignal)
+      : "Run aborted.";
+    await appendLog(`\n### [${ts()}] Aborted\n${line}\n`);
     return;
   }
   if (!outcome.result) {
