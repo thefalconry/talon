@@ -17,7 +17,11 @@ class NotificationsCard extends StatefulWidget {
   const NotificationsCard({super.key, required this.state});
 
   /// Whether this platform has anything to show in the section.
-  static bool get supported => MessageNotifications.supported;
+  static bool get supported => debugSupported ?? MessageNotifications.supported;
+
+  /// Lets renders and tests show the Android-only section anywhere.
+  @visibleForTesting
+  static bool? debugSupported;
 
   @override
   State<NotificationsCard> createState() => _NotificationsCardState();

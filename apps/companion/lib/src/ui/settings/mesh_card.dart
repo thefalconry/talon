@@ -22,7 +22,6 @@ import '../../services/prefs.dart';
 import '../../services/sandbox.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
-import 'mesh_audit_section.dart';
 import 'settings_widgets.dart';
 
 class MeshCard extends StatefulWidget {
@@ -265,8 +264,6 @@ class _MeshCardState extends State<MeshCard> {
             ),
             if (prefs.meshDeviceControl) ..._limitRows(prefs),
           ],
-          const Divider(height: 22),
-          const MeshAuditSection(),
           const Divider(height: 22),
           Row(
             children: [

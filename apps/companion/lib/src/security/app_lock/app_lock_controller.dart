@@ -757,6 +757,19 @@ class AppLockController extends ChangeNotifier {
     _notify();
   }
 
+  /// "Block screenshots and screen recording". Until the user picks, it
+  /// follows the lock: on while a passcode is set, off otherwise. The lock
+  /// screen blocks capture regardless (see AppLockGate).
+  bool get blockScreenshots => prefs.blockScreenshots ?? enabled;
+
+  /// Whether [blockScreenshots] is still the lock-following default.
+  bool get blockScreenshotsIsDefault => prefs.blockScreenshots == null;
+
+  Future<void> setBlockScreenshots(bool on) async {
+    await prefs.setBlockScreenshots(on);
+    _notify();
+  }
+
   /// Forget the lock entirely — the "forgot passcode" path, and what the wipe
   /// threshold triggers. Removes the lock record, the biometric key and every
   /// cached chat. With [wipeConnection] (always, from the lock screen: a
