@@ -57,11 +57,32 @@ export const TELEGRAM_MAX_CAPTION = 1024;
 /** Visible length a truncated caption is cut to, leaving room for the "…". */
 const TRUNCATED_CAPTION_LEN = 1000;
 
+/**
+ * Drop every `<...>` tag in one linear pass. Only used to *measure* the
+ * caption (the truncated preview is sent without parse_mode), but a scanner
+ * rather than a regex replace means no nested/overlapping tag fragment can
+ * survive into the output.
+ */
+function stripTags(html: string): string {
+  let out = "";
+  let inTag = false;
+  for (const ch of html) {
+    if (inTag) {
+      if (ch === ">") inTag = false;
+    } else if (ch === "<") {
+      inTag = true;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
 /** The text Telegram will display for an HTML caption: tags gone, entities decoded. */
 export function visibleCaptionText(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, "")
-    .replace(/&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi, (m, ent: string) => {
+  return stripTags(html).replace(
+    /&(#x[0-9a-f]+|#\d+|lt|gt|amp|quot|apos);/gi,
+    (m, ent: string) => {
       const e = ent.toLowerCase();
       if (e === "lt") return "<";
       if (e === "gt") return ">";
@@ -76,7 +97,8 @@ export function visibleCaptionText(html: string): string {
       } catch {
         return m;
       }
-    });
+    },
+  );
 }
 
 export type FittedCaption = {
