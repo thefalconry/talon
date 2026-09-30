@@ -271,7 +271,10 @@ async function backupStatus(): Promise<void> {
     renderResult(result);
     return;
   }
-  const status = await collectBackupStatus({ withTargets: false });
+  const status = await collectBackupStatus({
+    withTargets: false,
+    settings: resolveBackupSettings(loadConfig().backup),
+  });
   console.log(
     `\n${formatBackupStatus(status)
       .split("\n")

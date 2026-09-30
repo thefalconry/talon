@@ -314,6 +314,96 @@ describe("the passphrase file", () => {
     expect(state).not.toContain("workspace/secrets/backup.key");
     expect(state).not.toContain(passphrase);
   });
+
+  it("survives a restore when it sits in workspace/secrets", async () => {
+    const root = home();
+    const passphraseFile = await generatePassphraseFile(
+      join(root, "workspace", "secrets", "backup.key"),
+    );
+    writeFileSync(join(root, "workspace", "secrets", "api.txt"), "API-KEY");
+    const settings = resolveBackupSettings({
+      includePalace: false,
+      encryption: { passphraseFile },
+    });
+    const key = readFileSync(passphraseFile, "utf8");
+    const manifest = await snapshot(root, settings);
+    // Drift after the snapshot: the restore must remove the new file and
+    // put api.txt back, but leave the key exactly where it is.
+    writeFileSync(join(root, "workspace", "secrets", "api.txt"), "DRIFTED");
+    writeFileSync(join(root, "workspace", "secrets", "later.txt"), "LATER");
+    const report = await restoreSnapshot({
+      id: manifest.id,
+      settings,
+      home: root,
+      skipCheckpoint: true,
+    });
+    expect(readFileSync(passphraseFile, "utf8")).toBe(key);
+    expect(
+      readFileSync(join(root, "workspace", "secrets", "api.txt"), "utf8"),
+    ).toBe("API-KEY");
+    expect(existsSync(join(root, "workspace", "secrets", "later.txt"))).toBe(
+      false,
+    );
+    expect(report.removed).toBeGreaterThan(0);
+    // Still usable: the next snapshot encrypts with the same key.
+    await expect(snapshot(root, settings)).resolves.toBeDefined();
+  });
+
+  it("survives a restore when it sits inside an extra path", async () => {
+    const root = home();
+    const extra = mkdtempSync(join(tmpdir(), "talon-harden-extra-"));
+    const passphraseFile = await generatePassphraseFile(
+      join(extra, "nested", "backup.key"),
+    );
+    writeFileSync(join(extra, "notes.txt"), "NOTES");
+    const settings = resolveBackupSettings({
+      includePalace: false,
+      encryption: { passphraseFile },
+      extraPaths: [extra],
+    });
+    const key = readFileSync(passphraseFile, "utf8");
+    const manifest = await snapshot(root, settings);
+    writeFileSync(join(extra, "notes.txt"), "DRIFTED");
+    await restoreSnapshot({
+      id: manifest.id,
+      settings,
+      home: root,
+      skipCheckpoint: true,
+    });
+    expect(readFileSync(passphraseFile, "utf8")).toBe(key);
+    expect(readFileSync(join(extra, "notes.txt"), "utf8")).toBe("NOTES");
+  });
+
+  it("is never overwritten by a snapshot that carries a file at its path", async () => {
+    const root = home();
+    const secrets = join(root, "workspace", "secrets");
+    mkdirSync(secrets, { recursive: true });
+    // Taken while the key lived elsewhere: this snapshot holds a file
+    // at the path the key is later moved to.
+    writeFileSync(join(secrets, "backup.key"), "OLD-FILE-AT-KEY-PATH");
+    const before = await keyed(root);
+    const manifest = await snapshot(root, before);
+    rmSync(join(secrets, "backup.key"));
+    const passphraseFile = await generatePassphraseFile(
+      join(secrets, "backup.key"),
+    );
+    writeFileSync(
+      passphraseFile,
+      readFileSync(before.encryption!.passphraseFile!),
+    );
+    const settings = resolveBackupSettings({
+      includePalace: false,
+      encryption: { passphraseFile },
+    });
+    const key = readFileSync(passphraseFile, "utf8");
+    await restoreSnapshot({
+      id: manifest.id,
+      settings,
+      home: root,
+      skipCheckpoint: true,
+    });
+    expect(readFileSync(passphraseFile, "utf8")).toBe(key);
+  });
 });
 
 describe("restored file modes", () => {

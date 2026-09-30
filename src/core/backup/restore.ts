@@ -37,7 +37,7 @@ import {
   copyFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { dirs } from "../../util/paths.js";
 import { log, logWarn } from "../../util/log.js";
@@ -50,7 +50,7 @@ import {
 import { sha256File } from "./archive/digest.js";
 import { extractTar } from "./archive/tar.js";
 import { createDecompressor } from "./archive/zstd.js";
-import { requirePassphrase } from "./passphrase.js";
+import { passphraseFilePath, requirePassphrase } from "./passphrase.js";
 import { collectTree, excludeForRoot } from "./plan.js";
 import {
   authenticateManifest,
@@ -348,20 +348,32 @@ export function destinationFor(
   return join(home, ...segments);
 }
 
+/** True when `path` is the active backup passphrase file. */
+function isKeyFile(path: string, keyFile: string | null): boolean {
+  return keyFile !== null && resolve(path) === keyFile;
+}
+
 /**
  * Bring one include root to exactly the snapshot's state: remove what the
  * snapshot rules would have captured, keep what they deliberately skip.
  * Returns how many live files were removed.
+ *
+ * The active passphrase file is never removed. The snapshot builder leaves
+ * it out of every part (a key inside the backup it unlocks is no key), so
+ * when it sits inside an include root — `workspace/secrets/`, `keys/`, an
+ * extra path — nothing in the snapshot would ever put it back.
  */
 async function clearCovered(
   destRoot: string,
   archiveRoot: string,
+  keyFile: string | null,
 ): Promise<number> {
   const existing = await collectTree(destRoot, archiveRoot, {
     exclude: excludeForRoot(archiveRoot),
   });
   let removed = 0;
   for (const entry of [...existing].reverse()) {
+    if (isKeyFile(entry.source, keyFile)) continue;
     try {
       if (entry.type === "dir") await rmdir(entry.source).catch(() => {});
       else {
@@ -410,6 +422,7 @@ async function applyStaged(
   staging: string,
   home: string,
   external: readonly ExternalDestination[],
+  keyFile: string | null,
 ): Promise<RestoreReport> {
   const extras = manifest.extras ?? [];
   const report: RestoreReport = {
@@ -429,7 +442,7 @@ async function applyStaged(
       logWarn("backup", `No destination for ${root} on this machine — skipped`);
       continue;
     }
-    report.removed += await clearCovered(destRoot, root);
+    report.removed += await clearCovered(destRoot, root, keyFile);
     // A session database's sidecars describe the file being replaced.
     if (external.some((entry) => entry.root === root && entry.sqlite)) {
       await rm(`${destRoot}-wal`, { force: true });
@@ -439,6 +452,15 @@ async function applyStaged(
     for (const entry of staged) {
       const dest = destinationFor(entry.archivePath, home, extras, external);
       if (!dest) continue;
+      // An older snapshot (or one from another machine) may carry a file
+      // where this machine keeps its key. The key path is never written.
+      if (entry.type !== "dir" && isKeyFile(dest, keyFile)) {
+        logWarn(
+          "backup",
+          `Left the backup passphrase file ${dest} untouched — the snapshot's copy was not applied`,
+        );
+        continue;
+      }
       if (entry.type === "dir") await mkdir(dest, { recursive: true });
       else {
         await placeFile(entry.source, dest);
@@ -585,7 +607,13 @@ export async function restoreSnapshot(
   const staging = join(snapshotDir(manifest.id, home), "restore-staging");
   await extractParts(manifest, home, staging, options.settings, parts);
   await options.beforeApply?.();
-  const report = await applyStaged(manifest, staging, home, external);
+  const report = await applyStaged(
+    manifest,
+    staging,
+    home,
+    external,
+    passphraseFilePath(options.settings),
+  );
   report.checkpointId = checkpointId;
   if (options.clone && manifest.origin) {
     report.configRewritten = await rewriteConfigForClone(

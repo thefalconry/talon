@@ -15,8 +15,12 @@ import {
   selectTargets,
   type BackupTarget,
 } from "./targets.js";
-import { backupSettings, schedulerStatus } from "./scheduler.js";
-import { PASSPHRASE_ENV } from "./passphrase.js";
+import {
+  backupSettings,
+  checkBackupKey,
+  schedulerStatus,
+} from "./scheduler.js";
+import { PASSPHRASE_ENV, passphraseProblem } from "./passphrase.js";
 import type { BackupSettings, SnapshotSummary } from "./types.js";
 
 type TargetStatus = {
@@ -41,6 +45,8 @@ export type BackupStatus = {
   snapshots: SnapshotSummary[];
   /** Retention and encryption, when the subsystem is initialised. */
   policy?: BackupPolicy;
+  /** What is wrong with the configured passphrase, if anything. */
+  keyProblem?: string;
 };
 
 /** The settings a status panel renders alongside the numbers. */
@@ -125,12 +131,25 @@ export async function collectBackupStatus(
   options: {
     home?: string;
     withTargets?: boolean;
+    /**
+     * Settings to describe when this process runs no backup subsystem
+     * (the CLI with the daemon down). The daemon's own settings win.
+     */
+    settings?: BackupSettings;
   } = {},
 ): Promise<BackupStatus> {
   const home = options.home ?? dirs.root;
   const snapshots = await listSnapshots(home);
   const local = snapshots.filter((snapshot) => snapshot.local);
-  const settings = backupSettings();
+  const live = backupSettings();
+  const settings = live ?? options.settings ?? null;
+  // In the daemon the check also raises (or clears) the key alert; outside
+  // it there is nobody to alert, so it only reports.
+  const keyProblem = live
+    ? await checkBackupKey()
+    : settings
+      ? ((await passphraseProblem(settings))?.message ?? null)
+      : null;
   const targets =
     options.withTargets === false
       ? []
@@ -148,6 +167,7 @@ export async function collectBackupStatus(
     targets,
     snapshots,
     policy: describePolicy(settings),
+    ...(keyProblem ? { keyProblem } : {}),
   };
 }
 
@@ -198,6 +218,9 @@ export function formatBackupStatus(
     `Last run: ${formatRelative(schedule.lastRunAt, now)}` +
       (schedule.lastSnapshotId ? ` — ${schedule.lastSnapshotId}` : ""),
   );
+  if (status.keyProblem) {
+    lines.push(`Key: PROBLEM — ${status.keyProblem}`);
+  }
   if (schedule.consecutiveFailures > 0) {
     lines.push(
       `Failing: ${schedule.consecutiveFailures} consecutive — ${schedule.lastError ?? "unknown error"}`,

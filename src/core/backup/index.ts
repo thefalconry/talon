@@ -25,6 +25,7 @@ export {
   runBackup,
   stopBackupScheduler,
   checkpointBeforeUpdate,
+  type UpdateCheckpoint,
 } from "./scheduler.js";
 
 export {
