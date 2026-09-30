@@ -72,6 +72,8 @@ interface CodexCacheModelEntry {
   description?: string;
   visibility?: "list" | "hide" | string;
   supported_in_api?: boolean;
+  /** Picker order — lower sorts first; the CLI's default is the lowest. */
+  priority?: number;
   context_window?: number;
   default_reasoning_level?: string;
   supported_reasoning_levels?: Array<{
@@ -381,6 +383,8 @@ export async function loadCodexCacheModels(): Promise<void> {
   const state = getState();
   state.discoveredModels.clear();
   state.discoveredModelMetadata.clear();
+  state.discoveredDefaultModel = null;
+  let bestPriority = Number.POSITIVE_INFINITY;
   let kept = 0;
   let dropped = 0;
   for (const entry of data) {
@@ -397,6 +401,15 @@ export async function loadCodexCacheModels(): Promise<void> {
       continue;
     }
     state.discoveredModels.add(entry.slug);
+    // First entry wins ties, matching the CLI's stable sort.
+    const priority =
+      typeof entry.priority === "number" && Number.isFinite(entry.priority)
+        ? entry.priority
+        : Number.MAX_SAFE_INTEGER;
+    if (priority < bestPriority) {
+      bestPriority = priority;
+      state.discoveredDefaultModel = entry.slug;
+    }
     const supportedReasoningLevels = normalizeReasoningLevels(
       entry.supported_reasoning_levels
         ?.map((level) => level.effort)
@@ -429,6 +442,7 @@ export async function loadCodexCacheModels(): Promise<void> {
   const fetchedAt = json.fetched_at ?? "unknown";
   log(
     "agent",
-    `Codex: loaded ${kept} models from ${path} (fetched_at=${fetchedAt}, filtered ${dropped} hidden/api-disabled entries)`,
+    `Codex: loaded ${kept} models from ${path} (fetched_at=${fetchedAt}, filtered ${dropped} hidden/api-disabled entries` +
+      `${state.discoveredDefaultModel ? `, CLI default ${state.discoveredDefaultModel}` : ""})`,
   );
 }
