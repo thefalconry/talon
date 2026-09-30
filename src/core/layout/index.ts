@@ -8,11 +8,11 @@
  */
 
 import { readFile, mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { claudeProjectsDir } from "../backup/sources/sessions.js";
 import { raiseAlert } from "../frontend-runtime/alerts.js";
+import { userHome as resolveUserHome } from "../../util/fs-path.js";
 import { dirs } from "../../util/paths.js";
 import { log, logWarn } from "../../util/log.js";
 import { relinkClaudeProjects, type RelinkResult } from "./claude-relink.js";
@@ -144,7 +144,7 @@ export async function runStorageLayoutChecks(
 ): Promise<void> {
   const env = process.env;
   const container = inContainer(env);
-  const userHome = homedir();
+  const userHome = resolveUserHome();
   try {
     await relinkAfterHomeMove({
       home: dirs.root,
