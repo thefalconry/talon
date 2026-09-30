@@ -7,7 +7,6 @@ import 'package:flutter/services.dart';
 import '../models/connection.dart';
 import '../services/bridge_client.dart' show CertificateProbe;
 import '../services/log.dart';
-import '../services/secure_window.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import 'brand.dart';
@@ -66,9 +65,6 @@ class _ConnectScreenState extends State<ConnectScreen> {
   @override
   void initState() {
     super.initState();
-    // Shows the bridge token / pairing details: keep it out of the recents
-    // thumbnail, screenshots and screen recordings (Android).
-    SecureWindow.acquire();
     final c = widget.state.config;
     _remote = !c.isLoopback || !_isDesktop;
     _tls = c.tls;
@@ -88,7 +84,6 @@ class _ConnectScreenState extends State<ConnectScreen> {
 
   @override
   void dispose() {
-    SecureWindow.release();
     _host.removeListener(_rebuild);
     _host.dispose();
     _port.dispose();

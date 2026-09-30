@@ -1,14 +1,18 @@
-/// Golden renders of the settings screen, top to bottom.
+/// Golden renders of the settings home and every chapter page, phone and
+/// desktop.
 ///
-///   TALON_GOLDENS=1 flutter test test/golden --update-goldens
+///   TALON_GOLDENS=1 flutter test test/golden/settings_golden_test.dart --update-goldens
 library;
 
+import 'package:flutter/foundation.dart' show debugDefaultTargetPlatformOverride;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:talon_companion/src/models/bridge_models.dart';
 import 'package:talon_companion/src/security/app_lock/app_lock_controller.dart';
 import 'package:talon_companion/src/security/app_lock/secret_store.dart';
+import 'package:talon_companion/src/services/secure_window.dart';
 import 'package:talon_companion/src/ui/app_lock/app_lock_gate.dart';
+import 'package:talon_companion/src/ui/settings/notifications_card.dart';
 import 'package:talon_companion/src/ui/settings_screen.dart';
 
 import '../app_lock_harness.dart';
@@ -27,16 +31,8 @@ const ConfigSnapshot _config = ConfigSnapshot(
   heartbeat: true,
   heartbeatIntervalMinutes: 60,
   dream: false,
-  editable: [
-    'model',
-    'botDisplayName',
-    'timezone',
-    'pulse',
-    'heartbeat',
-    'dream',
-    'pulseIntervalMs',
-    'heartbeatIntervalMinutes',
-  ],
+  editable: ['model', 'botDisplayName', 'timezone', 'pulse', 'heartbeat',
+    'dream', 'pulseIntervalMs', 'heartbeatIntervalMinutes'],
   healthy: true,
   uptimeMs: 176400000,
   sessions: 63,
@@ -44,9 +40,24 @@ const ConfigSnapshot _config = ConfigSnapshot(
   memoryMb: 168,
 );
 
+const _chapters = [
+  'Connection',
+  'Agent',
+  'Mesh & device control',
+  'Security',
+  'Notifications',
+  'Appearance',
+  'Voice',
+  'Updates',
+  'Advanced',
+];
+
+String _slug(String t) =>
+    t.toLowerCase().replaceAll('&', 'and').replaceAll(RegExp('[^a-z]+'), '_');
+
 void main() {
   if (!goldensEnabled) {
-    test('settings goldens skipped (set TALON_GOLDENS=1)', () {});
+    test('settings page goldens skipped (set TALON_GOLDENS=1)', () {});
     return;
   }
 
@@ -55,9 +66,18 @@ void main() {
   Future<void> render(WidgetTester tester, String name,
       {required bool phone,
       double? height,
-      Brightness brightness = Brightness.dark,
-      String? tapChapter}) async {
+      String? open,
+      bool lockOn = false,
+      Brightness brightness = Brightness.dark}) async {
     goldenSetUp(brightness: brightness);
+    // flutter_test defaults to Android; desktop renders pretend to be macOS
+    // so Android-only chapters (Voice, Notifications) drop out as they do.
+    debugDefaultTargetPlatformOverride =
+        phone ? TargetPlatform.android : TargetPlatform.macOS;
+    if (phone) {
+      SecureWindow.debugOverride(supported: true);
+      NotificationsCard.debugSupported = true;
+    }
     phone
         ? usePhone(tester, height: height ?? 844)
         : useDesktop(tester, height: height ?? 760);
@@ -68,39 +88,73 @@ void main() {
     );
     state.appConfig = _config;
     addTearDown(state.dispose);
-    // An installed-but-unset app lock, so its section renders as on device.
     final lock = AppLockController(
       prefs: state.prefs,
       store: MemorySecretStore(),
       sealedSnapshots: MemorySealedSnapshotStore(),
       deriver: const FakeDeriver(),
     );
+    if (lockOn) {
+      await tester.runAsync(() async {
+        await lock.load();
+        await lock.enable('123456');
+      });
+    }
     await tester.pumpWidget(goldenApp(AppLockScope(
       controller: lock,
       child: SettingsScreen(state: state),
     )));
-    if (tapChapter != null) {
+    if (open != null) {
       await tester.pump(const Duration(milliseconds: 300));
-      await tester.tap(find.text(tapChapter).first);
+      await tester.tap(find.text(open).first);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
     }
     await shoot(tester, name);
+    debugDefaultTargetPlatformOverride = null;
+    SecureWindow.debugOverride(supported: false);
+    NotificationsCard.debugSupported = null;
   }
 
-  // Tall viewports so the whole page is visible in one image.
-  testWidgets('phone · settings (full)', (tester) async {
-    await render(tester, 'phone_settings_full', phone: true, height: 6400);
+  testWidgets('phone · settings home', (tester) async {
+    await render(tester, 'sp_phone_home', phone: true);
   });
 
-  testWidgets('phone · settings (fold)', (tester) async {
-    await render(tester, 'phone_settings', phone: true);
+  testWidgets('phone · settings home (light)', (tester) async {
+    await render(tester, 'sp_phone_home_light',
+        phone: true, brightness: Brightness.light);
   });
 
-  testWidgets('phone · settings (light, full)', (tester) async {
-    await render(tester, 'phone_settings_full_light',
-        phone: true, height: 6400, brightness: Brightness.light);
+  for (final chapter in _chapters) {
+    testWidgets('phone · settings · $chapter', (tester) async {
+      await render(tester, 'sp_phone_${_slug(chapter)}',
+          phone: true, height: 1900, open: chapter);
+    });
+  }
+
+  testWidgets('phone · settings · Security (lock on)', (tester) async {
+    await render(tester, 'sp_phone_security_lock_on',
+        phone: true, height: 1300, open: 'Security', lockOn: true);
   });
 
-  testWidgets('desktop · settings', (tester) async {
-    await render(tester, 'desktop_settings', phone: false, height: 1600);
+  // Voice and Notifications are Android-only; desktop has neither chapter.
+  for (final chapter in _chapters
+      .where((c) => c != 'Voice' && c != 'Notifications')) {
+    testWidgets('desktop · settings · $chapter', (tester) async {
+      await render(tester, 'sp_desktop_${_slug(chapter)}',
+          phone: false,
+          height: chapter == 'Connection' ? 760 : 1300,
+          open: chapter == 'Connection' ? null : chapter);
+    });
+  }
+
+  testWidgets('desktop · settings · Security (lock on)', (tester) async {
+    await render(tester, 'sp_desktop_security_lock_on',
+        phone: false, open: 'Security', lockOn: true);
+  });
+
+  testWidgets('desktop · settings (light)', (tester) async {
+    await render(tester, 'sp_desktop_connection_light',
+        phone: false, brightness: Brightness.light);
   });
 }
