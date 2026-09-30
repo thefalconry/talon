@@ -10,6 +10,7 @@ import { getPooledBackend } from "../../../core/engine/backend-controller/index.
 import { createChat, deleteChat, renameChat } from "../chats/chat-lifecycle.js";
 import { broadcastChatUpdated, toClientChat } from "../chats/chat-wire.js";
 import { control } from "./control.js";
+import { handleNativeCommand, listNativeCommands } from "../commands/index.js";
 import {
   pluginItems,
   skillItems,
@@ -108,11 +109,22 @@ export function buildBridgeHandlers(
     // straight delegations to the read-only half of the store.
     listMemory,
     memoryWhy,
-    send: (id, text, opts) => {
+    send: (id, text, opts, caller) => {
       const entry = chats.get(id) ?? chats.ensure(id);
       // Resolve the client's references into the records this daemon minted
       // at upload time — dropping anything it can't account for.
       const attachments = resolveAttachments(runtime, opts);
+      // A slash command the daemon answers itself never reaches the model,
+      // and never waits behind a running turn (`/stop` is for exactly
+      // that). A message with files attached is always the model's.
+      if (
+        !attachments.length &&
+        handleNativeCommand(runtime, entry, text, {
+          operator: caller?.operator === true,
+        })
+      ) {
+        return;
+      }
       // A turn is already running for this chat — don't interrupt it. Park the
       // message as the single queued follow-up (synced to every client); it
       // auto-sends when the running turn ends. `isBusy` reads `liveTurns`,
@@ -188,6 +200,7 @@ export function buildBridgeHandlers(
     setSkillEnabled: (name, enabled) =>
       toggleSkill(config, getPooledBackend(config.backend), name, enabled),
     control,
+    listCommands: () => listNativeCommands(),
     logs: ({ lines, minLevel, component }) =>
       readLogEntries(files.log, { limit: lines, minLevel, component }),
     liveTurnEvents: () => liveTurnEvents(runtime),

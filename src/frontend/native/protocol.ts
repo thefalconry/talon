@@ -216,6 +216,24 @@ export type LogEntry = {
   stack?: string;
 };
 
+/**
+ * One slash command the daemon answers itself in a native chat, as
+ * `GET /commands` lists it — so a client can offer autocomplete. Additive
+ * in v1 behind the `commands` capability. A `/send` whose text starts with
+ * a listed name is handled by the daemon (the command and its reply land
+ * in the chat as ordinary messages); any other text reaches the model.
+ */
+export type ClientCommand = {
+  /** Without the leading slash, e.g. `"backup"`. */
+  name: string;
+  /** One line, for the suggestion list. */
+  description: string;
+  /** Argument synopsis, e.g. `"[list|now|restore <id>]"`; absent = none. */
+  args?: string;
+  /** Needs the `operator` scope; other callers get a refusal. */
+  admin?: boolean;
+};
+
 /** A selectable model for the picker. */
 export type ModelOption = {
   id: string;

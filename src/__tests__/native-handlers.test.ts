@@ -90,6 +90,7 @@ describe("bridge status", () => {
       "mesh-commands",
       "plugins-skills",
       "attachments",
+      "commands",
     ]);
   });
 
