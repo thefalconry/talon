@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.28.0](https://github.com/thefalconry/talon/compare/v5.27.0...v5.28.0) (2026-09-30)
+
+
+### Features
+
+* **backup:** report a staged restore to the chat that requested it ([#1200](https://github.com/thefalconry/talon/issues/1200)) ([09c6def](https://github.com/thefalconry/talon/commit/09c6def21cf7266bb94bbf455634e7ae7cd2802c))
+
 ## [5.27.0](https://github.com/thefalconry/talon/compare/v5.26.6...v5.27.0) (2026-09-30)
 
 
