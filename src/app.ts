@@ -167,8 +167,49 @@ const restoreReport = await withConfigGuard(() =>
   bootPhase("staged restore", applyStagedRestore),
 );
 
+/**
+ * The first boot of a new version (a Docker/TrueNAS image pull, an npm or
+ * binary upgrade — anything but `/update`, which checkpoints itself) takes
+ * a pinned `pre-upgrade <old>→<new>` checkpoint HERE: after a staged
+ * restore, before bootstrap opens the stores and the backend reconcile or
+ * any migration runs against them. A failed checkpoint alerts the admin
+ * and still boots, but with the destructive boot steps skipped.
+ *
+ * Never throws.
+ */
+async function checkpointIfUpgraded(): Promise<{ safe: boolean }> {
+  try {
+    const { checkpointOnVersionChange } =
+      await import("./core/backup/index.js");
+    const { loadConfig } = await import("./core/config/index.js");
+    const { resolveBackupSettings } = await import("./core/backup/plan.js");
+    const { talonVersion } = await import("./util/version.js");
+    const result = await checkpointOnVersionChange({
+      settings: resolveBackupSettings(loadConfig().backup),
+      version: talonVersion(),
+    });
+    return { safe: result.status !== "failed" };
+  } catch (err) {
+    if (err instanceof ConfigFileError) throw err;
+    logError("backup", "Pre-upgrade version check failed", err);
+    const { raiseAlert } = await import("./core/frontend-runtime/alerts.js");
+    raiseAlert(
+      "backup.upgrade-checkpoint",
+      `The boot-time version check / pre-upgrade checkpoint crashed: ${String(err)}. Booted without it; boot-time cleanup skipped.`,
+      { severity: "critical" },
+    );
+    return { safe: false };
+  }
+}
+
+const upgrade = await withConfigGuard(() =>
+  bootPhase("upgrade checkpoint", checkpointIfUpgraded),
+);
+
 const { config } = await withConfigGuard(() =>
-  bootPhase("bootstrap", () => bootstrap()),
+  bootPhase("bootstrap", () =>
+    bootstrap({ skipDestructiveSteps: !upgrade.safe }),
+  ),
 );
 
 // Record this process as the daemon. The gateway port is appended once
