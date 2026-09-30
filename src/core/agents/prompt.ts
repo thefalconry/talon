@@ -73,14 +73,46 @@ export function wantsPreflight(brief: string, explicit?: boolean): boolean {
   return explicit ?? PR_BRIEF.test(brief);
 }
 
+/** What a resumed run is told about the run a restart cut off. */
+export interface AgentResumeContext {
+  /** The run log the interrupted run wrote — the new run appends to it. */
+  readonly logPath: string;
+  /** Children of this agent that were resumed alongside it. */
+  readonly children: readonly string[];
+}
+
+/**
+ * The note that opens a resumed run's prompt. There is no backend session to
+ * reattach — sub-agent runs are isolated one-shots — so the new run starts
+ * fresh, and the one thing that stops it redoing (or double-applying) work is
+ * being told to look at what the interrupted run already did.
+ */
+function resumeNote(resumed: AgentResumeContext): string {
+  const children =
+    resumed.children.length > 0
+      ? ` Sub-agents you spawned before the restart were resumed too and ` +
+        `will still report to your inbox: ${resumed.children.join(", ")} — ` +
+        `do not spawn replacements for them.`
+      : "";
+  return (
+    `[System: RESUMED AFTER RESTART. The daemon restarted while you were ` +
+    `working on this brief, which interrupted your previous run. Before ` +
+    `doing anything, check what that run already did — its transcript is ` +
+    `at ${resumed.logPath}, and inspect the workspace, branches, PRs or ` +
+    `files it may have touched. Continue from there; do not redo or ` +
+    `duplicate finished steps.${children}]\n\n`
+  );
+}
+
 /** The activation prompt — the brief, framed as the job to start on. */
 export function buildAgentPrompt(
   brief: string,
-  options: { preflight?: boolean } = {},
+  options: { preflight?: boolean; resumed?: AgentResumeContext } = {},
 ): string {
   const lane = options.preflight ? `\n\n${PREFLIGHT_INSTRUCTION}` : "";
+  const resumed = options.resumed ? resumeNote(options.resumed) : "";
   return (
-    `[System: AGENT BRIEF. Work this to a conclusion, then call ` +
+    `${resumed}[System: AGENT BRIEF. Work this to a conclusion, then call ` +
     `report_result exactly once.]\n\n${brief}${lane}`
   );
 }

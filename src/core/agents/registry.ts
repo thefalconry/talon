@@ -6,10 +6,12 @@
  * it owns no timers, no backends and no delivery. The runner drives it, the
  * gateway actions read it, and `GET /agents` serves `list()`.
  *
- * In-memory by design, same reasoning as the task table: an agent is a live
- * run and a daemon restart ends every run, so persisted rows could only
- * describe work that no longer exists. What *happened* is already durable —
- * every `agent.*` event lands in the journal (see `docs/bus.md`).
+ * In-memory by design: the registry describes live runs. The one exception
+ * is a graceful shutdown, which hands the agents it interrupts to the next
+ * daemon through `storage/suspended-agents.ts` (see the runner's
+ * `suspendAgents` / `resumeSuspendedAgents`) — that successor re-registers
+ * them here under their old ids. What *happened* is already durable — every
+ * `agent.*` event lands in the journal (see `docs/bus.md`).
  */
 
 import { randomBytes } from "node:crypto";
@@ -139,7 +141,14 @@ export class AgentRegistry {
    * caller does any async backend work — so two concurrent spawns can never
    * both squeeze past `maxConcurrent`.
    */
-  register(spec: AgentRegistration, caps: AgentCaps): RegisterOutcome {
+  register(
+    spec: AgentRegistration,
+    caps: AgentCaps,
+    options: { readonly id?: string } = {},
+  ): RegisterOutcome {
+    if (options.id !== undefined && this.live.has(options.id)) {
+      return { ok: false, error: `Agent ${options.id} is already live.` };
+    }
     const depth = this.depthFor(spec.parent);
     if (depth === null) {
       return {
@@ -165,7 +174,9 @@ export class AgentRegistry {
       };
     }
 
-    const id = this.newId();
+    // An explicit id is a resume: the successor daemon re-registers an agent
+    // a restart interrupted under the id its parent already knows.
+    const id = options.id ?? this.newId();
     const record: MutableAgentRecord = {
       id,
       label: spec.label,
@@ -300,6 +311,19 @@ export class AgentRegistry {
     return settled;
   }
 
+  /**
+   * Put an already-settled record into the settled ring without it ever
+   * having been live — the successor daemon's account of an interrupted
+   * agent it could not resume, so `list_agents` / `get` still answer for it.
+   */
+  adoptSettled(record: AgentRecord): void {
+    if (this.live.has(record.id)) return;
+    this.history.push(record);
+    if (this.history.length > this.historyLimit) {
+      this.history.splice(0, this.history.length - this.historyLimit);
+    }
+  }
+
   // ── Kill ──────────────────────────────────────────────────────────────────
 
   /**
@@ -374,6 +398,11 @@ export class AgentRegistry {
     const entry = this.live.get(id);
     if (entry) return snapshot(entry);
     return this.history.find((record) => record.id === id) ?? null;
+  }
+
+  /** Ids of every live (queued or running) agent, in registration order. */
+  liveIds(): string[] {
+    return [...this.live.keys()];
   }
 
   /** Whether the agent is still live (queued or running). */

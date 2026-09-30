@@ -24,6 +24,19 @@
  * `spawnAgent` returns as soon as the run is under way: the caller (a chat
  * turn or another agent) keeps working and hears back through the wake turn
  * or its mailbox.
+ *
+ *   - **Restarts don't end runs.** A graceful shutdown — /restart, /update,
+ *     SIGTERM — calls `suspendAgents`: every live agent's run spec is
+ *     persisted, delivery is switched off, and the runs are aborted. The next
+ *     daemon's `resumeSuspendedAgents` re-launches each one under the same id
+ *     (so send_to_agent, list_agents and the parent's wake-up still line up)
+ *     with the rest of its time budget and a note to check what the cut-off
+ *     run already did. Backends expose no resumable one-shot session, so a
+ *     resume is a fresh run of the same brief. Bounded: a row is claimed once
+ *     per boot, an agent is resumed at most MAX_RESUMES times, only within
+ *     RESUME_WINDOW_MS of the shutdown, and only inside the concurrency cap;
+ *     anything that can't be resumed settles as `killed` and its parent is
+ *     told why.
  */
 
 import { dirs } from "../../util/paths.js";
@@ -65,6 +78,13 @@ import {
   buildAgentSystemPrompt,
 } from "./prompt.js";
 import { agentRegistry } from "./registry.js";
+import {
+  claimSuspendedAgents,
+  saveSuspendedAgents,
+  type SuspendedAgent,
+} from "../../storage/suspended-agents.js";
+import type { ReasoningEffortLevel } from "../types.js";
+import type { AgentResumeContext } from "./prompt.js";
 import type {
   AgentCaps,
   AgentParent,
@@ -86,11 +106,41 @@ const MAX_TIMEOUT_MS = 60 * 60 * 1000;
 
 const capsHolder: { caps: AgentCaps } = { caps: DEFAULT_AGENT_CAPS };
 
+/** Times one agent may be resumed across restarts before it is given up. */
+export const MAX_RESUMES = 3;
+/** How long after a shutdown its agents may still be resumed. */
+export const RESUME_WINDOW_MS = 60 * 60 * 1000;
+/** Least wall-clock a resumed run gets, however little its cap had left. */
+export const RESUME_MIN_TIMEOUT_MS = 2 * 60 * 1000;
+
+/**
+ * What the runner remembers about each live agent beyond its registry
+ * record — exactly what a shutdown must persist to relaunch it.
+ */
+interface LiveRun {
+  readonly spec: AgentSpawnSpec;
+  /** This run's wall-clock cap (for a resumed run: what was left). */
+  readonly timeoutMs: number;
+  /** How many restarts this agent has already been resumed across. */
+  readonly resumes: number;
+}
+
+const runs = new Map<string, LiveRun>();
+
+/**
+ * Set by `suspendAgents` for the rest of the process: new spawns are
+ * refused, and settlements are not delivered — every agent the shutdown
+ * aborts was handed to the successor, which will report it for real.
+ */
+let suspending = false;
+
 /** Wire the sub-agent subsystem. Called once from the composition root. */
 export function initAgents(
   deps: AgentDeliveryDeps & { caps?: Partial<AgentCaps> },
 ): void {
   capsHolder.caps = { ...DEFAULT_AGENT_CAPS, ...deps.caps };
+  suspending = false;
+  runs.clear();
   initAgentDelivery({ execute: deps.execute });
   log(
     "agents",
@@ -237,6 +287,14 @@ async function resolveRun(
 export async function spawnAgent(
   spec: AgentSpawnSpec,
 ): Promise<AgentSpawnOutcome> {
+  if (suspending) {
+    return {
+      ok: false,
+      error:
+        "The daemon is restarting — running agents will resume in the next " +
+        "process. Spawn this once it is back.",
+    };
+  }
   const routed = await resolveSpawnBackend(spec);
   const backendId = routed.backendId;
   if (!backendId) {
@@ -263,36 +321,63 @@ export async function spawnAgent(
     capsHolder.caps,
   );
   if (!registered.ok) return registered;
-  const record = registered.record;
+  const launched = await launchRun(registered.record, {
+    spec,
+    timeoutMs: spec.timeoutMs ?? capsHolder.caps.defaultTimeoutMs,
+    resumes: 0,
+  });
+  if (!launched.ok) return launched;
+  return {
+    ok: true,
+    agentId: registered.record.id,
+    backendId,
+    model: launched.model,
+    ...(routed.routing ? { routing: routed.routing } : {}),
+  };
+}
+
+/**
+ * Acquire the backend and resolve the model for a registered agent, then
+ * start its run. A registration that fails here is discarded without trace.
+ */
+async function launchRun(
+  record: AgentRecord,
+  run: LiveRun,
+  resumed?: AgentResumeContext,
+): Promise<{ ok: true; model: string } | { ok: false; error: string }> {
+  const { backendId } = record;
+  runs.set(record.id, run);
+  const discard = (): void => {
+    runs.delete(record.id);
+    agentRegistry.discard(record.id);
+  };
 
   let acquired: Awaited<ReturnType<typeof acquireBackendInstance>>;
   try {
     acquired = await acquireBackendInstance(backendId);
   } catch (err) {
-    agentRegistry.discard(record.id);
+    discard();
     return {
       ok: false,
       error: `Backend "${backendId}" is unavailable: ${errText(err)}`,
     };
   }
 
-  const resolved = await resolveRun(acquired.backend, backendId, spec.model);
+  const resolved = await resolveRun(
+    acquired.backend,
+    backendId,
+    run.spec.model,
+  );
   if (!resolved.ok) {
-    agentRegistry.discard(record.id);
+    discard();
     await acquired.release();
     return resolved;
   }
 
   // The run owns the instance from here: `runAgent` releases it on every
   // path, including the ones that throw.
-  void runAgent(record, spec, resolved, acquired);
-  return {
-    ok: true,
-    agentId: record.id,
-    backendId,
-    model: resolved.model,
-    ...(routed.routing ? { routing: routed.routing } : {}),
-  };
+  void runAgent(record, run, resolved, acquired, resumed);
+  return { ok: true, model: resolved.model };
 }
 
 /** Build the one-shot params for a run, wired to its log and text capture. */
@@ -302,6 +387,7 @@ async function buildRunParams(
   model: string,
   abortController: AbortController,
   capture: { last: string },
+  resumed: AgentResumeContext | undefined,
 ): Promise<OneShotAgentParams> {
   const appendLog = await openRunLog(
     agentLogPath(record.id),
@@ -310,6 +396,7 @@ async function buildRunParams(
   return {
     prompt: buildAgentPrompt(record.brief, {
       preflight: spec.preflight === true,
+      ...(resumed ? { resumed } : {}),
     }),
     systemPrompt: buildAgentSystemPrompt({
       agentId: record.id,
@@ -386,16 +473,17 @@ function settleFailure(
  */
 async function runAgent(
   record: AgentRecord,
-  spec: AgentSpawnSpec,
+  run: LiveRun,
   resolved: { model: string; background: BackgroundRunner },
   acquired: Awaited<ReturnType<typeof acquireBackendInstance>>,
+  resumed: AgentResumeContext | undefined,
 ): Promise<void> {
   const { model, background } = resolved;
   const { release } = acquired;
+  const { spec, timeoutMs } = run;
   const id = record.id;
   const abortController = new AbortController();
   const capture = { last: "" };
-  const timeoutMs = spec.timeoutMs ?? capsHolder.caps.defaultTimeoutMs;
 
   // Registered as queued, bound, then started — so a kill arriving in the
   // gap between the task existing and the abort handle being published still
@@ -419,6 +507,7 @@ async function runAgent(
       model,
       abortController,
       capture,
+      resumed,
     );
     if (abortController.signal.aborted) {
       // A kill that lands during startup — while the backend is being
@@ -453,7 +542,13 @@ async function runAgent(
     );
   }
 
+  runs.delete(id);
   if (!settled) return;
+  if (suspending) {
+    // Handed to the successor by suspendAgents — it reports for real.
+    log("agents", `${id} "${settled.label}" suspended for resume`);
+    return;
+  }
   log(
     "agents",
     `${id} "${settled.label}" → ${settled.state} ` +
@@ -492,11 +587,211 @@ export function killAgent(agentId: string): boolean {
 }
 
 /**
- * Abort every live agent — the shutdown lever, alongside heartbeat's and
- * cron's. Returns how many kills were requested.
+ * The shutdown lever: hand every live agent to the next daemon, then abort
+ * it. Called first thing in graceful shutdown — before the drain and the
+ * backend teardown that would otherwise fail the runs and wake their parents
+ * with a failure. Returns how many agents were persisted for resume.
+ *
+ * An agent someone already asked to kill is not persisted: it settles as
+ * the kill asked, it just isn't reported (the process is going down).
  */
-export function shutdownAgents(): number {
-  const killed = agentRegistry.killAll();
-  if (killed > 0) log("agents", `Shutdown: aborted ${killed} running agent(s)`);
-  return killed;
+export function suspendAgents(now: number = Date.now()): number {
+  suspending = true;
+  const suspended: SuspendedAgent[] = [];
+  for (const id of agentRegistry.liveIds()) {
+    const record = agentRegistry.get(id);
+    const run = runs.get(id);
+    if (!record || !run || agentRegistry.killRequested(id)) continue;
+    const startedAt = record.startedAt ?? now;
+    suspended.push({
+      id,
+      label: record.label,
+      brief: record.brief,
+      parent: record.parent,
+      backendId: record.backendId,
+      ...(record.model ? { model: record.model } : {}),
+      ...(record.reasoningEffort
+        ? { reasoningEffort: record.reasoningEffort }
+        : {}),
+      timeoutMs: run.timeoutMs,
+      elapsedMs: Math.max(0, now - startedAt),
+      preflight: run.spec.preflight === true,
+      depth: record.depth,
+      suspendedAt: now,
+      resumes: run.resumes,
+      inbox: agentRegistry.drain(id),
+    });
+  }
+  const saved = saveSuspendedAgents(suspended);
+  const aborted = agentRegistry.killAll();
+  if (suspended.length > 0) {
+    log(
+      "agents",
+      saved
+        ? `Shutdown: suspended ${suspended.length} running agent(s) for resume`
+        : `Shutdown: could not persist ${suspended.length} agent(s) — they are lost`,
+    );
+  }
+  if (aborted > suspended.length) {
+    log(
+      "agents",
+      `Shutdown: aborted ${aborted - suspended.length} agent(s) already being killed`,
+    );
+  }
+  return saved ? suspended.length : 0;
+}
+
+/** Why a suspended agent cannot be resumed now, or null when it can. */
+function resumeRefusal(agent: SuspendedAgent, now: number): string | null {
+  if (agent.resumes >= MAX_RESUMES) {
+    return (
+      `interrupted by a daemon restart ${agent.resumes + 1} times — not ` +
+      `resumed again. Re-spawn it if the work still matters.`
+    );
+  }
+  const downMs = now - agent.suspendedAt;
+  if (downMs > RESUME_WINDOW_MS) {
+    return (
+      `interrupted by a daemon shutdown and not resumed: the daemon was ` +
+      `down for ${Math.round(downMs / 60_000)} min. Re-spawn it if the ` +
+      `work still matters.`
+    );
+  }
+  return null;
+}
+
+type ResumeOutcome = { ok: true } | { ok: false; error: string };
+
+/** Relaunch one suspended agent under its old id. */
+async function resumeOne(
+  agent: SuspendedAgent,
+  claimed: readonly SuspendedAgent[],
+  now: number,
+): Promise<ResumeOutcome> {
+  const refusal = resumeRefusal(agent, now);
+  if (refusal) return { ok: false, error: refusal };
+
+  const timeoutMs = Math.max(
+    RESUME_MIN_TIMEOUT_MS,
+    agent.timeoutMs - agent.elapsedMs,
+  );
+  const reasoningEffort = agent.reasoningEffort as
+    ReasoningEffortLevel | undefined;
+  const spec: AgentSpawnSpec = {
+    brief: agent.brief,
+    label: agent.label,
+    parent: agent.parent,
+    backendId: agent.backendId,
+    ...(agent.model ? { model: agent.model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    timeoutMs,
+    preflight: agent.preflight,
+  };
+  const registered = agentRegistry.register(
+    {
+      label: agent.label,
+      brief: agent.brief,
+      parent: agent.parent,
+      backendId: agent.backendId,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    },
+    capsHolder.caps,
+    { id: agent.id },
+  );
+  if (!registered.ok) {
+    return {
+      ok: false,
+      error: `could not be resumed after a restart: ${registered.error}`,
+    };
+  }
+  for (const message of agent.inbox) agentRegistry.push(agent.id, message);
+
+  const children = claimed
+    .filter((c) => c.parent.kind === "agent" && c.parent.agentId === agent.id)
+    .map((c) => c.id);
+  const launched = await launchRun(
+    registered.record,
+    { spec, timeoutMs, resumes: agent.resumes + 1 },
+    { logPath: agentLogPath(agent.id), children },
+  );
+  if (!launched.ok) {
+    return {
+      ok: false,
+      error: `could not be resumed after a restart: ${launched.error}`,
+    };
+  }
+  log(
+    "agents",
+    `${agent.id} "${agent.label}" resumed after restart ` +
+      `(${agent.backendId}/${launched.model}, ${timeoutMs}ms left, ` +
+      `resume ${agent.resumes + 1}/${MAX_RESUMES})`,
+  );
+  return { ok: true };
+}
+
+/** Settle an agent that can't be resumed as `killed` and tell its parent. */
+async function abandon(
+  agent: SuspendedAgent,
+  error: string,
+  now: number,
+): Promise<void> {
+  const startedAt = agent.suspendedAt - agent.elapsedMs;
+  const reasoningEffort = agent.reasoningEffort as
+    ReasoningEffortLevel | undefined;
+  const record: AgentRecord = {
+    id: agent.id,
+    label: agent.label,
+    brief: agent.brief,
+    parent: agent.parent,
+    backendId: agent.backendId,
+    ...(agent.model ? { model: agent.model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    state: "killed",
+    depth: agent.depth,
+    createdAt: startedAt,
+    startedAt,
+    endedAt: now,
+    result: null,
+    error,
+    children: [],
+    inboxDepth: 0,
+  };
+  logWarn("agents", `${agent.id} "${agent.label}" not resumed: ${error}`);
+  agentRegistry.adoptSettled(record);
+  await deliverSettlement(record).catch((err: unknown) =>
+    logError("agents", `delivery failed for ${agent.id}`, err),
+  );
+}
+
+/**
+ * Boot half of `suspendAgents`: claim what the previous daemon persisted and
+ * relaunch it, parents before children (so a child re-registers under a live
+ * parent). Call once the frontends are up — an agent that can't be resumed
+ * wakes its parent chat. Never rejects. Returns how many were resumed.
+ */
+export async function resumeSuspendedAgents(
+  now: number = Date.now(),
+): Promise<number> {
+  const claimed = claimSuspendedAgents();
+  let resumed = 0;
+  for (const agent of claimed) {
+    let outcome: ResumeOutcome;
+    try {
+      outcome = await resumeOne(agent, claimed, now);
+    } catch (err) {
+      outcome = {
+        ok: false,
+        error: `could not be resumed after a restart: ${errText(err)}`,
+      };
+    }
+    if (outcome.ok) resumed++;
+    else await abandon(agent, outcome.error, now);
+  }
+  if (claimed.length > 0) {
+    log(
+      "agents",
+      `Resumed ${resumed}/${claimed.length} agent(s) interrupted by the last shutdown`,
+    );
+  }
+  return resumed;
 }

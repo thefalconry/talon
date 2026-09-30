@@ -229,12 +229,33 @@ There is no on/off switch: a deployment that wants no fan-out sets
 - **Run logs** — `~/.talon/workspace/logs/agents/<id>.md`, one per run, with
   the brief in its header and the full tool transcript below.
 
+## Restarts
+
+A graceful shutdown — `/restart`, `/update`, `talon restart`, SIGTERM — does
+not end running agents, it suspends them. First thing in shutdown,
+`suspendAgents` writes each live agent's run spec (brief, parent, backend,
+model, effort, remaining time budget, undrained inbox) to the
+`suspended_agents` table, stops delivery and new spawns, and aborts the runs.
+At boot, `resumeSuspendedAgents` claims those rows (read + delete in one
+transaction) and relaunches each agent **under the same id**, parents before
+children, so `send_to_agent`, `list_agents` and the parent's wake-up keep
+working with no model involvement.
+
+- **A fresh run, not a reattached session.** Backends expose no resumable
+  one-shot session, so the brief runs again, prefixed with a note that the
+  run was interrupted and must check what it already did — its run log (the
+  same `<id>.md`, appended to) and the workspace — before continuing.
+- **Time budget.** The resumed run gets what was left of its cap, never
+  less than 2 minutes.
+- **Bounded.** A row is claimed once per boot, so a crash-looping successor
+  never replays it; an agent is resumed at most 3 times; only within an hour
+  of the shutdown; and only inside `maxConcurrent`. An agent that can't be
+  resumed settles as `killed` with the reason, and its parent is told.
+- **Crashes are not covered.** A process that dies without running graceful
+  shutdown persists nothing; its agents are gone as before.
+
 ## Deliberately not done
 
-- **No persistence of live runs across restart.** An agent is a live run and
-  a daemon restart ends every run; a persisted row could only describe work
-  that no longer exists. Same reasoning as the task table. What _happened_
-  is durable: every `agent.*` event is journalled.
 - **No batching or coalescing of wake-ups.** Several settlements arriving
   while a chat is busy become several queued turns, and the weaver
   serialises per chat. Triggers already behave this way and the model

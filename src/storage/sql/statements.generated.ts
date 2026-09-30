@@ -397,6 +397,20 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
   uploaded_at INTEGER,
   error       TEXT,
   PRIMARY KEY (backup_id, target_id)
+);
+
+-- Sub-agents a graceful shutdown (/restart, /update, SIGTERM) cut off
+-- mid-run, waiting for the next daemon to resume them under the same
+-- id. Rows are written at the start of shutdown and claimed — read and
+-- deleted in one transaction — at boot, so each row is resumed at most
+-- once; a crash-looping successor can never replay it. \`spec\` is the
+-- JSON run spec (brief, parent, backend/model/effort, timeout, inbox);
+-- see storage/suspended-agents.ts.
+CREATE TABLE IF NOT EXISTS suspended_agents (
+  id           TEXT    PRIMARY KEY,
+  depth        INTEGER NOT NULL,
+  suspended_at INTEGER NOT NULL,
+  spec         TEXT    NOT NULL
 );`;
 
 export const backupsSql = {
@@ -736,6 +750,15 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
        last_response_ms, fastest_response_ms, last_turn_ended_at, metrics
 FROM sessions`,
   remove: `DELETE FROM sessions WHERE chat_id = ?`,
+} as const;
+
+export const suspendedAgentsSql = {
+  upsert: `INSERT INTO suspended_agents (id, depth, suspended_at, spec) VALUES (?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET depth = excluded.depth,
+  suspended_at = excluded.suspended_at, spec = excluded.spec`,
+  listAll: `SELECT id, depth, suspended_at, spec FROM suspended_agents
+ORDER BY depth ASC, suspended_at ASC, id ASC`,
+  removeAll: `DELETE FROM suspended_agents`,
 } as const;
 
 export const triggersSql = {

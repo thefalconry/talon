@@ -393,3 +393,17 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
   error       TEXT,
   PRIMARY KEY (backup_id, target_id)
 );
+
+-- Sub-agents a graceful shutdown (/restart, /update, SIGTERM) cut off
+-- mid-run, waiting for the next daemon to resume them under the same
+-- id. Rows are written at the start of shutdown and claimed — read and
+-- deleted in one transaction — at boot, so each row is resumed at most
+-- once; a crash-looping successor can never replay it. `spec` is the
+-- JSON run spec (brief, parent, backend/model/effort, timeout, inbox);
+-- see storage/suspended-agents.ts.
+CREATE TABLE IF NOT EXISTS suspended_agents (
+  id           TEXT    PRIMARY KEY,
+  depth        INTEGER NOT NULL,
+  suspended_at INTEGER NOT NULL,
+  spec         TEXT    NOT NULL
+);

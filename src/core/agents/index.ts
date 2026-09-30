@@ -7,7 +7,7 @@
  * `registry` / `runner` / `delivery` for the three moving parts.
  *
  * Wiring points: `initAgents` at the composition root (bootstrap),
- * `shutdownAgents` on daemon teardown (app), the `agents` tool family
+ * `suspendAgents` / `resumeSuspendedAgents` across a restart (app), the `agents` tool family
  * (`core/tools/ops/agents.ts`) through `core/engine/gateway-actions/agents/`,
  * and `GET /agents` on the gateway.
  *
@@ -24,7 +24,8 @@ export {
   getAgentCaps,
   initAgents,
   killAgent,
-  shutdownAgents,
+  resumeSuspendedAgents,
+  suspendAgents,
   spawnAgent,
 } from "./runner.js";
 export {

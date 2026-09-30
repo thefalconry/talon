@@ -26,7 +26,7 @@ import {
   runStartupCatchup,
 } from "./core/background/cron/scheduler.js";
 import { shutdownTriggers } from "./core/background/triggers/index.js";
-import { shutdownAgents } from "./core/agents/index.js";
+import { resumeSuspendedAgents, suspendAgents } from "./core/agents/index.js";
 import { stopBackupScheduler } from "./core/backup/index.js";
 import { pruneSettledTriggers } from "./storage/triggers.js";
 import { startWatchdog, stopWatchdog } from "./util/watchdog.js";
@@ -310,6 +310,15 @@ async function gracefulShutdown(signal: string): Promise<void> {
   }, SHUTDOWN_TIMEOUT_MS);
   forceTimer.unref();
 
+  // Sub-agents first: persist every running one for the next daemon to
+  // resume under the same id, then abort it. This has to precede the drain
+  // and the backend teardown below — either would fail the runs, and each
+  // failure would try to wake its parent chat on a process that is leaving.
+  // Same on every graceful shutdown, respawn or not: the successor resumes
+  // only within a bounded window (core/agents/runner.ts), so a plain stop
+  // followed by a much later start reports the agents as killed instead.
+  await shutdownStep("sub-agents", () => suspendAgents());
+
   // Drain in-flight queries. A turn can legitimately run for minutes, so a
   // drain that only waits can never succeed against one — ask every running
   // turn to abort first, then poll for the aborts to settle so backends can
@@ -383,9 +392,6 @@ async function gracefulShutdown(signal: string): Promise<void> {
     triggerPruneTimer = null;
   });
   await shutdownStep("triggers", shutdownTriggers);
-  // Sub-agents are isolated one-shot runs: aborting them is all the daemon
-  // can do, and their parents are gone with the process anyway.
-  await shutdownStep("sub-agents", shutdownAgents);
   await shutdownStep("watchdog", stopWatchdog);
   await shutdownStep("resource sampler", stopResourceSampler);
   await shutdownStep("health alerts", stopHealthAlerts);
@@ -494,6 +500,11 @@ async function main(): Promise<void> {
   // an alert raised before a frontend can carry it is wasted.
   announceLastCrash();
   startHealthAlerts();
+  // Sub-agents the previous daemon suspended on its way out (/restart,
+  // /update) pick up where they left off, under their old ids. After the
+  // frontends: one that can't be resumed wakes its parent chat to say so.
+  // Fire-and-forget — relaunching never blocks readiness, and never rejects.
+  void resumeSuspendedAgents();
 
   const bootMs = Math.round(process.uptime() * 1000);
   recordBootMetrics(bootMs);
