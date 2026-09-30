@@ -152,7 +152,8 @@ output in the logs only. It needs `npm ci` done in the checkout.
 The changed set is everything since the merge-base with the base, plus
 staged, unstaged and untracked work. A change to `package-lock.json`,
 `vitest.config.ts` or the test harness (`src/__tests__/setup/`) runs the whole
-unit suite; a change with nothing under `src/` runs no tests. A hub module
+unit suite; a change with nothing under `src/` runs no tests. Tests under
+`src/__tests__/integration/` are left to CI (some reach live services). A hub module
 (e.g. `core/types.ts`) makes `vitest related` pick up most of the suite, so
 the lane is slower there — which is exactly when it is worth waiting for.
 

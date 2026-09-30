@@ -29,6 +29,11 @@
 
 set -uo pipefail
 
+# The whole body is one braced block, so bash parses the file before running
+# any of it: bash otherwise reads a script lazily, and an agent editing this
+# file while a run is in flight would splice the edit into the running copy.
+{
+
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT" || exit 1
 
@@ -118,6 +123,10 @@ changed_files() {
 # test-harness change reruns the whole suite; a change with nothing under
 # src/ runs none. (Plain `vitest --changed` is not used: it treats any
 # package.json edit — even a new npm script — as "rerun everything".)
+# Integration suites (live backends, SEA stubs) belong to CI's functional and
+# integration tiers — on a dev box some of them reach real services.
+INTEGRATION="src/__tests__/integration/**"
+
 changed_tests() {
   local all=() src=()
   mapfile -t all < <(changed_files)
@@ -126,7 +135,7 @@ changed_tests() {
     case "$f" in
     package-lock.json | vitest.config.* | src/__tests__/setup/*)
       echo "tests: $f changed — running the full unit suite"
-      "$BIN/vitest" run --reporter=dot
+      "$BIN/vitest" run --reporter=dot --exclude "$INTEGRATION"
       return
       ;;
     src/*.ts | src/*.tsx | src/*.mts | src/*.js | src/*.mjs)
@@ -139,7 +148,8 @@ changed_tests() {
     return 0
   fi
   echo "tests: ${#src[@]} changed source file(s) — running related tests"
-  "$BIN/vitest" related --run --passWithNoTests --reporter=dot "${src[@]}"
+  "$BIN/vitest" related --run --passWithNoTests --reporter=dot \
+    --exclude "$INTEGRATION" "${src[@]}"
 }
 
 gitleaks_check() {
@@ -218,3 +228,5 @@ NODE
 VERDICT=$(node -e 'const s=require(process.argv[1]);process.stdout.write(s.ok?"GREEN":"RED — failed: "+s.failed.join(", "))' "$OUT_DIR/last.json")
 echo "preflight: $VERDICT in $(((T1 - T0) / 1000))s — summary at .preflight/last.json"
 [[ "$VERDICT" == GREEN ]]
+exit
+}
