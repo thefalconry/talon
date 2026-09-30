@@ -254,6 +254,15 @@ class _ChatViewState extends State<ChatView> {
             _pendingJumpToBottom = false;
             return;
           }
+          // Hard cap: content that keeps growing (a streaming reply) must not
+          // keep this loop alive frame after frame. Live growth is followed
+          // by the near-bottom rule below once settling gives up.
+          if (retry >= 60) {
+            if (messageCount > 0 && !historyLoading) {
+              _pendingJumpToBottom = false;
+            }
+            return;
+          }
           if (!pos.hasContentDimensions) {
             WidgetsBinding.instance.addPostFrameCallback(
               (_) => settle(retry + 1, lastExtent, stableFrames),

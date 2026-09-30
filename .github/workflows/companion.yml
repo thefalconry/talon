@@ -317,6 +317,15 @@ jobs:
             linux)   ( cd build/linux/x64/release/bundle && tar czf "$DEST/talon-companion-linux-$APP_VERSION.tar.gz" . ) ;;
             android) cp build/app/outputs/flutter-apk/app-release.apk "$DEST/talon-companion-android-$APP_VERSION.apk" ;;
           esac
+          # Every companion already installed looks for the UNversioned asset
+          # names when it checks for updates, and so does the Flatpak
+          # manifest's update checker. Ship an unversioned copy of each asset
+          # too, until installs older than the versioned-name updater have
+          # aged out; dropping them would strand those installs silently.
+          for f in "$DEST"/talon-companion-*-"$APP_VERSION".*; do
+            [ -e "$f" ] || continue
+            cp "$f" "${f/-$APP_VERSION/}"
+          done
           ls -la "$DEST"
 
       - name: Upload workflow artifact
