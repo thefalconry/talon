@@ -49,6 +49,15 @@ export interface CodexState {
    */
   discoveredModelMetadata: Map<string, DiscoveredModelMetadata>;
   /**
+   * The Codex CLI's own default model for the signed-in ChatGPT account:
+   * the listed, API-callable entry of `~/.codex/models_cache.json` with
+   * the lowest `priority` (the CLI sorts its picker the same way and
+   * treats the first entry as the default). `null` until the cache has
+   * been read, or when it lists nothing usable. Consumed by
+   * `getCodexChatGptDefaultModel()`.
+   */
+  discoveredDefaultModel: string | null;
+  /**
    * In-flight discovery promise. Non-null while a fetch is pending;
    * cleared once the fetch settles (success or failure). Callers that
    * need a populated catalog `await awaitDiscovery()` against this.
@@ -70,6 +79,7 @@ const state: CodexState = {
   frontendName: "telegram",
   discoveredModels: new Set<string>(),
   discoveredModelMetadata: new Map<string, DiscoveredModelMetadata>(),
+  discoveredDefaultModel: null,
   discoveryPromise: null,
   discoveryAt: null,
 };
@@ -87,6 +97,7 @@ export function resetState(): void {
   state.frontendName = "telegram";
   state.discoveredModels.clear();
   state.discoveredModelMetadata.clear();
+  state.discoveredDefaultModel = null;
   state.discoveryPromise = null;
   state.discoveryAt = null;
 }

@@ -342,7 +342,14 @@ class BridgeClient {
       if (res.statusCode == 401) {
         throw BridgeException.unauthorized();
       }
-      throw BridgeException('Event stream rejected (${res.statusCode})');
+      // A 403 here is usually the daemon refusing this device id (e.g. a
+      // pairing it could not bind) — its body says why; show that.
+      final body = await res.stream
+          .bytesToString()
+          .timeout(const Duration(seconds: 5), onTimeout: () => '');
+      throw BridgeException(
+        _serverError('Event stream rejected', res.statusCode, body),
+      );
     }
 
     AppLog.info('bridge', 'event stream open');
@@ -747,13 +754,26 @@ class BridgeClient {
   /// The daemon explains a rejected upload (too large, disk error) in the
   /// body; surface that rather than a bare status code.
   static String _uploadError(int status, String body) {
+    final error = _bodyError(body);
+    if (error != null) return error;
+    return 'Upload rejected ($status)${body.isEmpty ? '' : ': $body'}';
+  }
+
+  /// A non-401 rejection: the daemon's own `{"error": …}` text when it sent
+  /// one (e.g. a device-id bind refusal), else `<fallback> (<status>)`.
+  static String _serverError(String fallback, int status, String body) {
+    final error = _bodyError(body);
+    return error != null ? '$error ($status)' : '$fallback ($status)';
+  }
+
+  static String? _bodyError(String body) {
     try {
       final j = jsonDecode(body);
       if (j is Map && j['error'] is String) return j['error'] as String;
     } catch (_) {
-      /* not JSON — fall through to the generic form */
+      /* not JSON */
     }
-    return 'Upload rejected ($status)${body.isEmpty ? '' : ': $body'}';
+    return null;
   }
 
   Future<(String active, List<ModelOption> models)> models([
@@ -847,7 +867,9 @@ class BridgeClient {
   Map<String, dynamic> _decode(http.Response res) {
     if (res.statusCode == 401) throw BridgeException.unauthorized();
     if (res.statusCode >= 400) {
-      throw BridgeException('Request failed (${res.statusCode})');
+      throw BridgeException(
+        _serverError('Request failed', res.statusCode, res.body),
+      );
     }
     if (res.body.isEmpty) return const {};
     return _decodeObject(res.body);

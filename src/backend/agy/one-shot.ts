@@ -33,6 +33,7 @@ import {
   type AgyResult,
   type AgyStepUpdate,
 } from "./events.js";
+import { abortLogLine } from "../../core/agents/abort-reason.js";
 
 const ts = (): string => new Date().toISOString().slice(11, 19);
 
@@ -257,17 +258,36 @@ export async function runOneShotAgent(
       appendLog,
       ...(onAssistantText ? { onAssistantText } : {}),
       aborted: abortController.signal.aborted,
+      abortSignal: abortController.signal,
     });
   } catch (err) {
+    // settleOneShot already logged its own failure — just pass it on.
+    if (err instanceof AgyOneShotError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     if (abortController.signal.aborted || /abort/i.test(msg)) {
-      await appendLog(`\n### [${ts()}] Aborted\nRun aborted by timeout.\n`);
+      await appendLog(
+        `\n### [${ts()}] Aborted\n${abortLogLine(abortController.signal)}\n`,
+      );
       return;
     }
     logWarn("agent", `agy one-shot run failed: ${msg}`);
     await appendLog(`\n### [${ts()}] Error\n${msg}\n`);
+    // Surface it: a swallowed failure is recorded as a successful run by
+    // cron, heartbeat and the task table.
+    throw new AgyOneShotError(msg, { cause: err });
   } finally {
     unregisterMcpScope(scope);
+  }
+}
+
+/**
+ * An agy one-shot that failed: no result, a non-SUCCESS turn, or a spawn
+ * error. Thrown so callers record the run as failed rather than ok.
+ */
+class AgyOneShotError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "AgyOneShotError";
   }
 }
 
@@ -278,10 +298,14 @@ async function settleOneShot(inputs: {
   appendLog: (text: string) => Promise<void>;
   onAssistantText?: OneShotAgentParams["onAssistantText"];
   aborted: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<OneShotUsage | void> {
   const { outcome, appendLog } = inputs;
   if (inputs.aborted) {
-    await appendLog(`\n### [${ts()}] Aborted\nRun aborted by timeout.\n`);
+    const line = inputs.abortSignal
+      ? abortLogLine(inputs.abortSignal)
+      : "Run aborted.";
+    await appendLog(`\n### [${ts()}] Aborted\n${line}\n`);
     return;
   }
   if (!outcome.result) {
@@ -290,7 +314,14 @@ async function settleOneShot(inputs: {
       : outcome.stderr.trim() || `agy exited ${outcome.code ?? "n/a"}`;
     logWarn("agent", `agy one-shot produced no result: ${reason}`);
     await appendLog(`\n### [${ts()}] Error\n${reason}\n`);
-    return;
+    throw new AgyOneShotError(reason);
+  }
+  if (outcome.result.status && outcome.result.status !== "SUCCESS") {
+    // logResult already wrote the "Turn <status>" section.
+    const reason =
+      outcome.result.error?.trim() || `agy turn ${outcome.result.status}`;
+    logWarn("agent", `agy one-shot turn ${outcome.result.status}: ${reason}`);
+    throw new AgyOneShotError(reason);
   }
   const response = outcome.result.response ?? "";
   if (response.trim()) {

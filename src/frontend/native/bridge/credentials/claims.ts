@@ -5,7 +5,8 @@
  * `id` on /devices/register, `deviceId` on /location and
  * /devices/command-result. A per-device credential may only ever name its
  * own device; an unbound pairing/installer credential is bound by the first
- * id it names (and refused one another credential already holds). The
+ * id it names — re-pairing (revoking) a device that already holds one when
+ * the store allows it, see DeviceCredentialStore.bind. The
  * shared token and an open bridge name whatever they like — that is the
  * legacy trust model — but a remote shared-token claim is recorded so the
  * operator can see which devices still need upgrading.
@@ -44,10 +45,9 @@ export function claimDevice(
   const bind = credentials?.authority.bind(principal.credentialId, claimed);
   if (!bind || !bind.ok) {
     const error = bind?.error ?? "Credential cannot be bound";
-    // The companion only sees a 403; without this line a pairing that
-    // authenticated fine but could not bind (typically: the device kept its
-    // id through a reinstall/wipe and its old credential is still live)
-    // leaves no trace on the daemon side.
+    // Callers answer 403 with this error (never 401: the token itself is
+    // fine). Without this line a pairing that authenticated but could not
+    // bind leaves no trace on the daemon side.
     logWarn(
       "native",
       `bridge.auth event=bind_refused credential=${principal.credentialId} device=${claimed}: ${error}`,

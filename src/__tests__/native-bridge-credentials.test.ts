@@ -86,6 +86,7 @@ const handlers: BridgeServerHandlers = {
   control: async () => ({ ok: true, message: "" }),
   logs: () => [],
   liveTurnEvents: () => [],
+  listCommands: () => [],
   mediaPath: () => null,
   registerDevice: async (body) => {
     registered.push(body);
@@ -395,7 +396,7 @@ describe("device-id spoofing", () => {
     const { port, store } = await setup();
     await store.mint({
       deviceId: "taken",
-      scopes: ["device"],
+      scopes: ["device", "client", "operator"],
       origin: "upgrade",
     });
     const pair = store.mintNow({
@@ -403,14 +404,13 @@ describe("device-id spoofing", () => {
       scopes: ["device", "client"],
       origin: "pair",
     });
-    // Cannot take over a device another credential holds.
-    expect(
-      (
-        await call(port, "POST", "/devices/register", pair.token, {
-          id: "taken",
-        })
-      ).status,
-    ).toBe(403);
+    // Cannot take over a device holding scopes the link lacks — and the
+    // refusal is a 403 carrying the reason, never a 401 (the token is fine).
+    const refused = await call(port, "POST", "/devices/register", pair.token, {
+      id: "taken",
+    });
+    expect(refused.status).toBe(403);
+    expect(String(refused.body.error)).toContain("already has a credential");
     expect(
       (
         await call(port, "POST", "/devices/register", pair.token, {
@@ -427,6 +427,38 @@ describe("device-id spoofing", () => {
     ).toBe(403);
     const who = await call(port, "GET", "/auth/whoami", pair.token);
     expect(who.body).toMatchObject({ kind: "device", deviceId: "phone" });
+  });
+
+  it("a pairing link re-pairs a known device: the old credential and its stream die", async () => {
+    const { port, store } = await setup();
+    const old = await store.mint({
+      deviceId: "mac",
+      scopes: ["device", "client"],
+      origin: "upgrade",
+    });
+    const oldStream = await openStream(port, old.token, "mac");
+    expect(oldStream.status).toBe(200);
+    await tick();
+
+    const pair = store.mintNow({
+      deviceId: null,
+      scopes: ["device", "client"],
+      origin: "pair",
+    });
+    const stream = await openStream(port, pair.token, "mac");
+    expect(stream.status).toBe(200);
+    await Promise.race([
+      oldStream.ended,
+      tick(2_000).then(() => {
+        throw new Error("re-paired device's old stream still open");
+      }),
+    ]);
+    expect((await call(port, "GET", "/auth/whoami", old.token)).status).toBe(
+      401,
+    );
+    const who = await call(port, "GET", "/auth/whoami", pair.token);
+    expect(who.body).toMatchObject({ kind: "device", deviceId: "mac" });
+    stream.stop();
   });
 });
 

@@ -15,6 +15,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { RunKilledError } from "../core/agents/abort-reason.js";
+import { IsolatedAgentTimeoutError } from "../core/background/isolated-agent.js";
 
 interface SpawnRecord {
   command: string;
@@ -301,7 +303,9 @@ describe("agy one-shot — MCP scoping", () => {
     stdoutLines = [];
     exitCode = 1;
     stderrChunks = ["something exploded\n"];
-    await runOneShotAgent(params());
+    await expect(runOneShotAgent(params())).rejects.toThrow(
+      "something exploded",
+    );
     expect(Object.keys(servers())).toEqual(["user-own"]);
     expect(logged).toContain("something exploded");
   });
@@ -312,9 +316,23 @@ describe("agy one-shot — failure paths", () => {
     stdoutLines = [];
     exitCode = 1;
     stderrChunks = ["authentication required\n"];
-    await runOneShotAgent(params());
+    await expect(runOneShotAgent(params())).rejects.toThrow(/interactively/i);
     expect(logged).toMatch(/interactively/i);
     expect(logged).toContain("agy");
+  });
+
+  it("rejects when the turn ends in a non-SUCCESS status", async () => {
+    stdoutLines = [
+      JSON.stringify({
+        event: "result",
+        result: { status: "ERROR", error: "model not available" },
+      }),
+    ];
+    await expect(runOneShotAgent(params())).rejects.toMatchObject({
+      name: "AgyOneShotError",
+      message: "model not available",
+    });
+    expect(logged).toContain("model not available");
   });
 
   it("logs an abort rather than an error when the timeout fires", async () => {
@@ -323,6 +341,21 @@ describe("agy one-shot — failure paths", () => {
     await runOneShotAgent(params({ abortController }));
     expect(logged).toContain("Aborted");
     expect(spawned).toHaveLength(0);
+  });
+
+  it("says 'killed', not 'timeout', for a deliberate kill", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new RunKilledError());
+    await runOneShotAgent(params({ abortController }));
+    expect(logged).toContain("Run killed on request.");
+    expect(logged).not.toContain("timeout");
+  });
+
+  it("still says 'timeout' when the timeout is the reason", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new IsolatedAgentTimeoutError(1000));
+    await runOneShotAgent(params({ abortController }));
+    expect(logged).toContain("Run aborted by timeout.");
   });
 
   it("kills the child when the abort fires mid-run", async () => {

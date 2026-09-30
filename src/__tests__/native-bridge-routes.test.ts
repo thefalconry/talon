@@ -72,6 +72,7 @@ const handlers: BridgeServerHandlers = {
   control: async () => ({ ok: true, message: "" }),
   logs: () => [],
   liveTurnEvents: () => [],
+  listCommands: () => [],
   mediaPath: () => null,
   registerDevice: async () => ({ id: "d1" }) as never,
   storeLocation: async () => ({}) as never,

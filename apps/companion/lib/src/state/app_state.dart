@@ -634,10 +634,13 @@ class AppState extends ChangeNotifier {
     _setConn(ConnState.error, message);
   }
 
-  static bool _isUnauthorized(Object e) =>
-      e is BridgeException && e.unauthorized ||
-      e.toString().contains('Unauthorized') ||
-      e.toString().contains('(401)');
+  /// Only a real 401 is "check your token". A [BridgeException] knows which
+  /// it is; its message may be server text (a 403 bind refusal, say) that
+  /// must reach the user as-is, so it is never sniffed for keywords.
+  static bool _isUnauthorized(Object e) => e is BridgeException
+      ? e.unauthorized
+      : e.toString().contains('Unauthorized') ||
+          e.toString().contains('(401)');
 
   /// Drop the connection profile (token, client certificate, pins) and
   /// everything cached from it, back to the first-run screen: the app lock's

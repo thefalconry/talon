@@ -49,6 +49,7 @@ export {
   formatBytes,
   formatRelative,
   formatSnapshotList,
+  type BackupStatus,
 } from "./status.js";
 
 export type { SnapshotSummary } from "./types.js";

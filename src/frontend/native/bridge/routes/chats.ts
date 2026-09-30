@@ -1,5 +1,6 @@
 import type { RouteHost } from "./host.js";
 import { claimDevice } from "../credentials/claims.js";
+import { hasScope } from "../credentials/principal.js";
 import type { BridgeRoutes, RouteContext } from "./table.js";
 import {
   asAttachmentRefs,
@@ -26,6 +27,41 @@ function openEvents(host: RouteHost, ctx: RouteContext): void {
   host.openStream(res, claim.deviceId, principal);
 }
 
+/**
+ * POST /send. Text naming one of the daemon's slash commands is answered
+ * by the daemon; the operator-only ones need the same scope as
+ * POST /control, so the caller's scope rides along.
+ */
+async function postSend(host: RouteHost, ctx: RouteContext): Promise<void> {
+  const { req, res, principal } = ctx;
+  const body = await host.readJson(req);
+  const id = asString(body.chatId) ?? "";
+  const text = asString(body.text) ?? "";
+  // Multi-file clients send `attachments`; the single-image shape older
+  // clients send is folded into the same list by the handler.
+  const attachments = asAttachmentRefs(body.attachments);
+  const imagePath = asString(body.imagePath);
+  const attachmentPath = asString(body.attachmentPath);
+  const hasAttachment =
+    attachments.length > 0 || Boolean(attachmentPath || imagePath);
+  // Text may be empty when a file is attached; require one or the other.
+  if (!id || (!text.trim() && !hasAttachment)) {
+    host.json(res, 400, {
+      ok: false,
+      error: "chatId and text (or an attachment) required",
+    });
+    return;
+  }
+  const operator = principal !== null && hasScope(principal, "operator");
+  host.handlers.send(
+    id,
+    text,
+    { attachments, imagePath, attachmentPath },
+    { operator },
+  );
+  host.json(res, 202, { ok: true });
+}
+
 export function chatRoutes(
   host: RouteHost,
 ): Pick<
@@ -42,6 +78,7 @@ export function chatRoutes(
   | "GET /history"
   | "GET /search"
   | "POST /send"
+  | "GET /commands"
   | "POST /upload"
   | "GET /media"
 > {
@@ -105,26 +142,9 @@ export function chatRoutes(
       const chatId = url.searchParams.get("chatId") ?? undefined;
       json(res, 200, { results: h.search(q, chatId) });
     },
-    "POST /send": async ({ req, res }) => {
-      const body = await readJson(req);
-      const id = asString(body.chatId) ?? "";
-      const text = asString(body.text) ?? "";
-      // Multi-file clients send `attachments`; the single-image shape older
-      // clients send is folded into the same list by the handler.
-      const attachments = asAttachmentRefs(body.attachments);
-      const imagePath = asString(body.imagePath);
-      const attachmentPath = asString(body.attachmentPath);
-      const hasAttachment =
-        attachments.length > 0 || Boolean(attachmentPath || imagePath);
-      // Text may be empty when a file is attached; require one or the other.
-      if (!id || (!text.trim() && !hasAttachment))
-        return json(res, 400, {
-          ok: false,
-          error: "chatId and text (or an attachment) required",
-        });
-      h.send(id, text, { attachments, imagePath, attachmentPath });
-      json(res, 202, { ok: true });
-    },
+    "POST /send": (ctx) => postSend(host, ctx),
+    "GET /commands": ({ res }) =>
+      json(res, 200, { commands: h.listCommands() }),
     "POST /upload": async ({ req, res, url }) => {
       const filename = url.searchParams.get("filename") ?? "upload";
       const contentType =

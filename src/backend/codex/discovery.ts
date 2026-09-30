@@ -72,6 +72,8 @@ interface CodexCacheModelEntry {
   description?: string;
   visibility?: "list" | "hide" | string;
   supported_in_api?: boolean;
+  /** Picker order — lower sorts first; the CLI's default is the lowest. */
+  priority?: number;
   context_window?: number;
   default_reasoning_level?: string;
   supported_reasoning_levels?: Array<{
@@ -351,6 +353,33 @@ export async function fetchOpenAiModels(
  * Non-existent cache file throws so the caller's catch path logs it
  * at debug level and the picker falls back to curated.
  */
+/**
+ * The Codex CLI's own default for the account: the listed, API-callable
+ * entry with the lowest `priority`. First entry wins ties, matching the
+ * CLI's stable sort. `null` when nothing qualifies.
+ */
+function cliDefaultModel(
+  data: ReadonlyArray<CodexCacheModelEntry | null | undefined>,
+): string | null {
+  let best: string | null = null;
+  let bestPriority = Number.POSITIVE_INFINITY;
+  for (const entry of data) {
+    if (!entry || typeof entry.slug !== "string" || !entry.slug) continue;
+    if (entry.visibility === "hide" || entry.supported_in_api === false) {
+      continue;
+    }
+    const priority =
+      typeof entry.priority === "number" && Number.isFinite(entry.priority)
+        ? entry.priority
+        : Number.MAX_SAFE_INTEGER;
+    if (priority < bestPriority) {
+      bestPriority = priority;
+      best = entry.slug;
+    }
+  }
+  return best;
+}
+
 export async function loadCodexCacheModels(): Promise<void> {
   const path = getCodexCachePath();
   let raw: string;
@@ -381,6 +410,7 @@ export async function loadCodexCacheModels(): Promise<void> {
   const state = getState();
   state.discoveredModels.clear();
   state.discoveredModelMetadata.clear();
+  state.discoveredDefaultModel = cliDefaultModel(data);
   let kept = 0;
   let dropped = 0;
   for (const entry of data) {
@@ -429,6 +459,7 @@ export async function loadCodexCacheModels(): Promise<void> {
   const fetchedAt = json.fetched_at ?? "unknown";
   log(
     "agent",
-    `Codex: loaded ${kept} models from ${path} (fetched_at=${fetchedAt}, filtered ${dropped} hidden/api-disabled entries)`,
+    `Codex: loaded ${kept} models from ${path} (fetched_at=${fetchedAt}, filtered ${dropped} hidden/api-disabled entries` +
+      `${state.discoveredDefaultModel ? `, CLI default ${state.discoveredDefaultModel}` : ""})`,
   );
 }

@@ -233,7 +233,7 @@ async function runOneShotWithTimeout(
     const t = setTimeout(() => {
       timeoutFired = true;
       try {
-        abortController.abort();
+        abortController.abort(new HeartbeatTimeoutError());
       } catch {
         /* ignore */
       }

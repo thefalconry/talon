@@ -67,6 +67,10 @@ export const BRIDGE_ROUTE_AUTH = {
   "GET /memory/why": "client",
 
   "POST /send": "client",
+  // The slash commands /send answers itself — names and one-liners for
+  // autocomplete. Operator-only ones are listed (flagged `admin`) and
+  // refused at /send time for a credential without the scope.
+  "GET /commands": "client",
   "POST /upload": "client",
   "GET /media": "client",
   "GET /models": "client",
