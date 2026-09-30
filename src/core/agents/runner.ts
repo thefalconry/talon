@@ -662,6 +662,8 @@ async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
       ? saved.elapsedMs + Math.max(0, saved.updatedAt - saved.startedAt)
       : saved.elapsedMs;
 
+  // Already back (a second resume pass in the same process) — leave it be.
+  if (agentRegistry.isLive(saved.id)) return;
   const record = agentRegistry.restore({ ...saved, elapsedMs, interruptedAt });
   if (!record) {
     abandonRow(
