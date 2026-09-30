@@ -227,14 +227,41 @@ There is no on/off switch: a deployment that wants no fan-out sets
   (ids, states, counts; never text). The journal persists them, so
   `talon events --history` answers across restarts.
 - **Run logs** — `~/.talon/workspace/logs/agents/<id>.md`, one per run, with
-  the brief in its header and the full tool transcript below.
+  the brief in its header and the full tool transcript below. A resumed
+  run appends to the same log under a `resumed after daemon restart` rule.
+
+## Surviving a daemon restart
+
+A restart does not kill a sub-agent. Every spawn is mirrored to the
+`agents` table in `talon.db` (brief, parent, backend, model, effort,
+timeout, cwd, backend session id, undrained inbox, report, state) and kept
+current on every lifecycle change.
+
+- **Shutdown parks, it does not kill.** The first step of a graceful
+  shutdown — before the frontends and the backend pool go down — stamps
+  every live agent as interrupted (charging its elapsed time against its
+  timeout). The abort that follows leaves the row `running` and does not
+  wake the parent. A crash leaves the row `running` too.
+- **Boot resumes.** Once the frontends are listening,
+  `resumeAgentsAfterRestart` walks every `queued`/`running` row, parents
+  before children, and brings each back under its original id (so its
+  tool session, run log and parent edges are unchanged):
+  - on a backend that can resume a conversation (Claude SDK session id,
+    Codex thread id — `BackgroundRunner.supportsResume`) with a recorded
+    session, the run continues that conversation with a short note: it was
+    interrupted at _time_, check the state of anything that was
+    mid-flight, drain `check_inbox`, report once;
+  - otherwise it starts a fresh conversation with the original brief plus
+    the tail of its previous run log, told to continue rather than redo.
+- **Bounds.** The resumed run gets its remaining timeout (at least 10
+  minutes). An agent whose report had already landed is settled and
+  delivered without rerunning. An agent interrupted more than
+  `MAX_AGENT_RESUMES` (3) times, or down for more than 24 hours, or whose
+  backend is gone, settles as `failed` and its parent is told why.
+  Settled rows are pruned after 7 days.
 
 ## Deliberately not done
 
-- **No persistence of live runs across restart.** An agent is a live run and
-  a daemon restart ends every run; a persisted row could only describe work
-  that no longer exists. Same reasoning as the task table. What _happened_
-  is durable: every `agent.*` event is journalled.
 - **No batching or coalescing of wake-ups.** Several settlements arriving
   while a chat is busy become several queued turns, and the weaver
   serialises per chat. Triggers already behave this way and the model

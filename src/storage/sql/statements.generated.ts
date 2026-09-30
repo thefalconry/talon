@@ -410,7 +410,93 @@ CREATE TABLE IF NOT EXISTS backup_remotes (
   uploaded_at INTEGER,
   error       TEXT,
   PRIMARY KEY (backup_id, target_id)
-);`;
+);
+
+-- Sub-agents, persisted so a daemon restart does not kill them. One row
+-- per spawn, written at registration and kept current on every lifecycle
+-- change (start, SDK session id, mailbox, report, settle). On boot, every
+-- row still 'queued' or 'running' was interrupted by the restart and is
+-- respawned — resuming its backend session when the backend can. See
+-- resumeAgentsAfterRestart in core/agents/runner.ts.
+CREATE TABLE IF NOT EXISTS agents (
+  id               TEXT PRIMARY KEY,
+  label            TEXT    NOT NULL,
+  brief            TEXT    NOT NULL,
+  -- 'chat' | 'agent'; parent_id is the chat key or the parent agent id.
+  parent_kind      TEXT    NOT NULL,
+  parent_id        TEXT    NOT NULL,
+  -- The frontend's numeric chat id (chat parents only) — the dispatcher
+  -- needs it to wake the chat with the report.
+  parent_numeric   INTEGER,
+  backend_id       TEXT    NOT NULL,
+  -- The model the run resolved to, and the one the caller asked for (null
+  -- = the backend default), so a resume can re-resolve if it vanished.
+  model            TEXT,
+  requested_model  TEXT,
+  effort           TEXT,
+  timeout_ms       INTEGER,
+  depth            INTEGER NOT NULL DEFAULT 0,
+  cwd              TEXT,
+  state            TEXT    NOT NULL,
+  created_at       INTEGER NOT NULL,
+  started_at       INTEGER,
+  ended_at         INTEGER,
+  updated_at       INTEGER NOT NULL,
+  -- Backend conversation handle (Claude SDK session id, Codex thread id),
+  -- recorded as soon as the backend reports it.
+  session_id       TEXT,
+  -- Pending check_inbox messages, JSON array of {from,text,at}.
+  inbox_json       TEXT    NOT NULL DEFAULT '[]',
+  -- 1 once report_result landed; result_* hold what it said.
+  reported         INTEGER NOT NULL DEFAULT 0,
+  result_summary   TEXT,
+  result_details   TEXT,
+  error            TEXT,
+  -- Wall-clock the agent has already spent in earlier (interrupted) runs,
+  -- charged against its timeout when it is resumed.
+  elapsed_ms       INTEGER NOT NULL DEFAULT 0,
+  -- How many times a restart has resumed it (bounded — a run that keeps
+  -- dying with the daemon eventually settles as failed).
+  resume_count     INTEGER NOT NULL DEFAULT 0,
+  -- When the last restart interrupted it, if one did.
+  interrupted_at   INTEGER,
+  -- 1 when the spawn asked for the pre-flight lane, so a re-briefed resume
+  -- keeps the instruction.
+  preflight        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state, depth, created_at);`;
+
+export const agentsSql = {
+  upsert: `INSERT OR REPLACE INTO agents
+  (id, label, brief, parent_kind, parent_id, parent_numeric, backend_id,
+   model, requested_model, effort, timeout_ms, depth, cwd, state,
+   created_at, started_at, ended_at, updated_at, session_id, inbox_json,
+   reported, result_summary, result_details, error, elapsed_ms,
+   resume_count, interrupted_at, preflight)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  get: `SELECT id, label, brief, parent_kind, parent_id, parent_numeric, backend_id,
+       model, requested_model, effort, timeout_ms, depth, cwd, state,
+       created_at, started_at, ended_at, updated_at, session_id, inbox_json,
+       reported, result_summary, result_details, error, elapsed_ms,
+       resume_count, interrupted_at, preflight
+FROM agents WHERE id = ?
+
+-- Rows a restart interrupted, parents before children (a child can only
+-- be re-attached to a parent that is already back in the registry).`,
+  listInterrupted: `SELECT id, label, brief, parent_kind, parent_id, parent_numeric, backend_id,
+       model, requested_model, effort, timeout_ms, depth, cwd, state,
+       created_at, started_at, ended_at, updated_at, session_id, inbox_json,
+       reported, result_summary, result_details, error, elapsed_ms,
+       resume_count, interrupted_at, preflight
+FROM agents WHERE state IN ('queued', 'running')
+ORDER BY depth, created_at`,
+  remove: `DELETE FROM agents WHERE id = ?
+
+-- Retention: settled rows past their window. Live rows are never pruned.`,
+  pruneSettled: `DELETE FROM agents
+WHERE state NOT IN ('queued', 'running') AND updated_at < ?`,
+  removeAll: `DELETE FROM agents`,
+} as const;
 
 export const backupsSql = {
   upsert: `INSERT OR REPLACE INTO backups
