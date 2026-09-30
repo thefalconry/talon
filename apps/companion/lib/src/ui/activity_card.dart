@@ -185,15 +185,6 @@ class _StreamingTextState extends State<_StreamingText> {
 
   @override
   Widget build(BuildContext context) {
-    final caret = Container(
-      width: 8,
-      height: 15,
-      margin: const EdgeInsets.only(left: 3, bottom: 1),
-      decoration: BoxDecoration(
-        color: TalonColors.accent2,
-        borderRadius: BorderRadius.circular(2),
-      ),
-    );
     final tail = widget.text.substring(_stableEnd);
     return Column(
       key: const ValueKey('draft'),
@@ -201,22 +192,37 @@ class _StreamingTextState extends State<_StreamingText> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ..._blocks,
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            if (tail.trim().isNotEmpty) Flexible(child: _markdown(tail, live: true)),
-            if (MediaQuery.of(context).disableAnimations)
-              caret
-            else
-              caret
-                  .animate(onPlay: (c) => c.repeat(reverse: true))
-                  .fadeOut(duration: 650.ms, curve: Curves.easeInOut)
-                  .wrapAmbient(),
-          ],
-        ),
+        if (tail.trim().isNotEmpty)
+          _markdown(appendStreamingCaret(tail), live: true)
+        else
+          // Between blocks (the last one just finished): a standalone caret
+          // on the next line, blinking where motion is allowed.
+          _StandaloneCaret(still: MediaQuery.of(context).disableAnimations),
       ],
     );
+  }
+}
+
+class _StandaloneCaret extends StatelessWidget {
+  final bool still;
+  const _StandaloneCaret({required this.still});
+
+  @override
+  Widget build(BuildContext context) {
+    final caret = Container(
+      width: 8,
+      height: 15,
+      margin: const EdgeInsets.only(left: 1, top: 2),
+      decoration: BoxDecoration(
+        color: TalonColors.accent2,
+        borderRadius: BorderRadius.circular(2),
+      ),
+    );
+    if (still) return caret;
+    return caret
+        .animate(onPlay: (c) => c.repeat(reverse: true))
+        .fadeOut(duration: 650.ms, curve: Curves.easeInOut)
+        .wrapAmbient();
   }
 }
 

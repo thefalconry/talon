@@ -187,7 +187,7 @@ class _CodeBlockState extends State<CodeBlock> {
     final folded = !_expanded;
     const line = _codeFontSize * _codeLineHeight;
     final full = _lines * line + 24;
-    final shown = CodeBlock.collapsedLines * line + 12;
+    const shown = CodeBlock.collapsedLines * line + 12;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [

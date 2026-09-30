@@ -212,6 +212,21 @@ class InlineMarkdownText extends StatelessWidget {
   }
 }
 
+/// [tail] (the live, still-growing end of a streaming reply) with a caret
+/// appended as Markdown, so the caret sits at the end of the last line being
+/// written. A caret widget beside the tail landed at the far right of any
+/// full-width block (a list item, a table), nowhere near the text. As inline
+/// code it takes the accent colour; inside an open code fence or code span it
+/// is the bare glyph (backticks there would print literally).
+String appendStreamingCaret(String tail) {
+  const glyph = '\u258D';
+  final fences =
+      RegExp(r'^\s*(```|~~~)', multiLine: true).allMatches(tail).length;
+  final lastLine = tail.substring(tail.lastIndexOf('\n') + 1);
+  final inCode = fences.isOdd || '`'.allMatches(lastLine).length.isOdd;
+  return inCode ? '$tail$glyph' : '$tail`$glyph`';
+}
+
 /// Where finished blocks end in a streaming Markdown [text], scanning from
 /// [from] (0, or an offset this function returned earlier for a prefix of
 /// the same text).

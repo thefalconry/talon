@@ -55,4 +55,15 @@ void main() {
     expect(scroller, findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+
+  test('the streaming caret rides the end of the text', () {
+    expect(appendStreamingCaret('the slot is usually'),
+        'the slot is usually`\u258D`');
+    // Inside an open fence or code span, backticks would print literally.
+    expect(appendStreamingCaret('```ts\nconst a = 1;'),
+        '```ts\nconst a = 1;\u258D');
+    expect(appendStreamingCaret('run `npm i'), 'run `npm i\u258D');
+    // A closed fence is ordinary text again.
+    expect(appendStreamingCaret('```\nx\n```\nDone'), '```\nx\n```\nDone`\u258D`');
+  });
 }
