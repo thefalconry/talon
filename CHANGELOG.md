@@ -1,5 +1,22 @@
 # Changelog
 
+## [5.24.0](https://github.com/thefalconry/talon/compare/v5.23.1...v5.24.0) (2026-09-30)
+
+
+### Features
+
+* **cli:** install plugins and skills at a pinned commit ([#1130](https://github.com/thefalconry/talon/issues/1130)) ([92a9e98](https://github.com/thefalconry/talon/commit/92a9e98a5bc35fa5d1542d7d6d8f207e017c108e))
+
+
+### Bug Fixes
+
+* **bridge:** take ?token= only on /events and /media, back off per credential id ([#1124](https://github.com/thefalconry/talon/issues/1124)) ([16bc4eb](https://github.com/thefalconry/talon/commit/16bc4ebfd3d526ca1849e85d81c82c0784128206))
+
+
+### Continuous Integration
+
+* **release:** fail closed on unsigned Android releases and attest build provenance ([#1118](https://github.com/thefalconry/talon/issues/1118)) ([b544dce](https://github.com/thefalconry/talon/commit/b544dcefa2d4f9fbc1c82548d154bf87dabd9a90))
+
 ## [5.23.1](https://github.com/thefalconry/talon/compare/v5.23.0...v5.23.1) (2026-09-30)
 
 
