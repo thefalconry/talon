@@ -780,6 +780,14 @@ const configSchema = z.object({
    */
   codexApiKey: z.string().optional(),
   /**
+   * Model a ChatGPT-OAuth Codex session falls back to (pre-emptive swaps,
+   * mismatch retries, the default when no model is configured). Unset =
+   * the Codex CLI's own default for the signed-in account (first listed
+   * model in `~/.codex/models_cache.json`), else a bundled default. The
+   * TALON_CODEX_CHATGPT_MODEL env var overrides this.
+   */
+  codexChatGptDefaultModel: z.string().min(1).optional(),
+  /**
    * OpenAI API key — used by the OpenAI Agents backend and accepted by
    * Codex only as a last-resort legacy fallback when no Codex-specific
    * key and no `codex login` auth file are available. Falls back to

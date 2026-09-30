@@ -37,6 +37,36 @@ import { awaitDiscovery, hasAttemptedDiscovery } from "./discovery.js";
 import { getState } from "./state.js";
 import { getCodexAuthInfo } from "./init.js";
 import { isKnownOAuthIncompat } from "./oauth-incompat.js";
+import {
+  CODEX_CHATGPT_DEFAULT_MODEL,
+  CODEX_CHATGPT_MODEL_ENV,
+} from "./constants.js";
+
+/**
+ * The model a ChatGPT-OAuth Codex session runs when nothing more specific
+ * applies — the target of every pre-emptive OAuth swap and mismatch
+ * fallback. Resolution order:
+ *
+ *   1. `TALON_CODEX_CHATGPT_MODEL` env var (operator override);
+ *   2. `codexChatGptDefaultModel` in config;
+ *   3. the Codex CLI's own default for the signed-in account (first
+ *      listed model in `~/.codex/models_cache.json` by priority), unless
+ *      Talon has already learned that id fails on this account;
+ *   4. {@link CODEX_CHATGPT_DEFAULT_MODEL}, the bundled floor.
+ *
+ * Hardcoding a single id is what broke in Sep 2026: OpenAI retired
+ * `gpt-5.5` for ChatGPT accounts and every run 404'd until a release.
+ */
+export function getCodexChatGptDefaultModel(): string {
+  const env = process.env[CODEX_CHATGPT_MODEL_ENV]?.trim();
+  if (env) return env;
+  const state = getState();
+  const configured = state.config?.codexChatGptDefaultModel?.trim();
+  if (configured) return configured;
+  const discovered = state.discoveredDefaultModel;
+  if (discovered && !isKnownOAuthIncompat(discovered)) return discovered;
+  return CODEX_CHATGPT_DEFAULT_MODEL;
+}
 
 /**
  * Codex-specific model metadata extension.
@@ -56,15 +86,26 @@ export interface CodexModelInfo extends UnifiedModelInfo {
  * Curated metadata for models we recognise.
  *
  * Order matters: `getSettingsPresentation` lists curated models in
- * this order, and `gpt-5.5` is intentionally first because it's the
- * broadest-access flagship (works on both auth modes) — the safe
- * default for Talon-on-Codex deployments where the operator hasn't
- * explicitly picked a model.
+ * this order, and the current flagship is intentionally first — the
+ * safe default for Talon-on-Codex deployments where the operator hasn't
+ * explicitly picked a model. (`gpt-5.5` held that slot until it was
+ * retired for ChatGPT accounts in Sep 2026.)
  *
  * Discovered-but-not-curated ids are appended at the end (synthesised
  * with minimal metadata), so the curated entries always render first.
  */
 export const CODEX_MODELS: CodexModelInfo[] = [
+  {
+    // Flagship of the catalog bundled with codex-cli 0.154 and the floor
+    // of the ChatGPT default ladder (`getCodexChatGptDefaultModel`).
+    // No context window here: the account's models_cache.json supplies it.
+    id: "gpt-6-astra",
+    displayName: "GPT-6 Astra",
+    provider: "openai",
+    providerName: "OpenAI",
+    selectable: true,
+    reasoning: true,
+  },
   {
     id: "gpt-5.5",
     displayName: "GPT-5.5",
@@ -149,19 +190,20 @@ export function isCodexOAuthIncompat(id: string): boolean {
  *
  * Returns `undefined` when:
  *   - The id isn't recognised as OAuth-incompat (caller can skip).
- *   - The id IS the broadest-access flagship (`gpt-5.5`) itself — no
- *     further fallback exists; if even `gpt-5.5` fails, the credential
- *     is the problem, not the model.
+ *   - The id IS the resolved ChatGPT default
+ *     ({@link getCodexChatGptDefaultModel}) itself — no further fallback
+ *     exists; if even the default fails, the credential is the problem,
+ *     not the model.
  *
- * For everything else returns `gpt-5.5` as the verified-working OAuth
- * default. (The curated table has only `gpt-5-codex` flagged as
+ * For everything else returns the resolved ChatGPT default. (The curated table has only `gpt-5-codex` flagged as
  * `apiKeyOnly: true`; runtime-learned entries cover the rest:
  * `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex`, `gpt-5.2`, etc.)
  */
 export function chatGptFallbackFor(id: string): string | undefined {
   if (!isCodexOAuthIncompat(id)) return undefined;
-  if (id === "gpt-5.5") return undefined;
-  return "gpt-5.5";
+  const fallback = getCodexChatGptDefaultModel();
+  if (id === fallback) return undefined;
+  return fallback;
 }
 
 /**

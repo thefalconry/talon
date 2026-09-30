@@ -10,10 +10,12 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it, expect } from "vitest";
+import { CODEX_CHATGPT_DEFAULT_MODEL } from "../backend/codex/constants.js";
 import {
   detectCodexAuth,
   resolveCodexApiKey,
   isChatGptModelMismatchError,
+  isCodexModelNotFoundError,
   isCodexRefreshTokenError,
   isSilentOAuthExitError,
   codexLoginExpiredError,
@@ -269,6 +271,35 @@ describe("codex / resolveCodexApiKey", () => {
   });
 });
 
+describe("codex / isCodexModelNotFoundError", () => {
+  const retired =
+    "unexpected status 404 Not Found: The model `gpt-5.5` does not exist " +
+    "or you do not have access to it.";
+
+  it("matches the 404 a retired model returns", () => {
+    expect(isCodexModelNotFoundError(retired)).toBe(true);
+  });
+
+  it("is folded into isChatGptModelMismatchError", () => {
+    expect(isChatGptModelMismatchError(retired)).toBe(true);
+  });
+
+  it("does not match an unrelated 404", () => {
+    expect(
+      isCodexModelNotFoundError("unexpected status 404 Not Found: /v1/foo"),
+    ).toBe(false);
+    expect(
+      isChatGptModelMismatchError("404 resource does not exist on the server"),
+    ).toBe(false);
+  });
+
+  it("requires the 404 status", () => {
+    expect(
+      isCodexModelNotFoundError("The model `x` does not exist in my notes"),
+    ).toBe(false);
+  });
+});
+
 describe("codex / isChatGptModelMismatchError", () => {
   it("matches the canonical OpenAI 400 message", () => {
     expect(
@@ -406,8 +437,8 @@ describe("codex / api-key-only catalog helpers", () => {
     expect(isCodexApiKeyOnlyModel("")).toBe(false);
   });
 
-  it("chatGptFallbackFor returns gpt-5.5 for gpt-5-codex", () => {
-    expect(chatGptFallbackFor("gpt-5-codex")).toBe("gpt-5.5");
+  it("chatGptFallbackFor returns the ChatGPT default for gpt-5-codex", () => {
+    expect(chatGptFallbackFor("gpt-5-codex")).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
   });
 
   it("chatGptFallbackFor returns undefined for non-api-key-only models", () => {

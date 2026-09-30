@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getMetrics, resetMetrics } from "../storage/metrics.js";
+import { CODEX_CHATGPT_DEFAULT_MODEL } from "../backend/codex/constants.js";
 
 // ── Shared mock state ───────────────────────────────────────────────────────
 
@@ -2093,7 +2094,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
   // configured model is known-incompatible, (2) post-hoc retry when
   // the model passed validation but Codex returned a 400 anyway.
 
-  it("pre-emptively swaps gpt-5-codex → gpt-5.5 under ChatGPT auth", async () => {
+  it("pre-emptively swaps gpt-5-codex → the ChatGPT default under ChatGPT auth", async () => {
     // Set up a fake HOME with a chatgpt auth.json so this test is
     // self-contained and works on CI (not just on Ada's machine where
     // the real ~/.codex/auth.json happens to be in chatgpt mode).
@@ -2114,7 +2115,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
       // No codexApiKey + no OPENAI_API_KEY env → init reads the fake
       // ~/.codex/auth.json we just created (chatgpt mode). With
       // `gpt-5-codex` set in config, the handler should detect the
-      // mismatch before calling `runStreamed` and pass `gpt-5.5` to
+      // mismatch before calling `runStreamed` and pass the ChatGPT default to
       // ThreadOptions.
       initCodexAgent(
         {
@@ -2167,18 +2168,18 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
       isGroup: false,
     });
 
-    // ThreadOptions saw `gpt-5.5` even though config said `gpt-5-codex`.
-    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5.5");
+    // ThreadOptions saw the ChatGPT default even though config said `gpt-5-codex`.
+    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     // No retry needed — the pre-emptive swap means runStreamed is
     // called exactly once.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(1);
   });
 
-  it("post-hoc retries with gpt-5.5 when Codex returns the ChatGPT 400", async () => {
+  it("post-hoc retries with the ChatGPT default when Codex returns the ChatGPT 400", async () => {
     // Api-key auth so the pre-emptive swap doesn't fire — the handler
     // believes gpt-5-codex is valid, hands it to Codex, and Codex
     // returns the chatgpt-mismatch 400. The handler should classify
-    // the error, reset the session, and retry on gpt-5.5.
+    // the error, reset the session, and retry on the ChatGPT default.
     setupHandler();
 
     const chatgptMismatch = new Error(
@@ -2217,7 +2218,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     // chatgpt-compatible model.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
     expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5-codex");
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(result.text).toBe("on fallback");
 
     // Chat-settings restored to the original after the retry — the
@@ -2236,7 +2237,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     // generator ends cleanly (no throw). The handler sets
     // `turnFailedError` during iteration, the loop exits normally,
     // the post-loop ChatGPT-mismatch check fires the retry.
-    // Second call: clean recovery on gpt-5.5.
+    // Second call: clean recovery on the ChatGPT default.
     MOCK_EVENTS_QUEUE = [
       // Call 1 — events only, no throw
       [
@@ -2278,13 +2279,13 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     });
 
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(result.text).toBe("recovered");
   });
 
   it("does not retry when the chatgpt-mismatch fires a second time", async () => {
     // Defensive: if the post-hoc retry ALSO returns the 400 (shouldn't
-    // happen since gpt-5.5 is supported, but guards against a future
+    // happen since the ChatGPT default is supported, but guards against a future
     // breakage), don't loop. `_retried` is true on the recursive call
     // so the chatgpt-mismatch branch short-circuits.
     setupHandler();
@@ -2374,7 +2375,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     // `supported_in_api: true`), pre-emptive swap didn't fire (not
     // curated as apiKeyOnly, not in learned set yet), Codex CLI
     // silently exited 1, SDK surfaced opaque error. The new code path
-    // should detect the silent-exit pattern, retry on gpt-5.5, AND
+    // should detect the silent-exit pattern, retry on the ChatGPT default, AND
     // record the failing model into the learning store.
     initCodexAgent(
       {
@@ -2419,7 +2420,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     // Two runStreamed calls — the silent-exit + the recovery.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
     expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5.4-mini");
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(result.text).toBe("recovered on 5.5");
 
     // Silent-exit is ambiguous (transient outage vs real incompat),
@@ -2434,7 +2435,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
   it("surfaces an expired login as an auth error without resetting or retrying", async () => {
     // Daemon log 2026-08-24: the refresh token was invalidated, the CLI
     // exited 1 behind the same banner the silent-incompat exit uses, and
-    // the handler reset the thread and retried on gpt-5.5 — which failed
+    // the handler reset the thread and retried on the ChatGPT default — which failed
     // identically. Now the exit is classified as an expired login first.
     initCodexAgent(
       {
@@ -2489,7 +2490,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     // already in the learned set — so the pre-empt skips and the
     // model gets passed through to runStreamed, which throws the
     // explicit-mismatch error. The post-hoc retry then both swaps to
-    // gpt-5.5 AND records the model into the persistent store.
+    // the ChatGPT default AND records the model into the persistent store.
     initCodexAgent(
       {
         model: "gpt-future-model",
@@ -2531,9 +2532,9 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
       isGroup: false,
     });
 
-    // Both runs fired (original + retry on gpt-5.5).
+    // Both runs fired (original + retry on the ChatGPT default).
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
 
     // The explicit-mismatch retry path persisted to the store —
     // unambiguous signal justifies the permanent record.
@@ -2587,9 +2588,9 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
       isGroup: false,
     });
 
-    // Single runStreamed call (pre-empt fired) and it saw gpt-5.5.
+    // Single runStreamed call (pre-empt fired) and it saw the ChatGPT default.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(1);
-    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
   });
 
   it("does NOT retry a silent exit on api-key auth (different bug class)", async () => {
@@ -2622,12 +2623,12 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     }
   });
 
-  it("does NOT retry when the active model is already gpt-5.5", async () => {
-    // Pathological case — if even gpt-5.5 silent-exits, the credential
+  it("does NOT retry when the active model is already the ChatGPT default", async () => {
+    // Pathological case — if even the ChatGPT default silent-exits, the credential
     // is broken; retrying would loop or swap to itself.
     initCodexAgent(
       {
-        model: "gpt-5.5",
+        model: CODEX_CHATGPT_DEFAULT_MODEL,
         workspace: "/tmp",
         systemPrompt: "Test system prompt.",
         frontend: "telegram",

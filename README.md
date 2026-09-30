@@ -487,6 +487,7 @@ Config file: `~/.talon/config.json`
 | `model`                    | `"default"`  | Default model. Interpretation depends on the active backend.                                                            |
 | `agyBinary`                | ---          | Path to the Antigravity `agy` executable. `AGY_BINARY` overrides it. |
 | `codexApiKey`              | ---          | Codex-only OpenAI API key. Prefer this over `openaiApiKey` for Codex API-key auth. `codex login` takes precedence over shared `openaiApiKey`. |
+| `codexChatGptDefaultModel` | ---          | Model a ChatGPT-login Codex session falls back to when a model is rejected or none is set. Default: the Codex CLI's own default for the account (from `~/.codex/models_cache.json`). `TALON_CODEX_CHATGPT_MODEL` overrides it. |
 | `concurrency`              | `1`          | Max concurrent AI queries (1--20)                                                                                       |
 | `pulse`                    | `true`       | Periodic group engagement                                                                                               |
 | `heartbeat`                | `false`      | Background maintenance agent                                                                                            |

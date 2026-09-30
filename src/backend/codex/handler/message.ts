@@ -45,7 +45,6 @@ import {
 import {
   codexSystemPromptSuffix,
   CODEX_DEFAULT_MODEL,
-  CODEX_CHATGPT_DEFAULT_MODEL,
   CODEX_THREAD_PERMISSIONS,
 } from "../constants.js";
 import {
@@ -64,6 +63,7 @@ import {
   chatGptFallbackFor,
   getModelInfo,
   isCodexOAuthIncompat,
+  getCodexChatGptDefaultModel,
 } from "../models.js";
 import { supportsReasoningLevel } from "../../../core/models/reasoning-levels.js";
 import { toCodexReasoningEffort } from "../effort.js";
@@ -142,7 +142,7 @@ async function maybeFallbackForChatGptMismatch(
   const isOAuth = authInfo?.mode === "chatgpt";
   const silent =
     isOAuth &&
-    activeModel !== CODEX_CHATGPT_DEFAULT_MODEL &&
+    activeModel !== getCodexChatGptDefaultModel() &&
     isSilentOAuthExitError(probeText);
 
   if (!explicit && !silent) return undefined;
@@ -170,7 +170,7 @@ async function maybeFallbackForChatGptMismatch(
   }
 
   const fallbackModel =
-    chatGptFallbackFor(activeModel) ?? CODEX_CHATGPT_DEFAULT_MODEL;
+    chatGptFallbackFor(activeModel) ?? getCodexChatGptDefaultModel();
   if (fallbackModel === activeModel) return undefined;
 
   // Only EXPLICIT mismatch errors are persisted as OAuth-incompat —
@@ -227,8 +227,8 @@ function buildTurnPrompt(params: QueryParams): string {
 /**
  * Codex accepts arbitrary model strings; we pass through whatever the
  * caller resolved (chat-settings → config) and fall back to the auth-aware
- * default: `gpt-5-codex` when an API key is present, `gpt-5.5` when only
- * ChatGPT OAuth is configured (because `gpt-5-codex` is rejected with a
+ * default: `gpt-5-codex` when an API key is present, the resolved ChatGPT
+ * default (`getCodexChatGptDefaultModel`) when only ChatGPT OAuth is configured (because `gpt-5-codex` is rejected with a
  * 400 on ChatGPT-mode accounts). A model known to be OAuth-incompat on a
  * ChatGPT-OAuth account is swapped pre-emptively rather than letting the
  * first turn fail.
@@ -237,13 +237,13 @@ function resolveCodexModel(chatId: string, requested: string | undefined) {
   const authInfo = getCodexAuthInfo();
   const authAwareDefault =
     authInfo?.mode === "chatgpt"
-      ? CODEX_CHATGPT_DEFAULT_MODEL
+      ? getCodexChatGptDefaultModel()
       : CODEX_DEFAULT_MODEL;
   const requestedModel = requested ?? authAwareDefault;
   let activeModel = requestedModel;
   if (authInfo?.mode === "chatgpt" && isCodexOAuthIncompat(requestedModel)) {
     const fallback =
-      chatGptFallbackFor(requestedModel) ?? CODEX_CHATGPT_DEFAULT_MODEL;
+      chatGptFallbackFor(requestedModel) ?? getCodexChatGptDefaultModel();
     // Guard against a learned-but-no-fallback case — only swap when the
     // fallback is actually different from what we'd already run.
     if (fallback !== requestedModel) {
