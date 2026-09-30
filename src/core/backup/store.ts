@@ -33,6 +33,11 @@ import {
   updateBackupManifest,
 } from "../../storage/backup/index.js";
 import { pathExists } from "./sources/sessions.js";
+import {
+  describeRetention,
+  planRetention,
+  type RetentionPolicy,
+} from "./retention.js";
 import type {
   Manifest,
   RemoteState,
@@ -236,26 +241,6 @@ export async function setSnapshotPinned(
 
 // ── Retention ───────────────────────────────────────────────────────────────
 
-/**
- * Which snapshots to drop so that at most `keep` unpinned ones remain.
- * Pure, and the order is the one the caller sees: newest first, pinned
- * snapshots kept unconditionally and not counted against the budget —
- * pinning is the user saying "this one outlives the policy".
- */
-export function selectPrunable<
-  T extends { id: string; createdAt: number; pinned: boolean },
->(snapshots: readonly T[], keep: number): T[] {
-  const ordered = [...snapshots].sort((a, b) => b.createdAt - a.createdAt);
-  const doomed: T[] = [];
-  let kept = 0;
-  for (const snapshot of ordered) {
-    if (snapshot.pinned) continue;
-    kept += 1;
-    if (kept > keep) doomed.push(snapshot);
-  }
-  return doomed;
-}
-
 /** Delete a snapshot directory and its index rows. */
 async function removeSnapshot(
   id: string,
@@ -266,14 +251,24 @@ async function removeSnapshot(
   deleteBackup(id);
 }
 
-/** Apply the local retention policy. Returns the ids removed. */
+/**
+ * Apply the local retention policy (see retention.ts). Returns the ids
+ * removed. A directory whose manifest cannot be read never reaches the
+ * listing, so it is never pruned.
+ */
 export async function pruneLocal(
-  keep: number,
+  policy: RetentionPolicy,
   home: string = dirs.root,
 ): Promise<string[]> {
-  const doomed = selectPrunable(await listLocalManifests(home), keep);
+  const plan = planRetention(await listLocalManifests(home), policy);
+  for (const manifest of plan.skipped) {
+    logWarn(
+      "backup",
+      `Not pruning ${manifest.id}: its manifest has no usable createdAt`,
+    );
+  }
   const removed: string[] = [];
-  for (const manifest of doomed) {
+  for (const manifest of plan.prune) {
     try {
       await removeSnapshot(manifest.id, home);
       removed.push(manifest.id);
@@ -284,7 +279,7 @@ export async function pruneLocal(
   if (removed.length > 0) {
     log(
       "backup",
-      `Pruned ${removed.length} local snapshot(s) (keepLocal=${keep})`,
+      `Pruned ${removed.length} local snapshot(s) (${describeRetention(policy)})`,
     );
   }
   return removed;

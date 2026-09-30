@@ -123,6 +123,14 @@ export type Manifest = {
   /** Total bytes of all parts. */
   sizeBytes: number;
   remote: Record<string, RemoteState>;
+  /**
+   * Epoch ms at which every part was read back and matched its digest
+   * (and, when encrypted, decrypted end to end) — see verify.ts. Set
+   * before signing, so the MAC covers it. Absent on snapshots written
+   * before verification existed. Retention never prunes the newest
+   * verified snapshot.
+   */
+  verifiedAt?: number;
   /** MAC under the backup passphrase; absent on plaintext/legacy snapshots. */
   auth?: ManifestAuth;
 };
@@ -146,6 +154,12 @@ export type BackupSettings = {
   intervalHours: number;
   keepLocal: number;
   keepRemote: number;
+  /** Newest snapshot per day, for this many days (0 = off). */
+  keepDaily: number;
+  /** Newest snapshot per ISO week, for this many weeks (0 = off). */
+  keepWeekly: number;
+  /** Unpinned checkpoints kept, apart from the scheduled snapshots. */
+  keepCheckpoints: number;
   includePalace: boolean;
   /** WhatsApp auth + userbot session: see {@link LoginSessionsPolicy}. */
   loginSessions: LoginSessionsPolicy;

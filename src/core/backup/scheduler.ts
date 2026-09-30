@@ -34,6 +34,11 @@ import { dirs } from "../../util/paths.js";
 import { passphraseProblem } from "./passphrase.js";
 import { buildSnapshot } from "./snapshot.js";
 import { listLocalManifests, pruneLocal, reconcileIndex } from "./store.js";
+import {
+  describeRetention,
+  localRetention,
+  remoteRetention,
+} from "./retention.js";
 import { discoverTargets, selectTargets } from "./targets.js";
 import { pruneRemote, uploadSnapshot } from "./upload.js";
 import type { BackupSettings, Manifest, SnapshotKind } from "./types.js";
@@ -162,7 +167,7 @@ async function executeRun(request: RunRequest): Promise<Manifest> {
       parts: manifest.parts.length,
       durationMs: Date.now() - started,
     });
-    await _backupDeps.pruneLocal(settings.keepLocal, state.home);
+    await _backupDeps.pruneLocal(localRetention(settings), state.home);
     if (!request.localOnly) {
       const targets = selectTargets(
         await _backupDeps.discover(),
@@ -170,7 +175,7 @@ async function executeRun(request: RunRequest): Promise<Manifest> {
       );
       if (targets.length > 0) {
         await _backupDeps.upload(manifest, targets, state.home);
-        await _backupDeps.pruneRemote(targets, settings.keepRemote);
+        await _backupDeps.pruneRemote(targets, remoteRetention(settings));
       }
     }
     backoff.succeed();
@@ -379,8 +384,9 @@ export async function initBackup(options: {
   log(
     "backup",
     `Scheduled every ${options.settings.intervalHours}h; first run in ` +
-      `${Math.round(delay / 60_000)}m (keep ${options.settings.keepLocal} local, ` +
-      `${options.settings.keepRemote} remote)`,
+      `${Math.round(delay / 60_000)}m (retention ` +
+      `${describeRetention(localRetention(options.settings))}; ` +
+      `${options.settings.keepRemote} newest per remote target)`,
   );
 }
 

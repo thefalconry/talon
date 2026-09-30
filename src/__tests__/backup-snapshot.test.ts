@@ -29,7 +29,6 @@ import {
   DEFAULT_WORKSPACE_INCLUDE,
 } from "../core/backup/plan.js";
 import {
-  selectPrunable,
   listLocalManifests,
   pruneLocal,
   snapshotDir,
@@ -42,6 +41,9 @@ const SETTINGS: BackupSettings = {
   intervalHours: 6,
   keepLocal: 12,
   keepRemote: 30,
+  keepDaily: 7,
+  keepWeekly: 4,
+  keepCheckpoints: 10,
   includePalace: true,
   loginSessions: "local",
   includeSessions: true,
@@ -290,23 +292,52 @@ describe("buildSnapshot", () => {
 });
 
 describe("retention", () => {
-  const snap = (id: string, createdAt: number, pinned = false) => ({
-    id,
-    createdAt,
-    pinned,
+  const NEWEST_ONLY = {
+    keepLast: 1,
+    keepDaily: 0,
+    keepWeekly: 0,
+    keepCheckpoints: 10,
+  };
+
+  it("stamps verifiedAt on a snapshot whose parts read back", async () => {
+    const home = fakeHome();
+    const manifest = await buildSnapshot({
+      kind: "backup",
+      settings: { ...SETTINGS, includePalace: false },
+      home,
+      copyDatabase,
+    });
+    expect(manifest.verifiedAt).toBeGreaterThan(0);
+    const [onDisk] = await listLocalManifests(home);
+    expect(onDisk.verifiedAt).toBe(manifest.verifiedAt);
   });
 
-  it("keeps the newest N unpinned and never counts pinned against the budget", () => {
-    const all = [
-      snap("e", 5),
-      snap("d", 4, true),
-      snap("c", 3),
-      snap("b", 2),
-      snap("a", 1, true),
-    ];
-    expect(selectPrunable(all, 2).map((s) => s.id)).toEqual(["b"]);
-    expect(selectPrunable(all, 99)).toEqual([]);
-    expect(selectPrunable(all, 1).map((s) => s.id)).toEqual(["c", "b"]);
+  it("does not count an unpinned checkpoint against the scheduled budget", async () => {
+    const home = fakeHome();
+    const settings = { ...SETTINGS, includePalace: false };
+    const older = await buildSnapshot({
+      kind: "backup",
+      settings,
+      home,
+      copyDatabase,
+    });
+    const newer = await buildSnapshot({
+      kind: "backup",
+      settings,
+      home,
+      copyDatabase,
+    });
+    const checkpoint = await buildSnapshot({
+      kind: "checkpoint",
+      label: "manual",
+      settings,
+      home,
+      copyDatabase,
+    });
+    const removed = await pruneLocal(NEWEST_ONLY, home);
+    expect(removed).toEqual([older.id]);
+    expect(existsSync(snapshotDir(newer.id, home))).toBe(true);
+    expect(existsSync(snapshotDir(checkpoint.id, home))).toBe(true);
   });
 
   it("deletes the pruned directories and keeps pinned ones", async () => {
@@ -333,7 +364,7 @@ describe("retention", () => {
       copyDatabase,
     });
 
-    const removed = await pruneLocal(1, home);
+    const removed = await pruneLocal(NEWEST_ONLY, home);
     expect(removed).toEqual([first.id]);
     expect(existsSync(snapshotDir(first.id, home))).toBe(false);
     expect(existsSync(snapshotDir(pinned.id, home))).toBe(true);
