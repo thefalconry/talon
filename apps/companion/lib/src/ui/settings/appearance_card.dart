@@ -1,5 +1,5 @@
-/// Theme mode, accent colour, text size, and the mobile-only haptics and
-/// notification switches. Local prefs only — nothing here talks to the
+/// Theme mode, accent colour, text size, reduce-effects and the mobile-only
+/// haptics switch. Local prefs only — nothing here talks to the
 /// daemon. Owns the resolved platform accent so the Wallpaper swatch can
 /// wear the colour it would apply.
 library;
@@ -10,8 +10,6 @@ import 'package:flutter/material.dart';
 import '../../services/dynamic_accent.dart';
 import '../../services/haptics.dart';
 import '../../services/linux_theme.dart';
-import '../../services/mesh_background.dart';
-import '../../services/message_notifications.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
 import '../effects.dart';
@@ -210,15 +208,6 @@ class _AppearanceCardState extends State<AppearanceCard> {
                 if (v) Haptics.selection();
               },
             ),
-            if (MessageNotifications.supported) ...[
-              const SizedBox(height: 6),
-              settingsSwitchRow(
-                'Message notifications',
-                'Notify when a reply arrives while Talon is in the background',
-                widget.state.prefs.messageNotifications,
-                _setMessageNotifications,
-              ),
-            ],
           ],
         ],
       ),
@@ -232,26 +221,6 @@ class _AppearanceCardState extends State<AppearanceCard> {
     final seed = _wallpaperAccent;
     if (seed == null) return TalonColors.surfaceHi;
     return TalonAccents.derive(TalonTheme.palette, seed).accent;
-  }
-
-  /// Enabling asks for POST_NOTIFICATIONS first — a toggle that reads "on"
-  /// while the OS silently drops every notification is worse than no toggle.
-  Future<void> _setMessageNotifications(bool v) async {
-    Haptics.selection();
-    if (v && !await MessageNotifications.requestPermission()) {
-      if (!mounted) return;
-      setState(() {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Notifications are blocked in Android settings'),
-        ),
-      );
-      return;
-    }
-    await widget.state.prefs.setMessageNotifications(v);
-    MeshForegroundController.pushUiState(messageNotifications: v);
-    if (!mounted) return;
-    setState(() {});
   }
 
   void _setAccent(Color? seed) {

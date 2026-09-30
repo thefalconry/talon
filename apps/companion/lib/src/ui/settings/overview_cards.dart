@@ -438,3 +438,60 @@ class HelpCard extends StatelessWidget {
     );
   }
 }
+
+/// The quiet line at the very end of Settings: this app's version (and
+/// build commit) plus what it is talking to. The place people look for
+/// "which version am I on" when filing a bug.
+class VersionFooter extends StatefulWidget {
+  final AppState state;
+  const VersionFooter({super.key, required this.state});
+
+  @override
+  State<VersionFooter> createState() => _VersionFooterState();
+}
+
+class _VersionFooterState extends State<VersionFooter> {
+  String _appVersion = '';
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      if (mounted) {
+        setState(() => _appVersion = formatAppVersion(
+            info.version, info.buildNumber, _buildCommit));
+      }
+    }).catchError((_) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.state.status;
+    final style = TextStyle(fontSize: 11.5, color: TalonColors.textFaint);
+    return Padding(
+      key: const Key('settings-version-footer'),
+      padding: const EdgeInsets.symmetric(vertical: TalonSpace.md),
+      child: Column(
+        children: [
+          Text(
+            _appVersion.isEmpty
+                ? 'Talon Companion'
+                : 'Talon Companion $_appVersion',
+            textAlign: TextAlign.center,
+            style: style.copyWith(fontWeight: FontWeight.w600),
+          ),
+          if (s.backend.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              '${s.botName} · ${s.backend}'
+              '${s.model.isEmpty ? '' : ' · ${s.model}'}'
+              ' · bridge protocol v$kBridgeProtocolVersion',
+              textAlign: TextAlign.center,
+              style: style,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

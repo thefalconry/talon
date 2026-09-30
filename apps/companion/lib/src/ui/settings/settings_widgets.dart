@@ -545,14 +545,18 @@ class SettingsSection extends StatelessWidget {
   }
 }
 
-/// A full-width action row for daemon controls (restart / dream): icon,
-/// label + subtitle, and a trailing spinner while the action is in flight.
+/// A full-width action row (restart / dream / logs / sub-screens): icon,
+/// title + dim description, and a trailing chevron — or a spinner while the
+/// action is in flight. Flat, like a switch row, so every row in Settings
+/// shares one anatomy instead of some being boxed buttons. [destructive]
+/// tints the icon and title red; those rows go last in their section.
 class ControlButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final String subtitle;
   final bool pending;
   final VoidCallback? onTap;
+  final bool destructive;
   const ControlButton({
     super.key,
     required this.icon,
@@ -560,34 +564,33 @@ class ControlButton extends StatelessWidget {
     required this.subtitle,
     required this.pending,
     required this.onTap,
+    this.destructive = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final tint = destructive ? TalonColors.bad : null;
     return Semantics(
       button: true,
       child: InkWell(
         onTap: onTap,
         borderRadius: TalonRadius.rMd,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            borderRadius: TalonRadius.rMd,
-            border: Border.all(color: TalonColors.glassStroke),
-          ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 9),
           child: Row(
             children: [
-              Icon(icon, size: 20, color: TalonColors.textDim),
-              const SizedBox(width: 12),
+              Icon(icon, size: 20, color: tint ?? TalonColors.textDim),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       label,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
+                        color: tint,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -602,6 +605,7 @@ class ControlButton extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: 12),
               if (pending)
                 const SizedBox(
                   width: 16,
