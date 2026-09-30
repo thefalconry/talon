@@ -582,6 +582,62 @@ describe("loadCronJobs — legacy import", () => {
   });
 });
 
+// ── loadCronJobs — stranded one-shot sweep ─────────────────────────────────
+
+describe("loadCronJobs — one-shots stranded by a failed run", () => {
+  it("retires a one-shot whose only run failed under the old accounting", () => {
+    addCronJob(
+      makeJob({
+        id: "stranded",
+        maxRuns: 1,
+        runCount: 0,
+        lastRunAt: 1_000,
+        lastStatus: "error",
+        lastError: "model not found",
+      }),
+    );
+
+    loadCronJobs();
+
+    const after = getCronJob("stranded")!;
+    expect(after.enabled).toBe(false);
+    expect(after.runCount).toBe(1);
+    expect(after.lastError).toBe("model not found");
+  });
+
+  it("leaves never-run, succeeded, and uncapped jobs alone", () => {
+    addCronJob(makeJob({ id: "fresh", maxRuns: 1, runCount: 0 }));
+    addCronJob(
+      makeJob({
+        id: "uncapped",
+        runCount: 0,
+        lastRunAt: 1_000,
+        lastStatus: "error",
+      }),
+    );
+    addCronJob(
+      makeJob({
+        id: "multi",
+        maxRuns: 3,
+        runCount: 0,
+        lastRunAt: 1_000,
+        lastStatus: "error",
+      }),
+    );
+
+    loadCronJobs();
+
+    for (const id of ["fresh", "uncapped", "multi"]) {
+      expect(getCronJob(id)!.enabled).toBe(true);
+    }
+  });
+
+  it("round-trips a per-job timeout", () => {
+    addCronJob(makeJob({ id: "slow", type: "query", timeoutMs: 1_800_000 }));
+    expect(getCronJob("slow")!.timeoutMs).toBe(1_800_000);
+  });
+});
+
 // ── isValidTimezone ────────────────────────────────────────────────────────
 
 describe("isValidTimezone", () => {

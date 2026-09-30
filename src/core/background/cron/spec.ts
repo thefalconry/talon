@@ -24,6 +24,9 @@ import {
 const MIN_INTERVAL_SECONDS = 60;
 const MAX_CONTENT_LENGTH = 10_000;
 const CATCHUP_POLICIES = new Set<CatchupPolicy>(["skip", "once", "all"]);
+/** Per-job run timeout bounds (seconds). The scheduler default is 10 minutes. */
+const MIN_TIMEOUT_SECONDS = 60;
+const MAX_TIMEOUT_SECONDS = 4 * 60 * 60;
 
 /** The job fields the spec covers; everything else is identity or telemetry. */
 type CronSpec = Pick<CronJob, "name" | "type" | "content" | "catchup"> &
@@ -40,6 +43,7 @@ type CronSpec = Pick<CronJob, "name" | "type" | "content" | "catchup"> &
       | "model"
       | "provider"
       | "instructions"
+      | "timeoutMs"
     >
   >;
 
@@ -220,8 +224,8 @@ const parseCatchup: Section = ({ body, editing, touched, updates }) => {
 };
 
 /**
- * Model / provider / instructions only make sense for "query" jobs (a
- * "message" job just sends text — no model runs), and a provider override
+ * Model / provider / instructions / timeout only make sense for "query" jobs
+ * (a "message" job just sends text — no model runs), and a provider override
  * needs a model to pick on it.
  */
 const parseOverrides: Section = (p) => {
@@ -230,9 +234,25 @@ const parseOverrides: Section = (p) => {
     if (touched(key))
       updates[key] = provided(body[key]) ? String(body[key]) : undefined;
   }
-  const { type, model, provider, instructions } = merge(p);
+  if (touched("timeout_seconds")) {
+    if (!provided(body.timeout_seconds)) {
+      updates.timeoutMs = undefined;
+    } else {
+      const secs = Number(body.timeout_seconds);
+      if (
+        !Number.isFinite(secs) ||
+        secs < MIN_TIMEOUT_SECONDS ||
+        secs > MAX_TIMEOUT_SECONDS
+      )
+        return `'timeout_seconds' must be a number between ${MIN_TIMEOUT_SECONDS} and ${MAX_TIMEOUT_SECONDS}.`;
+      updates.timeoutMs = Math.round(secs * 1000);
+    }
+  }
+  const { type, model, provider, instructions, timeoutMs } = merge(p);
   if (type !== "query" && (model || provider || instructions))
     return "Model/provider/instructions only apply to 'query' jobs.";
+  if (type !== "query" && timeoutMs !== undefined)
+    return "'timeout_seconds' only applies to 'query' jobs.";
   if (provider && !model)
     return "A 'provider' override also requires a 'model'.";
   return null;
