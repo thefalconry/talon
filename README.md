@@ -274,6 +274,7 @@ daemon (plugins) or apply on the next session (skills):
 talon plugin install @scope/my-talon-plugin        # npm → module plugin
 talon plugin install some-mcp-server --mcp         # npm → standalone MCP server (npx)
 talon plugin install owner/repo                    # git → module plugin
+talon plugin install owner/repo#<sha>              # …at that commit (or --commit <sha>)
 talon plugin list                                  # built-ins + configured entries
 talon plugin disable github                        # also toggles built-ins
 talon plugin remove my-talon-plugin
@@ -287,7 +288,10 @@ talon skill remove pdf
 ```
 
 Module plugins install under `~/.talon/plugins/`; standalone MCP servers are
-registered as `npx` entries in `config.json`. Disabling keeps the entry (or a
+registered as `npx` entries in `config.json`. A git source can be pinned to a
+commit with `#<sha>` or `--commit <sha>` (7-64 hex digits): Talon checks that
+commit out and verifies HEAD before installing. Either way the install
+folder's `.talon-install.json` records the repo and the exact commit. Disabling keeps the entry (or a
 `.disabled` marker in the skill folder) so enabling restores it unchanged.
 
 ## Built-in Plugins
