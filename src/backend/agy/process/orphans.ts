@@ -12,6 +12,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { log } from "../../../util/log.js";
+import { childBelongsToLiveDaemon } from "../../../core/daemon/pidfile.js";
 import { AGY_KILL_GRACE_MS } from "../constants.js";
 import { childChatIds, getChild } from "./child.js";
 
@@ -96,7 +97,10 @@ async function findOrphanPids(contextLabel: string): Promise<number[]> {
       // SIGKILL, so a chat id that happens to appear inside an
       // unrelated path must not select a victim.
       if (!argv.some((arg) => arg === "agy" || arg.endsWith("/agy"))) continue;
-      if (argv.includes(contextLabel)) matched.push(pid);
+      if (!argv.includes(contextLabel)) continue;
+      // Another running daemon's live run, not an orphan of ours.
+      if (childBelongsToLiveDaemon(pid)) continue;
+      matched.push(pid);
     } catch {
       // Exited between readdir and readFile, or not ours. Skip.
       continue;

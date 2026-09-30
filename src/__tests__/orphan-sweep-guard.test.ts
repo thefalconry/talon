@@ -31,6 +31,17 @@ describe("isEvictableOrphan", () => {
     ).toBe(false);
   });
 
+  it("spares a claude run spawned by another daemon that is still alive", () => {
+    // The parent test runner stands in for a live daemon that is not us.
+    const env = [TARGET, `TALON_DAEMON_PID=${process.ppid}`];
+    expect(isEvictableOrphan(env, CLAUDE_ARGV, TARGET)).toBe(false);
+  });
+
+  it("evicts a claude run whose daemon is gone", () => {
+    const env = [TARGET, "TALON_DAEMON_PID=2147483646"];
+    expect(isEvictableOrphan(env, CLAUDE_ARGV, TARGET)).toBe(true);
+  });
+
   it("spares a trigger's descendant, which inherits both vars", () => {
     const env = [TARGET, "TALON_TRIGGER_ID=trig_abc"];
     expect(isEvictableOrphan(env, CLAUDE_ARGV, TARGET)).toBe(false);

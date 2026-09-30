@@ -30,6 +30,7 @@ import { getHubSessionCount } from "../mcp-hub/index.js";
 import {
   dispatchGatewayRoute,
   listenWithRetry,
+  type PortInUseCheck,
   type GatewayRouteHost,
 } from "./gateway-routes.js";
 import { gatewayToken } from "./gateway-auth.js";
@@ -471,6 +472,15 @@ export class Gateway {
    * A failed bind clears the in-flight state, so a later `start()` retries;
    * so does `stop()`, so start-after-stop binds afresh.
    */
+  /**
+   * Veto for the EADDRINUSE port walk (see `listenWithRetry`). The daemon
+   * installs one that refuses when the busy port is another daemon.
+   */
+  setPortInUseCheck(check: PortInUseCheck | undefined): void {
+    this.portInUseCheck = check;
+  }
+  private portInUseCheck: PortInUseCheck | undefined;
+
   async start(port = 19876): Promise<number> {
     if (this.server) return this.port;
     if (this.starting) return this.starting;
@@ -509,7 +519,7 @@ export class Gateway {
     const httpServer = createServer(
       (req, res) => void dispatchGatewayRoute(req, res, host),
     );
-    const bound = await listenWithRetry(httpServer, port);
+    const bound = await listenWithRetry(httpServer, port, this.portInUseCheck);
     this.server = httpServer;
     this.port = bound;
     log("gateway", `Action gateway on :${this.port}`);

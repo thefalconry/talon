@@ -321,15 +321,44 @@ export async function dispatchGatewayRoute(
 const PORT_RETRIES = 5;
 
 /**
+ * Asked before walking past a busy port. Resolves a reason to refuse the
+ * fallback (the bind then fails with it), or `undefined` to keep walking.
+ */
+export type PortInUseCheck = (busyPort: number) => Promise<string | undefined>;
+
+/**
  * Bind to 127.0.0.1, walking up from `port` on EADDRINUSE (at most
  * `PORT_RETRIES` times). Resolves with the port actually bound — `port`
  * 0 asks the OS for a free one — and leaves a persistent error handler
  * on the server, so a later server-level error is logged instead of
  * crashing the process via an unhandled 'error' event.
+ *
+ * `onPortInUse` can veto the walk: the daemon uses it to fail outright when
+ * the busy port belongs to another Talon daemon, rather than settling on
+ * the next port and running as a second instance.
  */
-export function listenWithRetry(server: Server, port: number): Promise<number> {
+export function listenWithRetry(
+  server: Server,
+  port: number,
+  onPortInUse?: PortInUseCheck,
+): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     let attempt = 0;
+    const walkOn = async (
+      candidate: number,
+      err: NodeJS.ErrnoException,
+    ): Promise<void> => {
+      const refusal = onPortInUse
+        ? await onPortInUse(candidate).catch(() => undefined)
+        : undefined;
+      if (refusal) {
+        reject(
+          Object.assign(new Error(refusal), { code: err.code, cause: err }),
+        );
+        return;
+      }
+      tryPort(candidate + 1);
+    };
     const tryPort = (candidate: number): void => {
       server.once("error", (err: NodeJS.ErrnoException) => {
         if (err.code === "EADDRINUSE" && attempt < PORT_RETRIES) {
@@ -339,7 +368,7 @@ export function listenWithRetry(server: Server, port: number): Promise<number> {
           // registered; drop it or every stale callback fires when a later
           // port finally binds.
           server.removeAllListeners("listening");
-          tryPort(candidate + 1);
+          void walkOn(candidate, err);
         } else {
           reject(err);
         }
