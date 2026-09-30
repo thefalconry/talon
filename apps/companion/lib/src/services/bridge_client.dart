@@ -36,6 +36,14 @@ class BridgeClient {
   /// up here turns silence into a reported failure.
   static const Duration streamIdleTimeout = Duration(seconds: 45);
 
+  /// Silence after which the SSE event stream is declared dead. The daemon
+  /// writes a `: ping` comment every 25 s, so a healthy stream is never quiet
+  /// this long; a half-open socket (a network switch, NAT dropping the flow
+  /// without a FIN) delivers neither bytes nor an error, and without this
+  /// deadline the stream would sit "connected" forever while the HTTP
+  /// heartbeat keeps the device marked online.
+  static const Duration eventStreamIdleTimeout = Duration(seconds: 70);
+
   /// Wall-clock budget for pushing [bytes] up (the `upload_file` half).
   /// Unlike a download there is no per-chunk event to watch — the response
   /// arrives only once the whole body is sent — so the deadline is sized
@@ -80,8 +88,23 @@ class BridgeClient {
   /// makes this a plain UI connection.
   String? meshDeviceId;
 
-  BridgeClient(ConnectionConfig config, {this.skipKinds = const {}})
-      : _config = config;
+  BridgeClient(
+    ConnectionConfig config, {
+    this.skipKinds = const {},
+    this.eventStreamIdle = eventStreamIdleTimeout,
+  }) : _config = config;
+
+  /// See [eventStreamIdleTimeout]; injectable so tests can stall a stream
+  /// without waiting a minute.
+  final Duration eventStreamIdle;
+
+  DateTime? _lastRx;
+
+  /// When the event stream last delivered anything — an event or a `: ping`
+  /// keep-alive. Null until a stream has opened. The freshest proof the
+  /// connection is really alive, unlike a successful HTTP request, which
+  /// travels on a different socket.
+  DateTime? get lastRx => _lastRx;
 
   /// Event kinds this client drops *before* JSON-decoding them. The
   /// background mesh isolate sets this to the chat-UI firehose (`delta`,
@@ -311,8 +334,25 @@ class BridgeClient {
     }
 
     AppLog.info('bridge', 'event stream open');
+    _lastRx = DateTime.now();
     final buffer = StringBuffer();
+    final idle = eventStreamIdle;
     _sseSub = res.stream
+        // An inter-event deadline (as in downloadFile): the keep-alive pings
+        // reset it, so only a stream that stops delivering entirely trips
+        // it — and the error reaches the owner, whose reconnect fires.
+        .timeout(
+          idle,
+          onTimeout: (sink) => sink.addError(
+            BridgeException(
+              'Event stream idle: nothing received for ${idle.inSeconds}s',
+            ),
+          ),
+        )
+        .map((chunk) {
+          _lastRx = DateTime.now();
+          return chunk;
+        })
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(
