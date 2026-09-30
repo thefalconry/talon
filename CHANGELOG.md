@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.23.1](https://github.com/thefalconry/talon/compare/v5.23.0...v5.23.1) (2026-09-30)
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 2 updates ([#1139](https://github.com/thefalconry/talon/issues/1139)) ([a3242bc](https://github.com/thefalconry/talon/commit/a3242bc31089e166e18230bb138bf73051d73e59))
+* **deps:** Bump github/codeql-action/init from 4.38.1 to 4.38.2 ([#1147](https://github.com/thefalconry/talon/issues/1147)) ([2438524](https://github.com/thefalconry/talon/commit/2438524cc23fe28584ae394de2de6194606ce22d))
+
 ## [5.23.0](https://github.com/thefalconry/talon/compare/v5.22.0...v5.23.0) (2026-09-30)
 
 
