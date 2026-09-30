@@ -277,11 +277,11 @@ jobs:
   # ── Unit & integration tests + coverage ────────────────────────
   #
   # Light PR runs (pull_request only — merge_group runs the whole suite
-  # as the last gate before main) use test-impact analysis on ubuntu: scripts/tia.mjs picks
-  # the test files whose runtime import graph (ci/test-impact-map.json)
-  # touches the PR's changes, plus a smoke set, and falls back to the full
-  # suite for config/lockfile/scripts/native/prompts changes or a stale
-  # map. Full runs (main, dispatch, `full-ci`) run everything with
+  # as the last gate before main) use test-impact analysis on ubuntu:
+  # scripts/tia.mjs picks the test files whose runtime import graph
+  # (ci/test-impact-map.json) touches the PR's changes, plus a smoke set,
+  # and falls back to the full suite for config/lockfile/scripts/native/
+  # prompts changes or a stale map. Full runs (main, dispatch, `full-ci`) run everything with
   # coverage and re-record the map as the `test-impact-map` artifact,
   # which the next PR run downloads — the map is never committed back
   # from CI (main is protected; a bot push or refresh PR per merge would
