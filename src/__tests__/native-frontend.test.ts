@@ -43,6 +43,7 @@ import {
 } from "../frontend/native/bridge/discovery.js";
 import { summarizeToolResult } from "../frontend/native/index.js";
 import { files } from "../util/paths.js";
+import { deriveNumericChatId } from "../core/frontend-runtime/chat-id.js";
 import type { Gateway } from "../core/engine/gateway.js";
 import type { TalonConfig } from "../core/config/index.js";
 
@@ -236,6 +237,7 @@ describe("native action handler", () => {
       broadcast,
     });
     return {
+      chats,
       entry,
       handler,
       incrementMessages,
@@ -324,6 +326,44 @@ describe("native action handler", () => {
     const { handler } = setup();
     const res = await handler({ action: "send_message", text: "x" }, 999999);
     expect(res).toMatchObject({ ok: false });
+  });
+
+  it("adopts an unlisted chat a send_message names by key", async () => {
+    const { chats, handler, emitAssistant } = setup();
+    const key = "d_1700000000000_restor";
+    expect(chats.get(key)).toBeUndefined();
+    const res = await handler(
+      { action: "send_message", text: "♻️ Restored", target: key },
+      deriveNumericChatId(key),
+    );
+    expect(res).toMatchObject({ ok: true });
+    const adopted = chats.get(key);
+    expect(adopted).toBeDefined();
+    expect(emitAssistant).toHaveBeenCalledWith(adopted, "♻️ Restored");
+  });
+
+  it("adopts nothing when the key doesn't match the id, or isn't a send", async () => {
+    const { chats, handler } = setup();
+    const key = "d_1700000000000_other";
+    // The key names a different chat than the numeric id.
+    expect(
+      await handler({ action: "send_message", text: "x", target: key }, 12345),
+    ).toMatchObject({ ok: false });
+    // Not a native key at all.
+    expect(
+      await handler(
+        { action: "send_message", text: "x", target: "12345" },
+        deriveNumericChatId("12345"),
+      ),
+    ).toMatchObject({ ok: false });
+    // Only plain sends adopt.
+    expect(
+      await handler(
+        { action: "react", message_id: "1", target: key },
+        deriveNumericChatId(key),
+      ),
+    ).toMatchObject({ ok: false });
+    expect(chats.get(key)).toBeUndefined();
   });
 });
 

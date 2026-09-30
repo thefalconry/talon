@@ -180,6 +180,7 @@ export async function handleBackupComponent(
       id,
       requestedAt: Date.now(),
       requestedBy: chatId,
+      frontend: "discord",
     });
     respawnSelf(`discord /backup restore ${id}`);
   } catch (err) {

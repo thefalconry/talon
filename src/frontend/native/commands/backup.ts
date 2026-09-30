@@ -145,6 +145,7 @@ async function restore(
       id,
       requestedAt: Date.now(),
       requestedBy: ctx.entry.id,
+      frontend: "native",
     });
   } catch (err) {
     logError("backup", "Staging the restore failed", err);

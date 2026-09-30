@@ -24,6 +24,11 @@ import type { Client } from "discord.js";
 import type { Gateway } from "../../../core/engine/gateway.js";
 import type { ActionResult } from "../../../core/types.js";
 import { resolveChannel } from "./channels.js";
+import {
+  lookupDiscordChat,
+  parseDiscordChatKey,
+  registerDiscordChat,
+} from "../handlers/registry.js";
 import { messagingHandlers, restoreScheduledMessages } from "./messaging.js";
 import { mediaHandlers } from "./media.js";
 import { chatInfoHandlers } from "./chat-info.js";
@@ -43,6 +48,24 @@ const handlers: DiscordActionHandlers = Object.assign(Object.create(null), {
   ...chatInfoHandlers,
 });
 
+/**
+ * A plain send addressed to a chat this process hasn't registered — the
+ * channel that asked for a staged restore, say, before anyone has spoken
+ * in it since the restart. The sender names the chat by key in
+ * `body.target`; when that key is the one the numeric id was derived
+ * from, register it so the channel resolves. send_message only.
+ */
+function adoptAddressedChat(
+  action: string,
+  body: Record<string, unknown>,
+  chatId: number,
+): void {
+  if (action !== "send_message" || lookupDiscordChat(chatId)) return;
+  const key = typeof body.target === "string" ? body.target : "";
+  const info = key ? parseDiscordChatKey(key) : undefined;
+  if (info && info.numericChatId === chatId) registerDiscordChat(info);
+}
+
 export function createDiscordActionHandler(client: Client, gateway: Gateway) {
   const scheduledMessages = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -58,6 +81,7 @@ export function createDiscordActionHandler(client: Client, gateway: Gateway) {
     const handler = handlers[action];
     if (!handler) return null; // not a Discord action
 
+    adoptAddressedChat(action, body, chatId);
     const channel = await resolveChannel(client, chatId);
 
     // For non-channel actions (e.g. cancel_scheduled) that don't need a

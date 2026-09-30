@@ -22,11 +22,11 @@
  */
 
 import { chmod } from "node:fs/promises";
-import { logWarn } from "../../util/log.js";
-import { TalonError } from "../errors.js";
-import { verifyManifest } from "./archive/manifest-auth.js";
-import { resolvePassphrase } from "./passphrase.js";
-import type { BackupSettings, Manifest } from "./types.js";
+import { logWarn } from "../../../util/log.js";
+import { TalonError } from "../../errors.js";
+import { verifyManifest } from "../archive/manifest-auth.js";
+import { resolvePassphrase } from "../passphrase.js";
+import type { BackupSettings, Manifest } from "../types.js";
 
 export type ManifestTrust = {
   /** Operator override for unauthenticated manifests. */
