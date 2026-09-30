@@ -73,7 +73,8 @@ export type LogComponent =
   | "stickers"
   | "backup"
   | "router"
-  | "backend-controller";
+  | "backend-controller"
+  | "fetch";
 
 const LOG_FILE = files.log;
 

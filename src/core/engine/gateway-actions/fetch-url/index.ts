@@ -7,10 +7,6 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  readBodyLimited,
-  ResponseTooLargeError,
-} from "../../../../util/http-body.js";
-import {
   advertisedBinaryKind,
   decodeText,
   detectBinaryType,
@@ -22,7 +18,9 @@ import {
 import { dirs } from "../../../../util/paths.js";
 import { getPoolConfig } from "../../backend-controller/index.js";
 import type { SharedActionHandlers } from "../types.js";
-import { BlockedUrlError, guardedFetch } from "./guard.js";
+import { logDebug } from "../../../../util/log.js";
+import { buildFetchLadder } from "../../../fetch/index.js";
+import { BlockedUrlError } from "./guard.js";
 
 const MAX_RESPONSE_MB = 50;
 const MAX_RESPONSE_BYTES = MAX_RESPONSE_MB * 1024 * 1024;
@@ -69,55 +67,37 @@ function textResult(
   return { ok: true, text: capText(text) };
 }
 
+/** Footer naming the rung that got the page, plus any caveat. */
+function footer(via: string, note?: string): string {
+  return `\n\n[fetched via ${via}${note ? ` — ${note}` : ""}]`;
+}
+
 export const fetchUrlHandlers: SharedActionHandlers = {
   fetch_url: async (body) => {
     const url = String(body.url ?? "");
     const invalid = urlError(url);
     if (invalid) return { ok: false, error: invalid };
     try {
+      // The ladder (core/fetch) climbs browser-TLS impersonation → SOCKS
+      // exits → plain fetch → browser → egress device until one answers
+      // with content, and stops early on a definitive answer (a 404).
       // Local addresses are reachable by default; with
       // `fetchUrl.allowPrivateNetworks: false` every hop is checked against
       // private/loopback/link-local ranges (see guard.ts).
-      const resp = await guardedFetch(
-        url,
-        {
-          signal: AbortSignal.timeout(15_000),
-          headers: { "User-Agent": "Talon/1.0" },
-        },
-        {
-          allowPrivateNetworks:
-            getPoolConfig()?.fetchUrl?.allowPrivateNetworks !== false,
-        },
-      );
-      if (!resp.ok) return { ok: false, error: `HTTP ${resp.status}` };
-      const ct = resp.headers.get("content-type") ?? "";
-
-      // Reject oversized responses before downloading the body.
-      // The Content-Length header is advisory but saves bandwidth when present.
-      const contentLength = resp.headers.get("content-length");
-      if (contentLength && Number(contentLength) > MAX_RESPONSE_BYTES) {
-        return {
-          ok: false,
-          error: `File too large (${(Number(contentLength) / 1024 / 1024).toFixed(0)}MB, max ${MAX_RESPONSE_MB}MB)`,
-        };
-      }
+      const ladder = buildFetchLadder(getPoolConfig(), {
+        maxBytes: MAX_RESPONSE_BYTES,
+      });
+      const result = await ladder.fetch(url);
+      if (!result.ok) return { ok: false, error: result.error };
+      logDebug("fetch", `fetch via ${result.via} (${new URL(url).host})`);
+      const via = footer(result.via, result.note);
+      const ct = result.headers.get("content-type") ?? "";
+      const buffer = result.body;
 
       const mimeType = ct.split(";")[0].trim().toLowerCase();
-      let buffer: Buffer;
-      try {
-        buffer = await readBodyLimited(resp, MAX_RESPONSE_BYTES);
-      } catch (err) {
-        if (err instanceof ResponseTooLargeError) {
-          return {
-            ok: false,
-            error: `Response too large (max ${MAX_RESPONSE_MB}MB)`,
-          };
-        }
-        throw err;
-      }
-
       if (isTextContent(mimeType, buffer)) {
-        return textResult(mimeType, buffer, ct);
+        const text = textResult(mimeType, buffer, ct);
+        return { ...text, text: text.text + via };
       }
 
       if (buffer.length === 0)
@@ -148,7 +128,7 @@ export const fetchUrlHandlers: SharedActionHandlers = {
         : (detected?.ext ?? ct.split("/")[1]?.split(";")[0] ?? "file");
       return {
         ok: true,
-        text: `Downloaded ${typeLabel} (${(buffer.length / 1024).toFixed(0)}KB) to: ${filePath}\nRead it with the Read tool or send it with send(type="file", file_path="${filePath}").`,
+        text: `Downloaded ${typeLabel} (${(buffer.length / 1024).toFixed(0)}KB) to: ${filePath}\nRead it with the Read tool or send it with send(type="file", file_path="${filePath}").${via}`,
       };
     } catch (err) {
       if (err instanceof BlockedUrlError) {

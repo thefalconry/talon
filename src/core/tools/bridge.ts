@@ -36,6 +36,9 @@ const LONG_ACTION_TIMEOUTS_MS: Record<string, number> = {
   native_write: 3_600_000,
   native_edit: 3_600_000,
   device_exec: 330_000,
+  // The fetch ladder may climb several rungs (and install curl-impersonate
+  // on first use) inside its own 150s budget.
+  fetch_url: 180_000,
   native_bash: 330_000,
   native_glob: 330_000,
   native_search: 330_000,
