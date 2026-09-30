@@ -101,6 +101,12 @@ export interface AgentSpawnSpec {
   readonly reasoningEffort?: ReasoningEffortLevel;
   /** Hard wall-clock cap. Defaults to `agents.defaultTimeoutMs`. */
   readonly timeoutMs?: number;
+  /**
+   * Append the pre-flight lane instruction (run `npm run preflight` before
+   * every push) to the brief. Resolved by the spawn tool: explicit value,
+   * else on when the brief mentions a PR.
+   */
+  readonly preflight?: boolean;
 }
 
 /** `spawnAgent`'s answer — an error here is a tool error, never a throw. */

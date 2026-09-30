@@ -125,6 +125,8 @@ const ALL_TOOLS_ORDER = [
   "create_checkpoint",
   "list_checkpoints",
   "backup_status",
+  // Pre-flight lane (feat/agent-preflight) — appended at the end.
+  "run_preflight",
 ];
 
 describe("ALL_TOOLS registry", () => {

@@ -274,6 +274,25 @@ describe("spawnAgent resolution", () => {
     expect(params.systemPrompt).toContain("report_result");
   });
 
+  it("appends the pre-flight lane to the brief only when asked", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+
+    const withLane = await spawn({ preflight: true });
+    const without = await spawn({ preflight: false });
+    if (!withLane.ok || !without.ok) throw new Error("spawn refused");
+    await settled(withLane.agentId);
+    await settled(without.agentId);
+
+    const prompts = run.mock.calls.map(
+      (call) => (call[0] as OneShotAgentParams).prompt,
+    );
+    const lane = prompts.filter((p) => p.includes("npm run preflight"));
+    expect(lane).toHaveLength(1);
+    expect(lane[0]).toContain("investigate the thing");
+    expect(lane[0]).toContain("run_preflight");
+  });
+
   it("inherits the parent chat's backend when none is given", async () => {
     const run = vi.fn<OneShot>(async () => {});
     registerBackend(

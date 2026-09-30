@@ -308,7 +308,9 @@ async function buildRunParams(
     agentLogHeader(record, model),
   );
   return {
-    prompt: buildAgentPrompt(record.brief),
+    prompt: buildAgentPrompt(record.brief, {
+      preflight: spec.preflight === true,
+    }),
     systemPrompt: buildAgentSystemPrompt({
       agentId: record.id,
       label: record.label,

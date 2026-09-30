@@ -28,6 +28,8 @@ const LONG_ACTION_TIMEOUTS_MS: Record<string, number> = {
   // must sit above it so the layer that gives up is the tool (which reports
   // the agent's live state), never the transport.
   wait_for_agent: 180_000,
+  // The pre-flight lane caps itself at 600s; same margin rule as above.
+  run_preflight: 660_000,
   device_pull_file: 3_600_000,
   device_push_file: 3_600_000,
   device_read_file: 3_600_000,
