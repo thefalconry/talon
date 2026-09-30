@@ -57,13 +57,34 @@ void main() {
   });
 
   test('the streaming caret rides the end of the text', () {
-    expect(appendStreamingCaret('the slot is usually'),
-        'the slot is usually`\u258D`');
-    // Inside an open fence or code span, backticks would print literally.
-    expect(appendStreamingCaret('```ts\nconst a = 1;'),
-        '```ts\nconst a = 1;\u258D');
-    expect(appendStreamingCaret('run `npm i'), 'run `npm i\u258D');
+    expect(withInlineCaret('the slot is usually'),
+        'the slot is usually$kStreamingCaret');
+    // Inside an open fence or code span the sentinel would print.
+    expect(withInlineCaret('```ts\nconst a = 1;'), isNull);
+    expect(withInlineCaret('run `npm i'), isNull);
     // A closed fence is ordinary text again.
-    expect(appendStreamingCaret('```\nx\n```\nDone'), '```\nx\n```\nDone`\u258D`');
+    expect(withInlineCaret('```\nx\n```\nDone'),
+        '```\nx\n```\nDone$kStreamingCaret');
+  });
+
+  testWidgets('the caret renders inline, inside the paragraph',
+      (tester) async {
+    await tester.pumpWidget(_host(MarkdownBody(
+      data: withInlineCaret('1. **Saturday** — dinner at 7:30')!,
+      builders: {
+        'caret': StreamingCaretBuilder(
+            const SizedBox(key: Key('caret'), width: 7, height: 15)),
+      },
+      inlineSyntaxes: [StreamingCaretSyntax()],
+      styleSheet: talonMarkdownStyle(),
+    )));
+    await tester.pump();
+
+    final caret = find.byKey(const Key('caret'));
+    expect(caret, findsOneWidget);
+    // Merged into the list item's RichText, not laid out as a sibling.
+    expect(find.ancestor(of: caret, matching: find.byType(RichText)),
+        findsWidgets);
+    expect(find.textContaining(kStreamingCaret), findsNothing);
   });
 }

@@ -212,19 +212,51 @@ class InlineMarkdownText extends StatelessWidget {
   }
 }
 
-/// [tail] (the live, still-growing end of a streaming reply) with a caret
-/// appended as Markdown, so the caret sits at the end of the last line being
-/// written. A caret widget beside the tail landed at the far right of any
-/// full-width block (a list item, a table), nowhere near the text. As inline
-/// code it takes the accent colour; inside an open code fence or code span it
-/// is the bare glyph (backticks there would print literally).
-String appendStreamingCaret(String tail) {
-  const glyph = '\u258D';
+/// Private-use sentinel standing in for the streaming caret inside Markdown
+/// source; [StreamingCaretSyntax] turns it into a `caret` element.
+const String kStreamingCaret = '\uE000';
+
+/// [tail] (the live, still-growing end of a streaming reply) with the caret
+/// sentinel appended, so the caret renders at the end of the last line being
+/// written. A caret widget *beside* the tail landed at the far right of any
+/// full-width block (a list item, a table), nowhere near the text.
+///
+/// Null when the tail ends inside an open code fence or code span: the
+/// sentinel would print there as a literal character, so the caller shows a
+/// standalone caret instead.
+String? withInlineCaret(String tail) {
   final fences =
       RegExp(r'^\s*(```|~~~)', multiLine: true).allMatches(tail).length;
   final lastLine = tail.substring(tail.lastIndexOf('\n') + 1);
-  final inCode = fences.isOdd || '`'.allMatches(lastLine).length.isOdd;
-  return inCode ? '$tail$glyph' : '$tail`$glyph`';
+  if (fences.isOdd || '`'.allMatches(lastLine).length.isOdd) return null;
+  return '$tail$kStreamingCaret';
+}
+
+/// Parses [kStreamingCaret] into an empty `caret` element.
+class StreamingCaretSyntax extends md.InlineSyntax {
+  StreamingCaretSyntax() : super(kStreamingCaret);
+
+  @override
+  bool onMatch(md.InlineParser parser, Match match) {
+    parser.addNode(md.Element.empty('caret'));
+    return true;
+  }
+}
+
+/// Draws the `caret` element as an inline block in the accent colour. It is
+/// returned as `Text.rich` around a [WidgetSpan] so flutter_markdown merges
+/// it into the paragraph's own RichText — any other widget type would break
+/// the paragraph into a Wrap.
+class StreamingCaretBuilder extends MarkdownElementBuilder {
+  final Widget caret;
+  StreamingCaretBuilder(this.caret);
+
+  @override
+  Widget? visitElementAfter(md.Element element, TextStyle? preferredStyle) =>
+      Text.rich(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: caret,
+      ));
 }
 
 /// Where finished blocks end in a streaming Markdown [text], scanning from

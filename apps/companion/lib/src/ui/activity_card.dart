@@ -173,19 +173,26 @@ class _StreamingTextState extends State<_StreamingText> {
 
   int get _stableEnd => _breaks.isEmpty ? 0 : _breaks.last;
 
-  Widget _markdown(String data, {bool live = false}) => MarkdownBody(
+  Widget _markdown(String data, {bool live = false, Widget? caret}) =>
+      MarkdownBody(
         data: data,
         // Same builder as finalized messages — without it, a code block
         // renders as a bare grey slab while streaming and then jumps to
         // the framed panel on finalize. The tail passes live: no background
         // highlight per token (see CodeBlock).
-        builders: {'code': CodeElementBuilder(live: live)},
+        builders: {
+          'code': CodeElementBuilder(live: live),
+          if (caret != null) 'caret': StreamingCaretBuilder(caret),
+        },
+        inlineSyntaxes: [if (caret != null) StreamingCaretSyntax()],
         styleSheet: talonMarkdownStyle(),
       );
 
   @override
   Widget build(BuildContext context) {
+    final still = MediaQuery.of(context).disableAnimations;
     final tail = widget.text.substring(_stableEnd);
+    final inline = tail.trim().isEmpty ? null : withInlineCaret(tail);
     return Column(
       key: const ValueKey('draft'),
       mainAxisSize: MainAxisSize.min,
@@ -193,26 +200,33 @@ class _StreamingTextState extends State<_StreamingText> {
       children: [
         ..._blocks,
         if (tail.trim().isNotEmpty)
-          _markdown(appendStreamingCaret(tail), live: true)
-        else
-          // Between blocks (the last one just finished): a standalone caret
-          // on the next line, blinking where motion is allowed.
-          _StandaloneCaret(still: MediaQuery.of(context).disableAnimations),
+          _markdown(
+            inline ?? tail,
+            live: true,
+            caret: inline == null ? null : _Caret(still: still),
+          ),
+        // Between blocks (the last one just finished), or inside open code
+        // where the inline sentinel would print: a caret on its own line.
+        if (inline == null) _Caret(still: still, standalone: true),
       ],
     );
   }
 }
 
-class _StandaloneCaret extends StatelessWidget {
+/// The streaming caret: a small accent block, blinking where motion is
+/// allowed.
+class _Caret extends StatelessWidget {
   final bool still;
-  const _StandaloneCaret({required this.still});
+  final bool standalone;
+  const _Caret({required this.still, this.standalone = false});
 
   @override
   Widget build(BuildContext context) {
     final caret = Container(
-      width: 8,
+      key: const Key('streaming-caret'),
+      width: 7,
       height: 15,
-      margin: const EdgeInsets.only(left: 1, top: 2),
+      margin: EdgeInsets.only(left: standalone ? 1 : 2, top: standalone ? 2 : 0),
       decoration: BoxDecoration(
         color: TalonColors.accent2,
         borderRadius: BorderRadius.circular(2),

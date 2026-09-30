@@ -96,7 +96,7 @@ void main() {
     expect(identical(tester.widget<MarkdownBody>(bodies.first), first), isTrue);
     // The live tail carries the inline caret (see appendStreamingCaret).
     expect(tester.widget<MarkdownBody>(bodies.last).data,
-        appendStreamingCaret('Third'));
+        withInlineCaret('Third'));
   });
 
   testWidgets('the chat list builds only the tiles on screen', (tester) async {
