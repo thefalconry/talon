@@ -18,6 +18,8 @@ import type { OneShotAgentParams } from "../../types.js";
 import { acquireBackendInstance } from "../../engine/backend-controller/index.js";
 import {
   chooseBackend,
+  recordBackendRunFailure,
+  recordBackendRunSuccess,
   recordBackendRunUsage,
   resolveRoutedModel,
 } from "../../engine/backend-router/index.js";
@@ -471,6 +473,9 @@ export async function runHeartbeatAgent(
       runCount,
       heartbeatLogFile,
     );
+  } catch (err) {
+    recordBackendRunFailure(target.backendId, err);
+    throw err;
   } finally {
     // A routed run borrowed the instance from the pool; hand it back on
     // every path or the provider stays warm until the daemon restarts.
@@ -483,6 +488,7 @@ export async function runHeartbeatAgent(
     }
   }
   recordBackendRunUsage(target.backendId, usage ?? undefined);
+  recordBackendRunSuccess(target.backendId);
   task.succeed(usage ?? undefined);
   return heartbeatLogFile;
 }

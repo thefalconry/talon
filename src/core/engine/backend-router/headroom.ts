@@ -11,11 +11,21 @@
  *                the operator's soft budget (`config.backendBudgets`). The
  *                fallback for backends with no account API.
  *
- * A backend with neither reports `source: "none"` and headroom 1. That is a
- * deliberate "no evidence of pressure", not a claim of capacity — the
- * router's comparator ranks it *below* any backend with real telemetry at
- * the same headroom, so an unmeasured backend never outranks a measured one
- * it is tied with.
+ * A backend with neither reports `source: "none"` and headroom 0: nothing
+ * is known about it, so it is never *preferred*. It still clears the
+ * ceiling (there is no window to be over), so it runs work when nothing
+ * measured is available. It used to read as 1. That made a Codex install
+ * with an expired login, and so no usage signal, the router's favourite
+ * for 36 hours while every run on it failed.
+ *
+ * On top of either source sit two "this backend is not working" signals.
+ * Either one zeroes the headroom and pins the limiting window at 100%, so
+ * the ceiling drops the backend whenever anything else is left:
+ *
+ *   - the backend's own telemetry reports a rejected credential
+ *     (`UsageTelemetry.getAuthFailure`, e.g. the Codex usage endpoint's 401);
+ *   - the run breaker is open (`breaker.ts`): an auth failure or repeated
+ *     failures on runs routed there.
  *
  * Reads are cached for 60s per backend: `/usage`, the router and the
  * `plan_usage` tool all ask, and a plan lookup can be a subprocess spawn. A
@@ -31,6 +41,7 @@ import {
   listAvailableBackends,
 } from "../backend-controller/index.js";
 import { ledgerUsage } from "./ledger.js";
+import { openBreaker } from "./breaker.js";
 
 /** How long a headroom reading is reused before the source is asked again. */
 export const HEADROOM_CACHE_MS = 60_000;
@@ -63,6 +74,11 @@ export interface BackendHeadroom {
    * same (cached) fetch the router ranked on, instead of asking twice.
    */
   readonly plan?: PlanUsage;
+  /**
+   * Why the backend is treated as unusable right now (a rejected login, an
+   * open breaker). Set means headroom 0 and a 100% limiting window.
+   */
+  readonly unavailable?: string;
 }
 
 interface CacheEntry {
@@ -183,13 +199,29 @@ export function headroomFromLedger(
   };
 }
 
-/** The "nothing to measure" reading. Headroom 1, but lowest ranking source. */
+/** The "nothing to measure" reading: headroom 0, but under any ceiling. */
 function unknownHeadroom(
   id: string,
   label: string,
   now: number,
 ): BackendHeadroom {
-  return { id, label, headroom: 1, source: "none", fetchedAt: now };
+  return { id, label, headroom: 0, source: "none", fetchedAt: now };
+}
+
+/** What a backend's telemetry said: its plan windows and any auth failure. */
+interface PlanRead {
+  usage?: PlanUsage;
+  authFailure?: string;
+}
+
+function authFailureOf(
+  usage: { getAuthFailure?(): string | undefined } | undefined,
+): string | undefined {
+  try {
+    return usage?.getAuthFailure?.call(usage) || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -202,22 +234,35 @@ function unknownHeadroom(
  * is *not* currently in use. The read is the backend's own cached one, so at
  * most one boot per cache window.
  */
-async function readPlanUsage(id: string): Promise<PlanUsage | undefined> {
+async function readPlanUsage(id: string): Promise<PlanRead> {
   const pooled = getPooledBackend(id);
-  if (pooled?.usage?.getPlanUsage) {
-    return pooled.usage.getPlanUsage.call(pooled.usage);
+  if (pooled) {
+    const usage = pooled.usage?.getPlanUsage
+      ? await pooled.usage.getPlanUsage.call(pooled.usage)
+      : undefined; // pooled, but reports no plan windows
+    // Read after the plan fetch: that fetch is what discovers a 401.
+    const authFailure = authFailureOf(pooled.usage);
+    return {
+      ...(usage ? { usage } : {}),
+      ...(authFailure ? { authFailure } : {}),
+    };
   }
-  if (pooled) return undefined; // pooled, but reports no plan windows
   let acquired;
   try {
     acquired = await acquireBackendInstance(id);
   } catch {
-    return undefined; // can't boot it (not configured, no auth) — stay quiet
+    return {}; // can't boot it (not configured, no auth) — stay quiet
   }
   try {
-    const read = acquired.backend.usage?.getPlanUsage;
-    if (!read || !acquired.backend.usage) return undefined;
-    return await read.call(acquired.backend.usage);
+    const telemetry = acquired.backend.usage;
+    const usage = telemetry?.getPlanUsage
+      ? await telemetry.getPlanUsage.call(telemetry)
+      : undefined;
+    const authFailure = authFailureOf(telemetry);
+    return {
+      ...(usage ? { usage } : {}),
+      ...(authFailure ? { authFailure } : {}),
+    };
   } finally {
     await acquired.release().catch(() => {});
   }
@@ -238,16 +283,18 @@ export async function getBackendHeadroom(
   const now = options?.now ?? Date.now();
   const cached = cache.get(id);
   if (!options?.force && cached && now - cached.cachedAt < HEADROOM_CACHE_MS) {
-    return cached.value;
+    return withBreaker(cached.value, now);
   }
 
   let value: BackendHeadroom;
   try {
-    const plan = headroomFromPlan(id, label, await readPlanUsage(id));
+    const read = await readPlanUsage(id);
+    const plan = headroomFromPlan(id, label, read.usage);
     value =
       plan ??
       headroomFromLedger(id, label, config, now) ??
       unknownHeadroom(id, label, now);
+    if (read.authFailure) value = unavailable(value, read.authFailure);
   } catch {
     // The source is unreachable this minute. Keeping the last good reading
     // is the conservative answer: forgetting it would read as "empty" and
@@ -257,7 +304,29 @@ export async function getBackendHeadroom(
       : unknownHeadroom(id, label, now);
   }
   cache.set(id, { value, cachedAt: now });
-  return value;
+  return withBreaker(value, now);
+}
+
+/** Mark a reading unusable: zero headroom, limiting window pinned at 100%. */
+function unavailable(value: BackendHeadroom, why: string): BackendHeadroom {
+  return {
+    ...value,
+    headroom: 0,
+    limiting: { label: why, percent: 100 },
+    unavailable: why,
+  };
+}
+
+/**
+ * Overlay the run breaker. Applied on every read rather than cached: the
+ * breaker opens and closes on run outcomes, not on the headroom clock.
+ */
+function withBreaker(value: BackendHeadroom, now: number): BackendHeadroom {
+  if (value.unavailable) return value;
+  const breaker = openBreaker(value.id, now);
+  if (!breaker) return value;
+  const mins = Math.max(1, Math.ceil((breaker.until - now) / 60_000));
+  return unavailable(value, `breaker open ${mins}m — ${breaker.reason}`);
 }
 
 /** Headroom for every backend the config exposes, in config order. */
@@ -275,11 +344,10 @@ export async function collectBackendHeadroom(
 
 /** One-line rendering shared by `/usage`, `plan_usage` and the router log. */
 export function formatHeadroom(entry: BackendHeadroom): string {
+  if (entry.unavailable) return `0% — unavailable: ${entry.unavailable}`;
+  if (entry.source === "none") return "unmeasured — no usage signal";
   const pct = `${Math.round(entry.headroom * 100)}%`;
-  const detail =
-    entry.source === "none"
-      ? "no usage signal"
-      : `${entry.limiting?.label ?? "window"} ${Math.round(entry.limiting?.percent ?? 0)}% used`;
+  const detail = `${entry.limiting?.label ?? "window"} ${Math.round(entry.limiting?.percent ?? 0)}% used`;
   const tag = entry.source === "ledger" ? " (local budget)" : "";
   const stale = entry.stale ? " (stale)" : "";
   return `${pct} — ${detail}${tag}${stale}`;

@@ -226,7 +226,9 @@ describe("getBackendHeadroom", () => {
     getPooledBackend.mockReturnValue({ background: {} });
     const entry = await getBackendHeadroom("kilo", "Kilo", undefined);
     expect(entry.source).toBe("none");
-    expect(entry.headroom).toBe(1);
+    // Unmeasured is not "empty": it must never be preferred on no evidence.
+    expect(entry.headroom).toBe(0);
+    expect(entry.limiting).toBeUndefined();
   });
 
   it("collects one entry per exposed backend, plan and ledger mixed", async () => {

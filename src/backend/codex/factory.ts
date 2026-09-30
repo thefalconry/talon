@@ -19,7 +19,10 @@ import {
   type ModelCatalog,
   type UsageTelemetry,
 } from "../../core/agent-runtime/capabilities.js";
-import { getPlanUsage as getCodexPlanUsage } from "./plan-usage.js";
+import {
+  getAuthFailure as getCodexAuthFailure,
+  getPlanUsage as getCodexPlanUsage,
+} from "./plan-usage.js";
 
 import { initCodexAgent, getCodexAuthInfo } from "./init.js";
 import { handleMessage as codexHandleMessage } from "./handler/index.js";
@@ -88,6 +91,7 @@ const codexFactory: BackendFactory = {
     // report its rate-limit windows.
     const usage: UsageTelemetry = {
       getPlanUsage: () => getCodexPlanUsage(),
+      getAuthFailure: () => getCodexAuthFailure(),
     };
 
     const backend = composeBackend({

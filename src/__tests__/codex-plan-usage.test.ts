@@ -182,6 +182,21 @@ describe("getPlanUsage \u2014 401 latch", () => {
     expect(logWarn).toHaveBeenCalledTimes(2);
   });
 
+  it("reports the rejected login to the router until auth.json changes", async () => {
+    const mod = await import("../backend/codex/plan-usage.js");
+    expect(mod.getAuthFailure()).toBeUndefined();
+    await mod.getPlanUsage();
+    expect(mod.getAuthFailure()).toMatch(/codex login/);
+
+    const next = new Date(statSync(authFile()).mtimeMs + 5_000);
+    utimesSync(authFile(), next, next);
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(body()), { status: 200 }),
+    );
+    await mod.getPlanUsage();
+    expect(mod.getAuthFailure()).toBeUndefined();
+  });
+
   it("does not latch other failures", async () => {
     fetchMock.mockResolvedValue(new Response("", { status: 503 }));
     await getPlanUsage();
