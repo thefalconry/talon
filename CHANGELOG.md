@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.25.1](https://github.com/thefalconry/talon/compare/v5.25.0...v5.25.1) (2026-09-30)
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump axios from 1.18.1 to 1.20.0 ([#1192](https://github.com/thefalconry/talon/issues/1192)) ([5d28b15](https://github.com/thefalconry/talon/commit/5d28b15b459fdaa8afb2c18051908adde01b5d05))
+
+
+### Continuous Integration
+
+* gradle + go build caches, cached gleam toolchain, daemon tarball artifact on main ([#1186](https://github.com/thefalconry/talon/issues/1186)) ([f29c7aa](https://github.com/thefalconry/talon/commit/f29c7aae1dcdc977fc7525498bd2c9acdaebd667))
+
 ## [5.25.0](https://github.com/thefalconry/talon/compare/v5.24.1...v5.25.0) (2026-09-30)
 
 
