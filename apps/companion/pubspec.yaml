@@ -5,7 +5,7 @@ description: >
   launches/attaches a local Talon daemon; on mobile it connects to a remote
   bridge over the network.
 publish_to: "none"
-version: 5.26.6 # x-release-please-version
+version: 5.27.0 # x-release-please-version
 
 environment:
   # Uses the Color.withValues / WidgetStateProperty APIs (Flutter 3.27+).

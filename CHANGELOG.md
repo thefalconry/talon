@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.27.0](https://github.com/thefalconry/talon/compare/v5.26.6...v5.27.0) (2026-09-30)
+
+
+### Features
+
+* **agents:** sub-agents survive daemon restarts ([#1177](https://github.com/thefalconry/talon/issues/1177)) ([c9c85a9](https://github.com/thefalconry/talon/commit/c9c85a9288c4bbc9e55cb89ce44cbf2679b3f386))
+
 ## [5.26.6](https://github.com/thefalconry/talon/compare/v5.26.5...v5.26.6) (2026-09-30)
 
 
