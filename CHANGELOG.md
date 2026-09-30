@@ -1,5 +1,14 @@
 # Changelog
 
+## [5.26.1](https://github.com/thefalconry/talon/compare/v5.26.0...v5.26.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* dedup queued boot alerts; let a late plugin init clear its alert ([#1201](https://github.com/thefalconry/talon/issues/1201)) ([559e547](https://github.com/thefalconry/talon/commit/559e5478b12ccd8c18c134b979ddfeccdc17ae01))
+* **models:** honour a pinned claude model, including &lt;alias&gt;[1m] ([#1203](https://github.com/thefalconry/talon/issues/1203)) ([b60d779](https://github.com/thefalconry/talon/commit/b60d779d1fb85096b08dc086f608da078ce5c582))
+* **telegram:** split long media captions instead of truncating them ([#1202](https://github.com/thefalconry/talon/issues/1202)) ([a9f184e](https://github.com/thefalconry/talon/commit/a9f184e0fae54573c621975375cfa64d07988094))
+
 ## [5.26.0](https://github.com/thefalconry/talon/compare/v5.25.1...v5.26.0) (2026-09-30)
 
 

@@ -1,6 +1,6 @@
 {
   "name": "talon-agent",
-  "version": "5.26.0",
+  "version": "5.26.1",
   "description": "Multi-frontend AI agent with full tool access, streaming, cron jobs, and plugin system",
   "author": "The Falconry",
   "license": "Apache-2.0",
