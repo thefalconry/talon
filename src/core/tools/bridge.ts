@@ -12,6 +12,7 @@ import { Agent, fetch as undiciFetch } from "undici";
 import { isBunRuntime } from "../../util/runtime.js";
 import { gatewayAuthHeaders } from "../engine/gateway-auth.js";
 import { logWarn } from "../../util/log.js";
+import { TalonError } from "../errors.js";
 import type { BridgeFunction } from "./types.js";
 
 /** Default wall-clock budget for a bridge action. */
@@ -167,11 +168,15 @@ export function createBridge(
               `outcome (e.g. list the target directory) before retrying.`,
           );
         }
-        throw new Error(
+        // Classified as a non-retryable network fault: the transport
+        // dropped mid-call, but the daemon may already have acted, so a
+        // blind retry could run the action twice.
+        throw new TalonError(
           `"${action}" was aborted after ${Math.round(elapsedMs / 1000)}s ` +
             `(${elapsedMs}ms; before its ${Math.round(timeoutMs / 1000)}s budget): ${detail}. ` +
             `The operation may still be running on the daemon — check its ` +
             `outcome before retrying.`,
+          { reason: "network", retryable: false, cause },
         );
       }
       throw new Error(

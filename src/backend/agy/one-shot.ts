@@ -33,7 +33,7 @@ import {
   type AgyResult,
   type AgyStepUpdate,
 } from "./events.js";
-import { abortLogLine } from "../../util/abort-reason.js";
+import { abortLogLine } from "../../core/agents/abort-reason.js";
 
 const ts = (): string => new Date().toISOString().slice(11, 19);
 

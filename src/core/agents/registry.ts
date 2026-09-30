@@ -26,7 +26,7 @@ import type { AgentSettledEvent, AgentSpawnedEvent } from "../bus/events.js";
 import type { ReasoningEffortLevel } from "../types.js";
 import { bus } from "../bus/index.js";
 import { logWarn } from "../../util/log.js";
-import { RunKilledError } from "../../util/abort-reason.js";
+import { RunKilledError } from "./abort-reason.js";
 
 /** Settled agents kept for status queries after they leave the live map. */
 const DEFAULT_HISTORY_LIMIT = 100;

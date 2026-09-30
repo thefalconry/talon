@@ -31,7 +31,7 @@ import { isChatGptModelMismatchError } from "./auth.js";
 import { chatGptFallbackFor, isCodexOAuthIncompat } from "./models.js";
 import { markOAuthIncompat } from "./oauth-incompat.js";
 import { toCodexReasoningEffort } from "./effort.js";
-import { abortLogLine } from "../../util/abort-reason.js";
+import { abortLogLine } from "../../core/agents/abort-reason.js";
 
 /**
  * Resolve the effective model for a one-shot run, applying the same

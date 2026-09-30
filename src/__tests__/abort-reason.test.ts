@@ -4,7 +4,7 @@ import {
   abortKind,
   abortKindOf,
   abortLogLine,
-} from "../util/abort-reason.js";
+} from "../core/agents/abort-reason.js";
 import { IsolatedAgentTimeoutError } from "../core/background/isolated-agent.js";
 
 describe("abort reason classification", () => {

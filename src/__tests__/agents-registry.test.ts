@@ -13,7 +13,7 @@ import {
   type AgentCaps,
   type AgentParent,
 } from "../core/agents/index.js";
-import { abortKind } from "../util/abort-reason.js";
+import { abortKind } from "../core/agents/abort-reason.js";
 
 const CHAT: AgentParent = { kind: "chat", chatId: "42", numericChatId: 42 };
 const CAPS: AgentCaps = { ...DEFAULT_AGENT_CAPS };

@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { RunKilledError } from "../util/abort-reason.js";
+import { RunKilledError } from "../core/agents/abort-reason.js";
 import { IsolatedAgentTimeoutError } from "../core/background/isolated-agent.js";
 
 interface SpawnRecord {
