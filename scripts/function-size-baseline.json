@@ -78,12 +78,6 @@
     "cx": 29
   },
   {
-    "file": "src/core/mcp-hub/launcher.ts",
-    "name": "runSupervisor",
-    "lines": 167,
-    "cx": 22
-  },
-  {
     "file": "src/core/tools/chat/messaging.ts",
     "name": ".execute#2",
     "lines": 189,

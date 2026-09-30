@@ -14,13 +14,6 @@ vi.mock("../util/log.js", () => ({
   logDebug: vi.fn(),
 }));
 
-// Identity-wrap so existing assertions can match the raw MCP server shape
-// without the launcher prefix. Dedicated wrap behavior is covered in
-// mcp-launcher.test.ts.
-vi.mock("../core/mcp-hub/launcher.js", () => ({
-  wrapMcpServer: <T>(server: T) => server,
-}));
-
 describe("plugin system", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -263,6 +256,21 @@ describe("plugin system", () => {
       expect(servers["test-plugin-tools"].env.TALON_GATEWAY_TOKEN).toBe(
         "vitest-gateway-token",
       );
+    });
+
+    it("returns raw specs — the hub applies orphan protection at spawn time", async () => {
+      const plugin = createMockPlugin({
+        mcpServer: { command: "python3", args: ["-m", "srv"] },
+      });
+      const { loadPlugins, getPluginMcpServers } = await setup(plugin);
+      await loadPlugins([{ path: "/fake/plugin" }]);
+
+      const spec = getPluginMcpServers("http://localhost:19876", "chat1")[
+        "test-plugin-tools"
+      ];
+      expect(spec.command).toBe("python3");
+      expect(spec.args).toEqual(["-m", "srv"]);
+      expect(spec.args).not.toContain("_mcp-launch");
     });
 
     it("skips plugins without mcpServerPath", async () => {
