@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.26.3](https://github.com/thefalconry/talon/compare/v5.26.2...v5.26.3) (2026-09-30)
+
+
+### Bug Fixes
+
+* **history:** never delete chat history on switch/reset; soft reset + explicit purge ([#1211](https://github.com/thefalconry/talon/issues/1211)) ([66401b2](https://github.com/thefalconry/talon/commit/66401b24b709c08662c77efa462c12542da065dc))
+
 ## [5.26.2](https://github.com/thefalconry/talon/compare/v5.26.1...v5.26.2) (2026-09-30)
 
 
