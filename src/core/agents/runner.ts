@@ -35,6 +35,8 @@ import {
 } from "../engine/backend-controller/index.js";
 import {
   chooseBackend,
+  recordBackendRunFailure,
+  recordBackendRunSuccess,
   recordBackendRunUsage,
   taskClassForEffort,
 } from "../engine/backend-router/index.js";
@@ -437,9 +439,11 @@ async function runAgent(
         evictLabel: agentContextLabel(id),
       });
       recordBackendRunUsage(record.backendId, usage ?? undefined);
+      recordBackendRunSuccess(record.backendId);
       settled = settleSuccess(id, task, capture.last, usage ?? undefined);
     }
   } catch (err) {
+    recordBackendRunFailure(record.backendId, err);
     settled = settleFailure(id, task, err);
   } finally {
     await release().catch((err: unknown) =>

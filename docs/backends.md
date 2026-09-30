@@ -329,6 +329,15 @@ work to a spent plan; and routing never boots a cold provider to measure
 it, so a backend joins the rotation once it is running (bound to a role
 or serving a chat) or once you give it a `backendBudgets` entry.
 
+A backend that isn't working is routed around. If its runs fail
+repeatedly (3 in a row), or fail on a credential (401, expired login),
+a breaker opens and it scores zero headroom for a cool-off period. The
+cool-off starts at 15 minutes and doubles each time the breaker re-opens,
+up to 4 hours. The same happens while its usage endpoint reports a rejected login. A
+backend with no usage signal at all scores zero too: it still takes work
+when nothing measured is available, but it is never preferred over a
+backend that can show it has room.
+
 ## Adding a new backend
 
 1. Create `src/backend/<name>/` with at minimum:

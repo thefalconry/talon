@@ -58,6 +58,8 @@ const chooseBackend = vi.hoisted(() =>
 vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend,
   recordBackendRunUsage: vi.fn(),
+  recordBackendRunFailure: vi.fn(),
+  recordBackendRunSuccess: vi.fn(),
   taskClassForEffort: (effort?: string) =>
     effort === "high" || effort === "xhigh" ? "reasoning" : undefined,
 }));

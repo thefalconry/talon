@@ -85,6 +85,8 @@ vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend: mocks.chooseBackend,
   resolveRoutedModel: mocks.resolveRoutedModel,
   recordBackendRunUsage: vi.fn(),
+  recordBackendRunFailure: vi.fn(),
+  recordBackendRunSuccess: vi.fn(),
 }));
 
 const {

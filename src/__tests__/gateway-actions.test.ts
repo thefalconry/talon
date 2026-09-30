@@ -2370,14 +2370,14 @@ describe("per-job model override + discovery actions", () => {
           id: "claude",
           label: "Claude",
           current: false,
-          headroom: 1,
+          headroom: null,
           headroomSource: "none",
         },
         {
           id: "codex",
           label: "Codex",
           current: true,
-          headroom: 1,
+          headroom: null,
           headroomSource: "none",
         },
       ]);
