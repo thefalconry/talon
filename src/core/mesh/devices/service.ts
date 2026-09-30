@@ -863,6 +863,14 @@ export class MeshService {
     return this.links.makeCompanionPairLink(label, bridgeUrl);
   }
 
+  /** `make_companion_pair_link`: the pairing link as a tool result. */
+  makeCompanionPairLinkText(
+    label?: unknown,
+    bridgeUrl?: unknown,
+  ): MeshToolResult {
+    return this.links.makeCompanionPairLinkText(label, bridgeUrl);
+  }
+
   /** GET /pair — serve a pairing grant (single-use). */
   openCompanionPair(
     token: string,

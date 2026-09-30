@@ -99,6 +99,10 @@ const ALL_TOOLS_ORDER = [
   "update_node",
   "get_node_binary",
   "make_node_install_link",
+  // Companion pairing (the agent twin of /mesh pair) sits beside the node
+  // installer it mirrors: one deliberate cache miss, taken with a release
+  // that restarts the daemon (and so cools every live prefix) anyway.
+  "make_companion_pair_link",
   "send_via",
   "whatsapp_account",
   "moderate",

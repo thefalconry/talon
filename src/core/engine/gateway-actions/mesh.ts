@@ -91,6 +91,9 @@ export const meshHandlers: SharedActionHandlers = {
       body.name,
       body.bridge_url,
     ),
+  // Companion pairing: the agent-tool twin of Telegram's `/mesh pair`.
+  make_companion_pair_link: async (body) =>
+    getMeshService().makeCompanionPairLinkText(body.label, body.bridge_url),
 };
 
 /**
@@ -124,4 +127,5 @@ export const chatFreeActions: ReadonlySet<string> = new Set([
   "update_node",
   "get_node_binary",
   "make_node_install_link",
+  "make_companion_pair_link",
 ]);
