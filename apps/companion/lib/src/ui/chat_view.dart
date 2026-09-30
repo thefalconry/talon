@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
@@ -241,28 +242,56 @@ class _ChatViewState extends State<ChatView> {
       _settleToken++;
     }
     final token = _settleToken;
+    final historyLoading = widget.state.isHistoryLoading(chatId);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       if (_pendingJumpToBottom) {
-        void settle(int retry) {
+        void settle(int retry, double lastExtent, int stableFrames) {
           if (!mounted || !_scroll.hasClients || _settleToken != token) return;
-          final p = _scroll.position;
-          if (p.pixels < p.maxScrollExtent && retry < 12) {
-            _scroll.jumpTo(p.maxScrollExtent);
-            WidgetsBinding.instance
-                .addPostFrameCallback((_) => settle(retry + 1));
+          final pos = _scroll.position;
+          // If the user actively touches or scrolls during settle, yield to the gesture.
+          if (pos.userScrollDirection != ScrollDirection.idle) {
+            _pendingJumpToBottom = false;
+            return;
+          }
+          if (!pos.hasContentDimensions) {
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, lastExtent, stableFrames),
+            );
+            return;
+          }
+          final currentExtent = pos.maxScrollExtent;
+          if (pos.pixels < currentExtent) {
+            _scroll.jumpTo(currentExtent);
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, 0),
+            );
+          } else if ((currentExtent - lastExtent).abs() > 0.5) {
+            // Extent changed or just jumped; wait for next frame to check stability.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, 0),
+            );
+          } else if (stableFrames < 2 && retry < 40) {
+            // Extent unchanged across 1 frame; confirm stability on a 2nd consecutive frame
+            // so multi-pass layouts (tall markdown bubbles, code highlighters) finish.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, stableFrames + 1),
+            );
           } else {
-            if (messageCount > 0) _pendingJumpToBottom = false;
+            // Settled: position is at maximum extent and extent has stabilized.
+            if (messageCount > 0 && !historyLoading) {
+              _pendingJumpToBottom = false;
+            }
           }
         }
 
-        settle(0);
+        settle(0, -1.0, 0);
         return;
       }
       final pos = _scroll.position;
       // Otherwise follow live growth only when the user is already near the
       // bottom, so we never yank them up while they're reading scrollback.
-      if (pos.maxScrollExtent - pos.pixels < 260) {
+      if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 260) {
         _scroll.animateTo(
           pos.maxScrollExtent,
           duration: const Duration(milliseconds: 160),
