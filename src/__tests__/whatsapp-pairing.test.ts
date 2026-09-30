@@ -18,11 +18,15 @@ vi.mock("../util/log.js", () => ({
 
 import { classifyClose } from "../frontend/whatsapp/connection/pairing.js";
 import {
+  clearPendingAdminNotifications,
   notifyAdmin,
   setAdminNotifier,
 } from "../core/frontend-runtime/admin-notify.js";
 
-afterEach(() => setAdminNotifier(null));
+afterEach(() => {
+  setAdminNotifier(null);
+  clearPendingAdminNotifications();
+});
 
 describe("admin notify seam", () => {
   it("delivers through the wired notifier", async () => {
