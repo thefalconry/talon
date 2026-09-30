@@ -13,9 +13,9 @@
  */
 
 import { readFile, stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { logWarn } from "../../util/log.js";
+import { userHome } from "../../util/fs-path.js";
 
 export type AuthProvider = "claude" | "codex";
 
@@ -44,14 +44,14 @@ export function claudeCredentialsPath(
 ): string {
   const configDir = env.CLAUDE_CONFIG_DIR?.trim();
   return join(
-    configDir ? configDir : join(homedir(), ".claude"),
+    configDir ? configDir : join(userHome(), ".claude"),
     ".credentials.json",
   );
 }
 
 export function codexAuthPath(env: NodeJS.ProcessEnv = process.env): string {
   const home = env.CODEX_HOME?.trim();
-  return join(home ? home : join(homedir(), ".codex"), "auth.json");
+  return join(home ? home : join(userHome(), ".codex"), "auth.json");
 }
 
 /** Providers the backends reported as dead since boot (cleared on login). */

@@ -4,15 +4,15 @@
  * something the handlers can use.
  */
 
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { userHome } from "../../../../util/fs-path.js";
 
 // — path parameter resolution ----------------------------------------------
 
 /** Expand a leading `~` — local runs only; a device's home is not ours. */
 function expandHome(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  if (path === "~") return userHome();
+  if (path.startsWith("~/")) return join(userHome(), path.slice(2));
   return path;
 }
 

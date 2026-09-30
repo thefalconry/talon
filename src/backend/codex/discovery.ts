@@ -39,12 +39,12 @@
  */
 
 import { promises as fs } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { log, logDebug } from "../../util/log.js";
 import { getState } from "./state.js";
 import type { CodexAuthInfo } from "./auth.js";
 import { normalizeReasoningLevels } from "../../core/models/reasoning-levels.js";
+import { userHome } from "../../util/fs-path.js";
 
 /** Shape of one entry returned by OpenAI's `/v1/models`. Sparse — only `id` is reliably present. */
 interface OpenAiModelEntry {
@@ -99,7 +99,7 @@ export function getCodexCachePath(): string {
   const home = process.env.CODEX_HOME?.trim();
   return home && home.length > 0
     ? join(home, "models_cache.json")
-    : join(homedir(), ".codex", "models_cache.json");
+    : join(userHome(), ".codex", "models_cache.json");
 }
 
 /** Default soft timeout when callers await an in-flight discovery. */
