@@ -103,7 +103,8 @@ Days and weeks are UTC.
 "backup": { "keepLocal": 12, "keepDaily": 14, "keepWeekly": 8, "keepCheckpoints": 10 }
 ```
 
-`talon backup prune` applies the local policy by hand. Pin a snapshot
+`talon backup prune` applies the local policy by hand. Everything else Talon
+deletes on its own is listed in docs/data-lifecycle.md. Pin a snapshot
 (`talon backup pin <id>`, or from the `/backup` panel) to keep it past
 every rule.
 
