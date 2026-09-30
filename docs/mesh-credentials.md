@@ -74,9 +74,14 @@ still carry all three scopes — that is what they meant before.
 - **Pairing links** (`/mesh link`) and **node installers**
   (`make_node_install_link`) carry a fresh per-device credential instead of
   the shared token. It is *unbound* until first used: the first device id it
-  names binds it for good, and it can never bind to an id another live
-  credential already holds (a pairing link can add a device, never take one
-  over). Unbound credentials expire after 7 days. A companion credential
+  names binds it for good. If that id already holds live credentials, the
+  link **re-pairs** it: the old credentials are revoked and their sessions
+  dropped (e.g. a Mac whose app was reset but kept its device id). A link
+  can only replace credentials whose scopes it also carries — a device-only
+  installer can re-provision a node but never take over a companion; that
+  bind is refused with a 403 saying why (`talon mesh revoke <id>` first).
+  Each link binds once, so replaying it gains nothing further. Unbound
+  credentials expire after 7 days. A companion credential
   carries `native.companionScopes` (default all three).
 - A companion trading the shared token in band that asks for `client` also
   gets `operator` whenever `native.companionScopes` includes it: shipped

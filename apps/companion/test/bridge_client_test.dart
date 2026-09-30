@@ -139,6 +139,23 @@ void main() {
       addTearDown(good.dispose);
       await expectLater(good.send('c1', ''), throwsA(isA<BridgeException>()));
     });
+
+    test('a non-401 rejection carries the server error, not "Unauthorized"',
+        () async {
+      final bridge = await MockBridge.start(token: 'secret');
+      addTearDown(bridge.close);
+      bridge.configPostStatus = 403;
+      final client = BridgeClient(configFor(bridge, token: 'secret'));
+      addTearDown(client.dispose);
+      await expectLater(
+        client.setConfig({'pulse': true}),
+        throwsA(
+          isA<BridgeException>()
+              .having((e) => e.unauthorized, 'unauthorized', isFalse)
+              .having((e) => e.message, 'message', 'injected (403)'),
+        ),
+      );
+    });
   });
 
   group('BridgeClient connection reuse', () {
