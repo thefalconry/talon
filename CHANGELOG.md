@@ -1,5 +1,21 @@
 # Changelog
 
+## [5.26.0](https://github.com/thefalconry/talon/compare/v5.25.1...v5.26.0) (2026-09-30)
+
+
+### Features
+
+* **native:** slash commands on the native frontend ([#1196](https://github.com/thefalconry/talon/issues/1196)) ([beb4d82](https://github.com/thefalconry/talon/commit/beb4d824aa0e8fcfbb152ce395273605e7b24b15))
+* **telegram:** interactive /backup panel ([#1197](https://github.com/thefalconry/talon/issues/1197)) ([66046eb](https://github.com/thefalconry/talon/commit/66046eb794d23d36896f1a3427fb8bb9497ee168))
+
+
+### Bug Fixes
+
+* **codex,agy:** fail one-shot runs that fail upstream; resolve the ChatGPT default model ([#1162](https://github.com/thefalconry/talon/issues/1162)) ([8af58d6](https://github.com/thefalconry/talon/commit/8af58d6b5c848a8df940f5b24021457a29938813))
+* **commands:** dead buttons, hard-coded health, unvalidated effort ([#1198](https://github.com/thefalconry/talon/issues/1198)) ([942c447](https://github.com/thefalconry/talon/commit/942c447ea1205c02b4d4cbe41a379a169fc4c7a4))
+* **mesh:** let pairing links re-pair a known device ([#1195](https://github.com/thefalconry/talon/issues/1195)) ([a35c589](https://github.com/thefalconry/talon/commit/a35c58955b7a00f6cc828e6f6ddcabbb3e5ccb85))
+* **tools:** tell aborts from timeouts in the tool bridge and one-shot logs ([#1169](https://github.com/thefalconry/talon/issues/1169)) ([dfede5e](https://github.com/thefalconry/talon/commit/dfede5e549bbae0aba2b17168880822d7ec0f298))
+
 ## [5.25.1](https://github.com/thefalconry/talon/compare/v5.25.0...v5.25.1) (2026-09-30)
 
 
