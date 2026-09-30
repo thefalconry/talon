@@ -328,6 +328,29 @@ class ConnectionConfig {
   /// Returns null for anything that isn't a usable pairing link, so a
   /// clipboard full of something else is a quiet no rather than a wrong
   /// profile silently replacing a working one.
+  /// The first `talon://pair?…` (or `talon:pair?…`) link inside [text], or
+  /// null. Pasted text is often more than the link — a line copied off the
+  /// pairing page, a chat message around it — so the paste flow looks for the
+  /// link instead of demanding the clipboard be exactly it.
+  static String? findPairLink(String text) =>
+      RegExp(r"""talon:(?://)?pair/?\?[^\s"'<>]+""", caseSensitive: false)
+          .firstMatch(text)
+          ?.group(0);
+
+  /// True when [text] is the daemon's pairing *page* URL
+  /// (`https://…/pair?grant=…`) rather than the `talon://pair` link the page
+  /// hands out. The grant is single-use and is spent by whoever loads the page
+  /// first, so the app can't redeem it itself; the paste flow explains that
+  /// instead of calling it "not a link".
+  static bool isPairPageUrl(String text) {
+    final uri = Uri.tryParse(text.trim());
+    if (uri == null) return false;
+    final scheme = uri.scheme.toLowerCase();
+    return (scheme == 'https' || scheme == 'http') &&
+        uri.path.replaceAll('/', '') == 'pair' &&
+        uri.queryParameters.containsKey('grant');
+  }
+
   static ConnectionConfig? fromPairLink(String raw) {
     final uri = Uri.tryParse(raw.trim());
     if (uri == null) return null;

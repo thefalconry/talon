@@ -448,13 +448,19 @@ class _ConnectScreenState extends State<ConnectScreen> {
   Future<void> _pastePairLink() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text?.trim() ?? '';
-    final config =
-        text.isEmpty ? null : ConnectionConfig.fromPairLink(text);
+    final link = ConnectionConfig.findPairLink(text);
+    final config = link == null ? null : ConnectionConfig.fromPairLink(link);
     if (config == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No usable talon://pair link on the clipboard.'),
+        SnackBar(
+          content: Text(
+            ConnectionConfig.isPairPageUrl(text)
+                ? 'That is the pairing page. Open it in a browser, then use '
+                    'its "Open in Talon" button or copy the talon://pair link '
+                    'it shows.'
+                : 'No usable talon://pair link on the clipboard.',
+          ),
         ),
       );
       return;
