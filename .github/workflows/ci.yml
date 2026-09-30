@@ -276,7 +276,8 @@ jobs:
 
   # ── Unit & integration tests + coverage ────────────────────────
   #
-  # Light PR runs use test-impact analysis on ubuntu: scripts/tia.mjs picks
+  # Light PR runs (pull_request only — merge_group runs the whole suite
+  # as the last gate before main) use test-impact analysis on ubuntu: scripts/tia.mjs picks
   # the test files whose runtime import graph (ci/test-impact-map.json)
   # touches the PR's changes, plus a smoke set, and falls back to the full
   # suite for config/lockfile/scripts/native/prompts changes or a stale
@@ -321,7 +322,7 @@ jobs:
 
       # ── Light PR lane: impacted tests only ──
       - name: Select impacted tests (TIA)
-        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full != 'true'
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request' && needs.changes.outputs.full != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -336,17 +337,17 @@ jobs:
           node scripts/tia.mjs --files "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/tia-tests.txt"
 
       - name: Run impacted tests
-        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full != 'true'
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request' && needs.changes.outputs.full != 'true'
         # Empty selection = full suite (xargs runs a bare `vitest run`).
         run: xargs npx vitest run --reporter=verbose --reporter=json --outputFile=test-results.json < "$RUNNER_TEMP/tia-tests.txt"
 
       # ── Full runs: whole suite with coverage + re-record the map ──
       - name: Run tests with coverage
-        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true'
+        if: matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true')
         run: npx vitest run --coverage --reporter=verbose --reporter=json --outputFile=test-results.json --reporter=./scripts/tia-reporter.mjs --experimental.importDurations.limit=1000000
 
       - name: Upload test-impact map
-        if: always() && matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true' && hashFiles('ci/test-impact-map.json') != ''
+        if: always() && matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true') && hashFiles('ci/test-impact-map.json') != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-impact-map
@@ -358,7 +359,7 @@ jobs:
         run: node .github/scripts/vitest-summary.mjs test-results.json "Tests (${{ matrix.os }}, Node ${{ matrix.node-version }})" coverage/coverage-summary.json
 
       - name: Validate coverage report
-        if: matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true'
+        if: matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true')
         run: |
           node -e "if (!require('fs').existsSync('coverage/coverage-summary.json')) { console.error('Coverage report not generated'); process.exit(1); }"
 
@@ -371,7 +372,7 @@ jobs:
           retention-days: 14
 
       - name: Upload coverage
-        if: always() && matrix.os == 'ubuntu-latest' && needs.changes.outputs.full == 'true'
+        if: always() && matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-report
