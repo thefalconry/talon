@@ -20,6 +20,7 @@ import '../services/menu_bar.dart';
 import '../services/mesh_background.dart';
 import '../services/mesh_liveness.dart';
 import '../services/mesh_service.dart';
+import '../services/network_watch.dart';
 import '../services/prefs.dart';
 import '../services/updater.dart';
 import 'frame_coalescer.dart';
@@ -143,10 +144,21 @@ class AppState extends ChangeNotifier {
   int _backoffMs = 800;
   bool _disposed = false;
 
-  /// Network changes, watched while the profile has a local address so the
-  /// app hops between it and the main address as the phone moves.
+  /// Network changes, watched for every profile: a stream opened on the old
+  /// interface goes half-open after a switch and never errors on its own, and
+  /// a profile with a local address also hops between it and the main one.
   StreamSubscription<List<ConnectivityResult>>? _networkWatch;
   Timer? _networkDebounce;
+
+  /// The last connectivity reading ([networkKey]), and whether it changed
+  /// since the debounced handler last ran.
+  String? _lastNetwork;
+  bool _networkChanged = false;
+
+  /// Resuming after at least this much event-stream silence reopens the
+  /// stream: the daemon pings every 25 s, so a quiet stream is suspect (the
+  /// OS may have frozen the app while its socket died underneath it).
+  static const Duration resumeStaleAfter = Duration(seconds: 30);
 
   /// Per-chat grace timers that promote a delivered-but-not-ended turn into the
   /// "still working" state. Keyed by chatId; cancelled on `turn_end`, fresh
@@ -249,6 +261,7 @@ class AppState extends ChangeNotifier {
     AppLog.info('app_state', 'connect attempt ${config.host}:${config.port}');
     _setConn(ConnState.connecting, null);
 
+    _watchNetwork();
     if (config.canAutoDiscoverLocal) {
       daemon = const DaemonState(DaemonPhase.unknown);
       final bridge = await readLocalBridge();
@@ -301,7 +314,6 @@ class AppState extends ChangeNotifier {
       await _openStream(null, epoch);
     } else {
       daemon = const DaemonState(DaemonPhase.unknown);
-      _watchNetwork();
       // The local address when it answers, the main one otherwise.
       final endpoint = await resolveEndpoint(config);
       if (epoch != _epoch) return;
@@ -318,29 +330,28 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Re-pick the address whenever the network changes (Wi-Fi ↔ cellular,
-  /// arriving home…), reconnecting only if the answer changed.
+  /// Watch the network for every profile. On an interface change (Wi-Fi ↔
+  /// cellular, a new Wi-Fi) the open stream is bound to the old interface and
+  /// goes half-open — no bytes, no error — so reconnect now rather than wait
+  /// out the idle deadline. A profile with a local address also re-picks it.
   void _watchNetwork() {
-    if (config.localUrl == null) {
-      _networkWatch?.cancel();
-      _networkWatch = null;
-      return;
-    }
-    if (_networkWatch != null) return;
+    if (_networkWatch != null || !connectivityWatchAvailable) return;
     try {
-      _networkWatch = Connectivity().onConnectivityChanged.listen(
+      final connectivity = Connectivity();
+      unawaited(_seedNetwork(connectivity));
+      _networkWatch = connectivity.onConnectivityChanged.listen(
         (results) {
+          final key = networkKey(results);
+          if (_lastNetwork != null && key != _lastNetwork) {
+            _networkChanged = true;
+          }
+          _lastNetwork = key;
           if (results.every((r) => r == ConnectivityResult.none)) return;
           _networkDebounce?.cancel();
-          _networkDebounce = Timer(const Duration(seconds: 2), () async {
-            if (_disposed || config.localUrl == null) return;
-            final next = await resolveEndpoint(config);
-            if (_disposed) return;
-            if (next.baseUrl != _activeConfig?.baseUrl) {
-              AppLog.info('app_state', 'network changed → ${next.baseUrl}');
-              unawaited(start());
-            }
-          });
+          _networkDebounce = Timer(
+            const Duration(seconds: 2),
+            () => unawaited(_onNetworkSettled(key)),
+          );
         },
         onError: (Object e) =>
             AppLog.debug('app_state', 'network watch unavailable', e),
@@ -350,6 +361,69 @@ class AppState extends ChangeNotifier {
       // is still re-picked on every reconnect, just not proactively.
       AppLog.debug('app_state', 'network watch unavailable', e);
     }
+  }
+
+  Future<void> _seedNetwork(Connectivity connectivity) async {
+    try {
+      _lastNetwork ??= networkKey(await connectivity.checkConnectivity());
+    } catch (e) {
+      AppLog.debug('app_state', 'connectivity check unavailable', e);
+    }
+  }
+
+  Future<void> _onNetworkSettled(String key) async {
+    if (_disposed || _uiStreamPaused) return;
+    final interfaceChanged = _networkChanged;
+    _networkChanged = false;
+    String? nextUrl;
+    if (config.localUrl != null) {
+      final next = await resolveEndpoint(config);
+      if (_disposed) return;
+      if (next.baseUrl != _activeConfig?.baseUrl) nextUrl = next.baseUrl;
+    }
+    final endpointChanged = nextUrl != null;
+    // A fatal stop (bad token, pin mismatch) stays stopped unless the address
+    // itself moved; a live or retrying connection is reopened on the new
+    // interface straight away.
+    final live = conn == ConnState.connected || (_reconnect?.isActive ?? false);
+    if (endpointChanged || (interfaceChanged && live)) {
+      AppLog.info(
+        'app_state',
+        endpointChanged
+            ? 'network changed → $nextUrl'
+            : 'network interface changed ($key); reconnecting',
+      );
+      _backoffMs = 800;
+      unawaited(start());
+    }
+  }
+
+  /// When the event stream last delivered anything (event or keep-alive).
+  DateTime? get streamLastRx => _client?.lastRx;
+
+  /// The app came back to the foreground. If the stream has been silent for
+  /// [resumeStaleAfter] — the OS froze us and the socket may have died — or a
+  /// backoff retry is pending, reconnect now instead of trusting a stream
+  /// that may be half-open or waiting out the backoff.
+  void reconnectIfStale({DateTime? now}) {
+    if (_disposed || _uiStreamPaused) return;
+    if (conn == ConnState.connecting) return;
+    if (_reconnect?.isActive ?? false) {
+      AppLog.info('app_state', 'resumed while retrying; reconnecting now');
+      _backoffMs = 800;
+      unawaited(start());
+      return;
+    }
+    if (conn != ConnState.connected) return;
+    final rx = _client?.lastRx;
+    if (rx == null) return;
+    final quiet = (now ?? DateTime.now()).difference(rx);
+    if (quiet < resumeStaleAfter) return;
+    AppLog.info(
+      'app_state',
+      'resumed after ${quiet.inSeconds}s of stream silence; reconnecting',
+    );
+    unawaited(start());
   }
 
   Future<void> _openStream(

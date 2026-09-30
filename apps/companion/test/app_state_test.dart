@@ -860,6 +860,30 @@ void main() {
       );
     });
   });
+
+  group('AppState resume after silence', () {
+    test('reopens a stream that has been quiet past the threshold', () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final state = await stateFor(configFor(bridge));
+      addTearDown(state.dispose);
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+      expect(bridge.eventRequests, hasLength(1));
+
+      // Fresh stream: resuming must not churn the connection.
+      state.reconnectIfStale();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(bridge.eventRequests, hasLength(1));
+
+      // Resumed "40 s later" with nothing heard since: reopen.
+      state.reconnectIfStale(
+        now: DateTime.now().add(const Duration(seconds: 40)),
+      );
+      await _waitFor(() => bridge.eventRequests.length == 2);
+      await _waitFor(() => state.conn == ConnState.connected);
+    });
+  });
 }
 
 Future<void> _waitFor(

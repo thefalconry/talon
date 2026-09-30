@@ -214,6 +214,60 @@ void main() {
       );
     });
 
+    test('a stalled event stream errors after the idle deadline', () async {
+      // The mock sends `hello` and then nothing: a half-open socket as seen
+      // from the client — no bytes, no FIN, no error.
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final client = BridgeClient(
+        configFor(bridge),
+        eventStreamIdle: const Duration(milliseconds: 300),
+      );
+      addTearDown(client.dispose);
+      final error = Completer<Object>();
+      final sub = client.events.listen((_) {}, onError: error.complete);
+      addTearDown(sub.cancel);
+
+      expect(client.lastRx, isNull);
+      await client.connect();
+      expect(client.lastRx, isNotNull);
+
+      final e = await error.future.timeout(const Duration(seconds: 3));
+      expect(
+        e,
+        isA<BridgeException>().having(
+          (e) => e.message,
+          'message',
+          contains('Event stream idle'),
+        ),
+      );
+    });
+
+    test('keep-alive pings hold the stream open and advance lastRx', () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final client = BridgeClient(
+        configFor(bridge),
+        eventStreamIdle: const Duration(milliseconds: 400),
+      );
+      addTearDown(client.dispose);
+      final errors = <Object>[];
+      final sub = client.events.listen((_) {}, onError: errors.add);
+      addTearDown(sub.cancel);
+
+      await client.connect();
+      await _waitFor(() => bridge.streamCount == 1);
+      final opened = client.lastRx!;
+      for (var i = 0; i < 8; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await bridge.writeRaw(': ping\n\n');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(errors, isEmpty);
+      expect(client.lastRx!.isAfter(opened), isTrue);
+    });
+
     test('connect timeout closes the half-open client', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => server.close(force: true));
