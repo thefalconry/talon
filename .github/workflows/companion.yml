@@ -59,8 +59,44 @@ jobs:
           name: companion-coverage
           path: apps/companion/coverage/lcov.info
 
+  # ── Which platforms this run builds ──────────────────────────
+  # macOS runners are the scarce resource (Free plan: 5 concurrent, 10x
+  # minutes), so pull requests build Linux + Android only. Windows and
+  # macOS build on releases (the assets need them), on workflow_dispatch,
+  # and on PRs carrying the `full-ci` label. The label is read from the
+  # event payload: add it, then push (or dispatch this workflow on the
+  # branch) to get the desktop legs.
+  scope:
+    name: Build scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - name: Pick platforms
+        id: pick
+        env:
+          ALL_PLATFORMS: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          set -euo pipefail
+          all='[
+            {"name":"Windows","os":"windows-latest","platform":"windows","build":"flutter build windows --release"},
+            {"name":"macOS","os":"macos-latest","platform":"macos","build":"flutter build macos --release"},
+            {"name":"Linux","os":"ubuntu-latest","platform":"linux","build":"flutter build linux --release"},
+            {"name":"Android","os":"ubuntu-latest","platform":"android","build":"flutter build apk --release"}
+          ]'
+          if [[ "$ALL_PLATFORMS" == true ]]; then
+            include=$(jq -c . <<<"$all")
+          else
+            include=$(jq -c '[.[] | select(.os == "ubuntu-latest")]' <<<"$all")
+            echo "::notice::PR build: Linux + Android only (add the full-ci label for Windows + macOS)"
+          fi
+          echo "include=$include" | tee -a "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.name }}
+    needs: scope
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     # id-token + attestations: build-provenance attestations for the release
@@ -75,23 +111,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: Windows
-            os: windows-latest
-            platform: windows
-            build: flutter build windows --release
-          - name: macOS
-            os: macos-latest
-            platform: macos
-            build: flutter build macos --release
-          - name: Linux
-            os: ubuntu-latest
-            platform: linux
-            build: flutter build linux --release
-          - name: Android
-            os: ubuntu-latest
-            platform: android
-            build: flutter build apk --release
+        # {name, os, platform, build} per leg — see the scope job.
+        include: ${{ fromJSON(needs.scope.outputs.include) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
