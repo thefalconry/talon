@@ -14,7 +14,15 @@ export function bridgeStatus(runtime: NativeRuntime): BridgeStatus {
     protocol: BRIDGE_PROTOCOL_VERSION,
     // "attachments": /upload streams any file type and /send takes an
     // `attachments` list, so a client can stage several files per message.
-    capabilities: ["mesh", "mesh-commands", "plugins-skills", "attachments"],
+    // "commands": `/send` answers slash commands itself and `GET /commands`
+    // lists them for autocomplete.
+    capabilities: [
+      "mesh",
+      "mesh-commands",
+      "plugins-skills",
+      "attachments",
+      "commands",
+    ],
     botName: runtime.botName,
     backend: config.backend,
     model: resolveModel(config.model)?.displayName ?? config.model,

@@ -67,6 +67,36 @@ export function emitAssistant(
   return id;
 }
 
+/**
+ * Persist + broadcast an assistant message that is not a turn's reply —
+ * a slash command's answer. Unlike `emitAssistant` it leaves
+ * `lastAssistantId` alone: a turn still running beside the command must
+ * attach its tool timeline to its own reply, not to this one.
+ */
+export function emitNotice(
+  runtime: NativeRuntime,
+  entry: ChatEntry,
+  text: string,
+): number {
+  const id = runtime.nextId();
+  const ts = Date.now();
+  pushMessage(entry.id, {
+    msgId: id,
+    senderId: BOT_SENDER_ID,
+    senderName: runtime.botName,
+    text,
+    timestamp: ts,
+  });
+  runtime.chats.touch(entry.id, text);
+  runtime.broadcast({
+    kind: "message",
+    chatId: entry.id,
+    message: { id: String(id), chatId: entry.id, role: "assistant", text, ts },
+  });
+  broadcastChatUpdated(runtime, entry);
+  return id;
+}
+
 /** Persist + broadcast an assistant photo message (image + optional caption). */
 export function emitPhoto(
   runtime: NativeRuntime,
@@ -122,6 +152,7 @@ export function emitUser(
   entry: ChatEntry,
   text: string,
   attachments: ClientAttachment[] = [],
+  opts: { autoTitle?: boolean } = {},
 ): number {
   const id = runtime.nextId();
   const ts = Date.now();
@@ -160,7 +191,7 @@ export function emitUser(
     entry.id,
     attachments.length ? text || attachmentPreview(attachments) : text,
   );
-  maybeAutoTitle(runtime, entry, text);
+  if (opts.autoTitle !== false) maybeAutoTitle(runtime, entry, text);
   runtime.broadcast({ kind: "message", chatId: entry.id, message });
   broadcastChatUpdated(runtime, entry);
   return id;

@@ -493,6 +493,7 @@ describe("native mesh bridge routes", () => {
       control: async () => ({ ok: true, message: "" }),
       logs: () => [],
       liveTurnEvents: () => [],
+      listCommands: () => [],
       mediaPath: () => null,
       registerDevice: (body) => registry.register(body),
       storeLocation: (body) => registry.storeLocation(body),

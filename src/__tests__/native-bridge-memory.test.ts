@@ -73,6 +73,7 @@ const handlers = {
   control: async () => ({ ok: true, message: "" }),
   logs: () => [],
   liveTurnEvents: () => [],
+  listCommands: () => [],
   mediaPath: () => null,
   registerDevice: async () => ({}) as never,
   storeLocation: async () => ({}) as never,
