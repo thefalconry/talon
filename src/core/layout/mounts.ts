@@ -94,7 +94,7 @@ export function classifyMount(mount: MountEntry | undefined): Persistence {
  * exists are followed (a `~/.claude` symlinked onto a volume is on that
  * volume), the part that doesn't is appended as-is.
  */
-export function resolveExisting(path: string): string {
+function resolveExisting(path: string): string {
   let head = path;
   const tail: string[] = [];
   while (!existsSync(head)) {

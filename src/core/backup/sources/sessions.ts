@@ -58,7 +58,7 @@ export function sessionCwds(home: string): string[] {
 }
 
 /** Every backend id the config can route a turn to. */
-export function enabledBackends(config: Record<string, unknown>): Set<string> {
+function enabledBackends(config: Record<string, unknown>): Set<string> {
   const ids = new Set<string>();
   for (const key of [
     "backend",

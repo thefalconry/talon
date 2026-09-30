@@ -30,7 +30,7 @@ type Env = Readonly<Record<string, string | undefined>>;
  * Talon homes the published image has used. In a container either may
  * hold the transcripts of a deployment that moved to the other.
  */
-export const CONTAINER_HOMES = ["/home/bun/.talon", "/data/.talon"] as const;
+const CONTAINER_HOMES = ["/home/bun/.talon", "/data/.talon"] as const;
 /** The pre-/data image's HOME, where an old `~/.claude` may still be mounted. */
 const LEGACY_USER_HOME = "/home/bun";
 
