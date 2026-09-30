@@ -264,8 +264,12 @@ describe("/backup restore", () => {
 
     const staged = JSON.parse(
       readFileSync(restorePendingPath(scratchHome), "utf8"),
-    ) as { id: string; requestedBy: string };
-    expect(staged).toMatchObject({ id: SNAPSHOT_ID, requestedBy: chatId });
+    ) as { id: string; requestedBy: string; frontend: string };
+    expect(staged).toMatchObject({
+      id: SNAPSHOT_ID,
+      requestedBy: chatId,
+      frontend: "native",
+    });
     expect(respawnSelf).toHaveBeenCalledWith(
       `native /backup restore ${SNAPSHOT_ID}`,
     );

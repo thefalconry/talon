@@ -35,7 +35,7 @@ import { restoreSnapshot, verifyParts } from "../core/backup/restore.js";
 import {
   authenticateManifest,
   privateFileMode,
-} from "../core/backup/restore-guard.js";
+} from "../core/backup/restore/guard.js";
 import { buildSnapshot } from "../core/backup/snapshot.js";
 import { partPath, writeManifest } from "../core/backup/store.js";
 import { discoverTargets, type TargetDeps } from "../core/backup/targets.js";

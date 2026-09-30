@@ -310,7 +310,11 @@ describe("restore from the panel", () => {
     const ctx = makeCtx();
     await handleBackupCallback(ctx, `backup:restore:${target.id}`);
     expect(backup.writeRestorePending).toHaveBeenCalledWith(
-      expect.objectContaining({ id: target.id, requestedBy: String(ADMIN) }),
+      expect.objectContaining({
+        id: target.id,
+        requestedBy: String(ADMIN),
+        frontend: "telegram",
+      }),
     );
     expect(respawnSelf).toHaveBeenCalledTimes(1);
   });

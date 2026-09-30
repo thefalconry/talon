@@ -4,7 +4,7 @@
  * The rules that make this safe to run on a live home directory:
  *
  *   1. Verify before you touch anything. The manifest's signature is
- *      checked (restore-guard.ts), then every part's sha256 and — for
+ *      checked (restore/guard.ts), then every part's sha256 and — for
  *      encrypted parts — every record's tag; a part that fails is a
  *      stopped restore, not a half-applied one.
  *   2. Stage, then swap. The archive is extracted into a staging
@@ -55,7 +55,7 @@ import {
   authenticateManifest,
   makePrivate,
   type ManifestTrust,
-} from "./restore-guard.js";
+} from "./restore/guard.js";
 import { buildSnapshot } from "./snapshot.js";
 import {
   relocateRoot,
@@ -84,6 +84,12 @@ export type RestorePending = {
   requestedAt: number;
   /** Chat key that asked, so the boot can report back. */
   requestedBy?: string;
+  /**
+   * Frontend the request came from ("telegram", "discord", "native"), so
+   * the report goes back the way it came. Absent in files staged before
+   * it was recorded — the boot then infers it from `requestedBy`.
+   */
+  frontend?: string;
 };
 
 export type RestoreReport = {
@@ -507,7 +513,7 @@ export type RestoreOptions = {
   beforeApply?: () => void | Promise<void>;
   /** Skip the automatic pre-restore checkpoint (it has already been taken). */
   skipCheckpoint?: boolean;
-  /** Restore a manifest that carries no signature (see restore-guard.ts). */
+  /** Restore a manifest that carries no signature (see restore/guard.ts). */
   allowUnauthenticated?: ManifestTrust["allowUnauthenticated"];
   /**
    * Restoring onto a different machine: relocate the session stores and
@@ -641,7 +647,9 @@ export async function applyPendingRestore(options: {
   settings: BackupSettings;
   home?: string;
   beforeApply?: () => void | Promise<void>;
-}): Promise<(RestoreReport & { requestedBy?: string }) | null> {
+}): Promise<
+  (RestoreReport & { requestedBy?: string; frontend?: string }) | null
+> {
   const home = options.home ?? dirs.root;
   const pending = await readRestorePending(home);
   if (!pending) return null;
@@ -654,7 +662,11 @@ export async function applyPendingRestore(options: {
       beforeApply: options.beforeApply,
     });
     await clearRestorePending(home);
-    return { ...report, requestedBy: pending.requestedBy };
+    return {
+      ...report,
+      requestedBy: pending.requestedBy,
+      frontend: pending.frontend,
+    };
   } catch (err) {
     logWarn("backup", `Staged restore of ${pending.id} failed: ${String(err)}`);
     await clearRestorePending(home);

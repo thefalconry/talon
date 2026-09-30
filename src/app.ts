@@ -128,10 +128,18 @@ stampDaemonOwner();
  *
  * Never throws: a failed restore still boots the daemon (with the reason
  * in the log and the request deleted, so the next boot is normal).
+ * Returns the confirmation line and who asked for it, so it can be sent
+ * back to that chat once the frontends are up.
  */
-async function applyStagedRestore(): Promise<string | null> {
+async function applyStagedRestore(): Promise<{
+  text: string;
+  requestedBy?: string;
+  frontend?: string;
+} | null> {
   const { applyPendingRestore, readRestorePending } =
     await import("./core/backup/index.js");
+  const { formatRestoreNotice } =
+    await import("./core/backup/restore/notice.js");
   if (!(await readRestorePending())) return null;
   const { loadConfig } = await import("./core/config/index.js");
   const { resolveBackupSettings } = await import("./core/backup/plan.js");
@@ -141,12 +149,11 @@ async function applyStagedRestore(): Promise<string | null> {
     beforeApply: closeDatabase,
   });
   if (!report) return null;
-  return (
-    `♻️ Restored snapshot ${report.id}` +
-    (report.checkpointId
-      ? ` (previous state saved as checkpoint ${report.checkpointId})`
-      : "")
-  );
+  return {
+    text: formatRestoreNotice(report),
+    requestedBy: report.requestedBy,
+    frontend: report.frontend,
+  };
 }
 
 /**
@@ -546,12 +553,21 @@ async function main(): Promise<void> {
   // Phase 0 accounting (docs/ts-migration-plan.md): the boot is over the
   // moment the frontends are listening, so the totals are folded into the
   // metrics store here, from the same uptime figure the log line prints.
-  // A restore applied at boot happened before any frontend existed, so the
-  // operator hears about it here, on the first channel that can carry it.
+  // A restore applied at boot happened before any frontend existed, so it
+  // is reported here, on the first channels that can carry it: the chat
+  // that asked for it, or the admin's primary chat when that one can't be
+  // reached. Not awaited — delivery may retry while a frontend finishes
+  // connecting, and the boot shouldn't wait on a courtesy message.
   if (restoreReport) {
     const { notifyAdmin } =
       await import("./core/frontend-runtime/admin-notify.js");
-    await notifyAdmin(restoreReport);
+    const { deliverRestoreNotice } =
+      await import("./core/backup/restore/notice.js");
+    void deliverRestoreNotice({
+      text: restoreReport.text,
+      requester: restoreReport,
+      notifyAdmin,
+    });
   }
   // Same reasoning for a crash: the process that died couldn't say so,
   // so the marker it left is announced now. The probes start here too —

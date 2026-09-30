@@ -166,6 +166,7 @@ export async function stageRestore(chatId: string, id: string): Promise<void> {
     id,
     requestedAt: Date.now(),
     requestedBy: chatId,
+    frontend: "telegram",
   });
   respawnSelf(`telegram /backup restore ${id}`);
 }
