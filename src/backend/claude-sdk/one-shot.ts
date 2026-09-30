@@ -21,7 +21,7 @@ import { EFFORT_MAP } from "./constants.js";
 import { buildMcpServers, buildPluginMcpServers } from "./options.js";
 import { isBackgroundToolContext } from "../../core/agents/context.js";
 import { warnIfBelowCacheMinimum } from "../runtime/cache/cache-telemetry.js";
-import { emitAssistantText } from "../runtime/one-shot-hooks.js";
+import { emitAssistantText, emitSessionId } from "../runtime/one-shot-hooks.js";
 
 const DEFAULT_SUBPROCESS_KILL_GRACE_MS = 5 * 1000;
 
@@ -68,6 +68,8 @@ export async function runOneShotAgent(
     abortController,
     appendLog,
     onAssistantText,
+    resumeSessionId,
+    onSessionId,
   } = params;
 
   // Reasoning effort is opt-in for background runs (config `heartbeatEffort`
@@ -96,7 +98,17 @@ export async function runOneShotAgent(
     // dream). Same as chat minus `Agent` — nested sub-agent dispatch from
     // inside an unattended pass complicates lifecycle tracking.
     tools: [...ALLOWED_TOOLS_BACKGROUND],
+    // A sub-agent interrupted by a daemon restart continues its own SDK
+    // session: the transcript (brief, tool calls, results) is intact on disk
+    // and the prompt below is only the "you were interrupted" note.
+    ...(resumeSessionId ? { resume: resumeSessionId } : {}),
   };
+  if (resumeSessionId) {
+    log(
+      "agent",
+      `[${contextLabel}] Claude one-shot resuming session ${resumeSessionId}`,
+    );
+  }
 
   if (reasoningEffort && !thinkingConfig) {
     // `minimal` / `xhigh` are Codex-side vocabulary with no Claude
@@ -128,7 +140,16 @@ export async function runOneShotAgent(
   // The final `result` message carries the run's total token usage — the
   // settlement figure the task table records.
   let usage: OneShotUsage | undefined;
+  let sessionReported: string | undefined;
   for await (const msg of qi) {
+    // Every SDK message carries the session id; report it the first time it
+    // is seen (and again only if it ever changes — a resumed session can be
+    // forked to a new id).
+    const sid = (msg as { session_id?: unknown }).session_id;
+    if (typeof sid === "string" && sid && sid !== sessionReported) {
+      sessionReported = sid;
+      emitSessionId(onSessionId, sid);
+    }
     await formatAndAppendMessage(appendLog, msg, onAssistantText);
     if (msg.type === "result") {
       const u = msg.usage;

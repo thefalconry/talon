@@ -62,6 +62,8 @@ const claudeSdkFactory: BackendFactory = {
 
     const background: BackgroundRunner = {
       runOneShotAgent: (p) => host.runOneShot(p),
+      // Honours resumeSessionId (SDK `resume`) and reports the session id.
+      supportsResume: true,
       // Not a protocol-table row yet: subprocess eviction reaches into
       // the SDK's own children, so it belongs to the host — but the
       // design's message table has no request for it. Tracked as an open

@@ -23,7 +23,9 @@ export {
   clampTimeout,
   getAgentCaps,
   initAgents,
+  interruptAgentsForRestart,
   killAgent,
+  resumeAgentsAfterRestart,
   shutdownAgents,
   spawnAgent,
 } from "./runner.js";

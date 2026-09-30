@@ -24,8 +24,19 @@
  * `spawnAgent` returns as soon as the run is under way: the caller (a chat
  * turn or another agent) keeps working and hears back through the wake turn
  * or its mailbox.
+ *
+ *   - **Restarts are not deaths.** Every agent is mirrored to the `agents`
+ *     table (see the registry's `persist` hook). A daemon shutdown parks the
+ *     live ones (`interruptAgentsForRestart`) before it tears the backends
+ *     down, so the abort that follows is not recorded as a kill and the
+ *     parent is not told the agent died. On the next boot
+ *     `resumeAgentsAfterRestart` brings each one back under its original id:
+ *     on a backend that can resume (Claude SDK session, Codex thread) it
+ *     continues its own conversation with a short "you were interrupted"
+ *     note; elsewhere it is re-briefed with the tail of its previous run log.
  */
 
+import { readFile } from "node:fs/promises";
 import { dirs } from "../../util/paths.js";
 import { log, logError, logWarn } from "../../util/log.js";
 import {
@@ -59,9 +70,14 @@ import {
 import {
   agentLogHeader,
   agentLogPath,
+  agentResumeLogHeader,
   buildAgentPrompt,
   buildAgentSystemPrompt,
+  buildRebriefPrompt,
+  buildResumePrompt,
 } from "./prompt.js";
+import * as agentsRepo from "../../storage/repositories/agents-repo.js";
+import type { PersistedAgent } from "../../storage/repositories/agents-repo.js";
 import { agentRegistry } from "./registry.js";
 import type {
   AgentCaps,
@@ -257,6 +273,9 @@ export async function spawnAgent(
       ...(spec.reasoningEffort
         ? { reasoningEffort: spec.reasoningEffort }
         : {}),
+      ...(spec.model ? { requestedModel: spec.model } : {}),
+      timeoutMs: spec.timeoutMs ?? capsHolder.caps.defaultTimeoutMs,
+      cwd: dirs.workspace,
     },
     capsHolder.caps,
   );
@@ -293,6 +312,16 @@ export async function spawnAgent(
   };
 }
 
+/**
+ * How a restarted run picks up. `sessionId` set = continue that backend
+ * conversation; unset = a fresh conversation re-briefed with `prompt`.
+ */
+interface ResumePlan {
+  readonly prompt: string;
+  readonly sessionId?: string;
+  readonly interruptedAt: number;
+}
+
 /** Build the one-shot params for a run, wired to its log and text capture. */
 async function buildRunParams(
   record: AgentRecord,
@@ -300,13 +329,22 @@ async function buildRunParams(
   model: string,
   abortController: AbortController,
   capture: { last: string },
+  resume?: ResumePlan,
 ): Promise<OneShotAgentParams> {
   const appendLog = await openRunLog(
     agentLogPath(record.id),
-    agentLogHeader(record, model),
+    resume
+      ? agentResumeLogHeader(
+          record,
+          model,
+          resume.interruptedAt,
+          resume.sessionId,
+        )
+      : agentLogHeader(record, model),
   );
+  const id = record.id;
   return {
-    prompt: buildAgentPrompt(record.brief),
+    prompt: resume ? resume.prompt : buildAgentPrompt(record.brief),
     systemPrompt: buildAgentSystemPrompt({
       agentId: record.id,
       label: record.label,
@@ -323,6 +361,10 @@ async function buildRunParams(
       const trimmed = text.trim();
       if (trimmed) capture.last = trimmed;
     },
+    // Persisted the moment the backend reports it, so a restart at any
+    // point after the first message can resume the conversation.
+    onSessionId: (sessionId) => agentRegistry.setSessionId(id, sessionId),
+    ...(resume?.sessionId ? { resumeSessionId: resume.sessionId } : {}),
     ...(spec.reasoningEffort ? { reasoningEffort: spec.reasoningEffort } : {}),
   };
 }
@@ -385,6 +427,7 @@ async function runAgent(
   spec: AgentSpawnSpec,
   resolved: { model: string; background: BackgroundRunner },
   acquired: Awaited<ReturnType<typeof acquireBackendInstance>>,
+  resume?: ResumePlan,
 ): Promise<void> {
   const { model, background } = resolved;
   const { release } = acquired;
@@ -415,8 +458,11 @@ async function runAgent(
       model,
       abortController,
       capture,
+      resume,
     );
-    if (abortController.signal.aborted) {
+    if (agentRegistry.isInterrupted(id)) {
+      settled = null;
+    } else if (abortController.signal.aborted) {
       // A kill that lands during startup — while the backend is being
       // acquired or the log opened — must not be lost. Handing an
       // already-aborted signal to a backend relies on it checking, and not
@@ -437,16 +483,31 @@ async function runAgent(
         evictLabel: agentContextLabel(id),
       });
       recordBackendRunUsage(record.backendId, usage ?? undefined);
-      settled = settleSuccess(id, task, capture.last, usage ?? undefined);
+      // A backend may swallow the shutdown abort and return normally — the
+      // run still did not finish, so it must not settle as done/failed.
+      settled = agentRegistry.isInterrupted(id)
+        ? null
+        : settleSuccess(id, task, capture.last, usage ?? undefined);
     }
   } catch (err) {
-    settled = settleFailure(id, task, err);
+    settled = agentRegistry.isInterrupted(id)
+      ? null
+      : settleFailure(id, task, err);
   } finally {
     await release().catch((err: unknown) =>
       logError("agents", `failed to release backend for ${id}`, err),
     );
   }
 
+  if (agentRegistry.isInterrupted(id)) {
+    // Parked by a daemon shutdown: the persisted row stays `running` for
+    // the next boot to resume. No settlement, no delivery, no reaping — the
+    // parent is not told its agent died, because it didn't.
+    task.fail(new Error("interrupted by daemon shutdown — will resume"));
+    agentRegistry.releaseInterrupted(id);
+    log("agents", `${id} "${record.label}" interrupted by shutdown — parked`);
+    return;
+  }
   if (!settled) return;
   log(
     "agents",
@@ -486,11 +547,259 @@ export function killAgent(agentId: string): boolean {
 }
 
 /**
+ * Park every live agent for the next boot. Called FIRST in a graceful
+ * shutdown — before the frontends and the backend pool go down, since
+ * tearing a backend down aborts the runs on it and an unparked agent would
+ * record that abort as its death. Idempotent.
+ */
+export function interruptAgentsForRestart(): number {
+  const parked = agentRegistry.interruptAll();
+  if (parked > 0) {
+    log("agents", `Shutdown: parked ${parked} running agent(s) for resume`);
+  }
+  return parked;
+}
+
+/**
  * Abort every live agent — the shutdown lever, alongside heartbeat's and
- * cron's. Returns how many kills were requested.
+ * cron's. Agents are parked first (a no-op if the shutdown already did), so
+ * this abort ends the process's hold on them without ending the agents:
+ * the next boot resumes them. Returns how many aborts were requested.
  */
 export function shutdownAgents(): number {
+  interruptAgentsForRestart();
   const killed = agentRegistry.killAll();
   if (killed > 0) log("agents", `Shutdown: aborted ${killed} running agent(s)`);
   return killed;
+}
+
+// ── Resume after restart ─────────────────────────────────────────────────────
+
+/** A restart may resume one agent at most this many times. */
+export const MAX_AGENT_RESUMES = 3;
+/** An agent interrupted longer ago than this is not resumed. */
+const AGENT_RESUME_STALE_MS = 24 * 60 * 60 * 1000;
+/** A resumed run always gets at least this much wall-clock. */
+const AGENT_RESUME_MIN_TIMEOUT_MS = 10 * 60 * 1000;
+/** Settled rows are kept this long for inspection, then pruned at boot. */
+const SETTLED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** How much of the previous run log a re-briefed agent is shown. */
+const REBRIEF_LOG_TAIL_CHARS = 12_000;
+
+/** The last `max` characters of an agent's previous run log, if any. */
+async function previousLogTail(agentId: string, max: number): Promise<string> {
+  try {
+    const text = await readFile(agentLogPath(agentId), "utf-8");
+    return text.length > max ? `…${text.slice(text.length - max)}` : text;
+  } catch {
+    return "";
+  }
+}
+
+/** Settle a restored agent without running it, and tell its parent. */
+async function settleRestored(
+  record: AgentRecord,
+  patch: Parameters<typeof agentRegistry.settle>[1],
+): Promise<void> {
+  const settled = agentRegistry.settle(record.id, patch);
+  if (!settled) return;
+  log(
+    "agents",
+    `${record.id} "${record.label}" → ${settled.state} (after restart)`,
+  );
+  reapChildren(settled);
+  await deliverSettlement(settled).catch((err: unknown) =>
+    logError("agents", `delivery failed for ${record.id}`, err),
+  );
+}
+
+/** Mark a row that cannot even be restored (its parent agent is gone). */
+function abandonRow(saved: PersistedAgent, error: string): void {
+  try {
+    agentsRepo.upsert({
+      ...saved,
+      state: "failed",
+      error,
+      endedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    logError("agents", `could not mark ${saved.id} abandoned`, err);
+  }
+}
+
+/**
+ * Resolve the model a resumed run uses: the one it ran on, else the one it
+ * asked for, else the backend default — a model withdrawn across the
+ * restart must not strand the agent.
+ */
+async function resolveResumeRun(
+  backend: Backend,
+  backendId: string,
+  candidates: ReadonlyArray<string | undefined>,
+): Promise<Awaited<ReturnType<typeof resolveRun>>> {
+  let last: Awaited<ReturnType<typeof resolveRun>> = {
+    ok: false,
+    error: "no model",
+  };
+  const tried = new Set<string | undefined>();
+  for (const candidate of [...candidates, undefined]) {
+    if (tried.has(candidate)) continue;
+    tried.add(candidate);
+    last = await resolveRun(backend, backendId, candidate);
+    if (last.ok) return last;
+  }
+  return last;
+}
+
+/** Bring one interrupted agent back. Never throws. */
+async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
+  // A crash leaves no interruption stamp: charge the run up to its last
+  // persisted write, which is as close as anyone can know.
+  const interruptedAt = saved.interruptedAt ?? saved.updatedAt;
+  const elapsedMs =
+    saved.interruptedAt === undefined && saved.startedAt !== undefined
+      ? saved.elapsedMs + Math.max(0, saved.updatedAt - saved.startedAt)
+      : saved.elapsedMs;
+
+  const record = agentRegistry.restore({ ...saved, elapsedMs, interruptedAt });
+  if (!record) {
+    abandonRow(
+      saved,
+      "interrupted by a daemon restart; its parent agent did not survive it",
+    );
+    logWarn("agents", `${saved.id}: parent gone after restart — abandoned`);
+    return;
+  }
+
+  if (saved.reported) {
+    // It finished its job (report_result landed) and was only waiting to
+    // wind down — deliver what it said instead of running it again.
+    await settleRestored(record, { state: "done" });
+    return;
+  }
+  if (saved.resumeCount >= MAX_AGENT_RESUMES) {
+    await settleRestored(record, {
+      state: "failed",
+      error:
+        `interrupted by ${saved.resumeCount + 1} daemon restarts; not ` +
+        `resumed again. Its run log is ${agentLogPath(saved.id)}.`,
+    });
+    return;
+  }
+  if (now - interruptedAt > AGENT_RESUME_STALE_MS) {
+    await settleRestored(record, {
+      state: "failed",
+      error:
+        `interrupted by a daemon restart at ${new Date(interruptedAt).toISOString()} ` +
+        `and the daemon was down too long to resume it. Its run log is ` +
+        `${agentLogPath(saved.id)}.`,
+    });
+    return;
+  }
+
+  const backendId = saved.backendId;
+  let acquired: Awaited<ReturnType<typeof acquireBackendInstance>>;
+  try {
+    acquired = await acquireBackendInstance(backendId);
+  } catch (err) {
+    await settleRestored(record, {
+      state: "failed",
+      error:
+        `interrupted by a daemon restart, and its backend "${backendId}" ` +
+        `is unavailable after it: ${errText(err)}`,
+    });
+    return;
+  }
+  const resolved = await resolveResumeRun(acquired.backend, backendId, [
+    saved.model,
+    saved.requestedModel,
+  ]);
+  if (!resolved.ok) {
+    await acquired.release().catch(() => {});
+    await settleRestored(record, {
+      state: "failed",
+      error: `interrupted by a daemon restart and could not resume: ${resolved.error}`,
+    });
+    return;
+  }
+
+  const canResume =
+    resolved.background.supportsResume === true &&
+    saved.sessionId !== undefined;
+  const minutes = Math.round(elapsedMs / 60_000);
+  const plan: ResumePlan = canResume
+    ? {
+        prompt: buildResumePrompt({ interruptedAt, elapsedMinutes: minutes }),
+        sessionId: saved.sessionId!,
+        interruptedAt,
+      }
+    : {
+        prompt: buildRebriefPrompt({
+          brief: saved.brief,
+          interruptedAt,
+          elapsedMinutes: minutes,
+          logPath: agentLogPath(saved.id),
+          logTail: await previousLogTail(saved.id, REBRIEF_LOG_TAIL_CHARS),
+        }),
+        interruptedAt,
+      };
+
+  const budget =
+    (saved.timeoutMs ?? capsHolder.caps.defaultTimeoutMs) - elapsedMs;
+  const timeoutMs = Math.max(AGENT_RESUME_MIN_TIMEOUT_MS, budget);
+  const spec: AgentSpawnSpec = {
+    brief: saved.brief,
+    label: saved.label,
+    parent: record.parent,
+    backendId,
+    ...(saved.requestedModel ? { model: saved.requestedModel } : {}),
+    ...(record.reasoningEffort
+      ? { reasoningEffort: record.reasoningEffort }
+      : {}),
+    timeoutMs,
+  };
+  agentRegistry.markResumed(record.id);
+  log(
+    "agents",
+    `${record.id} "${record.label}" resuming after restart ` +
+      `(${canResume ? `session ${saved.sessionId}` : "re-briefed"}, ` +
+      `${backendId}/${resolved.model}, ${Math.round(timeoutMs / 1000)}s left, ` +
+      `resume #${saved.resumeCount + 1})`,
+  );
+  void runAgent(record, spec, resolved, acquired, plan);
+}
+
+/**
+ * Boot-time: respawn every agent the previous process left running. Call
+ * once, after the dispatcher, backend pool and frontends are up (a resumed
+ * agent reaches its tools and its parent through them). Parents come back
+ * before their children, so a child re-attaches to its live parent.
+ * Returns how many rows were considered.
+ */
+export async function resumeAgentsAfterRestart(): Promise<number> {
+  const now = Date.now();
+  try {
+    const pruned = agentsRepo.pruneSettled(now - SETTLED_RETENTION_MS);
+    if (pruned > 0) log("agents", `Pruned ${pruned} settled agent row(s)`);
+  } catch (err) {
+    logError("agents", "prune of settled agent rows failed", err);
+  }
+  let rows: PersistedAgent[];
+  try {
+    rows = agentsRepo.listInterrupted();
+  } catch (err) {
+    logError("agents", "could not read interrupted agents", err);
+    return 0;
+  }
+  if (rows.length === 0) return 0;
+  log("agents", `Resuming ${rows.length} agent(s) interrupted by the restart`);
+  for (const saved of rows) {
+    try {
+      await resumeOne(saved, now);
+    } catch (err) {
+      logError("agents", `resume of ${saved.id} failed`, err);
+    }
+  }
+  return rows.length;
 }

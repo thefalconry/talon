@@ -26,7 +26,11 @@ import {
   runStartupCatchup,
 } from "./core/background/cron/scheduler.js";
 import { shutdownTriggers } from "./core/background/triggers/index.js";
-import { shutdownAgents } from "./core/agents/index.js";
+import {
+  interruptAgentsForRestart,
+  resumeAgentsAfterRestart,
+  shutdownAgents,
+} from "./core/agents/index.js";
 import { stopBackupScheduler } from "./core/backup/index.js";
 import { pruneSettledTriggers } from "./storage/triggers.js";
 import { startWatchdog, stopWatchdog } from "./util/watchdog.js";
@@ -261,6 +265,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log("shutdown", `${signal} received, shutting down gracefully...`);
+  // Park running sub-agents before anything is torn down: stopping the
+  // frontends and the backend pool aborts their runs, and an agent that is
+  // not parked first would record that abort as its death. Parked agents
+  // stay `running` in the store and the next boot resumes them.
+  crashStep("sub-agent park", () => interruptAgentsForRestart());
 
   const deadlineAt = Date.now() + SHUTDOWN_TIMEOUT_MS;
   const forceTimer = setTimeout(() => {
@@ -353,8 +362,8 @@ async function gracefulShutdown(signal: string): Promise<void> {
     triggerPruneTimer = null;
   });
   await shutdownStep("triggers", shutdownTriggers);
-  // Sub-agents are isolated one-shot runs: aborting them is all the daemon
-  // can do, and their parents are gone with the process anyway.
+  // Sub-agents were parked at the top of the shutdown; this aborts whatever
+  // is still running so the process can exit. They resume on the next boot.
   await shutdownStep("sub-agents", shutdownAgents);
   await shutdownStep("watchdog", stopWatchdog);
   await shutdownStep("resource sampler", stopResourceSampler);
@@ -449,6 +458,12 @@ async function main(): Promise<void> {
   // what follows runs while the daemon is alive — not, as it once did,
   // hours later during shutdown.
   await bootPhase("frontends start", () => startFrontends(frontends));
+  // Sub-agents the previous process left running come back now that their
+  // tools (gateway, frontends) and their parents' wake path are up.
+  // Fire-and-forget: a slow backend acquisition must not hold the boot.
+  resumeAgentsAfterRestart().catch((err) =>
+    logError("agents", "resume after restart failed", err),
+  );
   // Phase 0 accounting (docs/ts-migration-plan.md): the boot is over the
   // moment the frontends are listening, so the totals are folded into the
   // metrics store here, from the same uptime figure the log line prints.

@@ -20,7 +20,7 @@
 import type { OneShotAgentParams, OneShotUsage } from "../../core/types.js";
 import { log, logWarn } from "../../util/log.js";
 import { appendBackendSuffix } from "../runtime/index.js";
-import { emitAssistantText } from "../runtime/one-shot-hooks.js";
+import { emitAssistantText, emitSessionId } from "../runtime/one-shot-hooks.js";
 import { ensureCodex, getCodexAuthInfo } from "./init.js";
 import {
   CODEX_SYSTEM_PROMPT_SUFFIX,
@@ -81,6 +81,8 @@ export async function runOneShotAgent(
     abortController,
     appendLog,
     onAssistantText,
+    resumeSessionId,
+    onSessionId,
   } = params;
 
   const codex = ensureCodex(contextLabel);
@@ -93,7 +95,10 @@ export async function runOneShotAgent(
   // Codex SDK doesn't expose `system` on runStreamed — the system
   // prompt gets prepended to the user prompt for a one-shot, since
   // there's no thread continuity to worry about.
-  const inputText = `${finalSystemPrompt}\n\n---\n\n${prompt}`;
+  // A resumed thread already carries the system prompt from its first turn.
+  const inputText = resumeSessionId
+    ? prompt
+    : `${finalSystemPrompt}\n\n---\n\n${prompt}`;
 
   const resolved = resolveOneShotModel(requestedModel);
   const activeModel = resolved.model;
@@ -124,12 +129,23 @@ export async function runOneShotAgent(
     );
   }
 
-  const thread = codex.startThread({
+  const threadOptions = {
     model: activeModel,
     skipGitRepoCheck: true,
     ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
     ...CODEX_THREAD_PERMISSIONS,
-  });
+  };
+  // A sub-agent interrupted by a daemon restart continues its own thread.
+  const thread = resumeSessionId
+    ? codex.resumeThread(resumeSessionId, threadOptions)
+    : codex.startThread(threadOptions);
+  if (resumeSessionId) {
+    log(
+      "agent",
+      `[${contextLabel}] Codex one-shot resuming thread ${resumeSessionId}`,
+    );
+    emitSessionId(onSessionId, resumeSessionId);
+  }
 
   try {
     if (abortController.signal.aborted) {
@@ -145,6 +161,12 @@ export async function runOneShotAgent(
     let usage: OneShotUsage | undefined;
     for await (const event of events) {
       if (abortController.signal.aborted) break;
+      if (
+        event.type === "thread.started" &&
+        typeof (event as { thread_id?: unknown }).thread_id === "string"
+      ) {
+        emitSessionId(onSessionId, (event as { thread_id: string }).thread_id);
+      }
       await appendCodexEvent(appendLog, event, onAssistantText);
       if (event.type === "turn.completed") {
         const u = (event as { usage?: Record<string, number> }).usage;
