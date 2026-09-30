@@ -259,8 +259,17 @@ export function classify(err: unknown): TalonError {
     });
   }
 
-  // Session expired
-  if (/session.*expired|expired.*session|invalid.*resume/i.test(msg)) {
+  // Session expired — or, for Claude, gone: the CLI answers a resume of a
+  // session whose transcript is missing with "No conversation found with
+  // session ID: …". That is a definite not-found, and without this match
+  // every later turn in the chat fails the same way. The reset that
+  // follows archives the old id (resetSession), so a transcript that
+  // turns up again can be re-attached.
+  if (
+    /session.*expired|expired.*session|invalid.*resume|no conversation found/i.test(
+      msg,
+    )
+  ) {
     return new TalonError(msg, {
       reason: "session_expired",
       retryable: false,
