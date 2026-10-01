@@ -306,6 +306,39 @@ jobs:
         shell: bash
         run: node ../../scripts/check-pe-hardening.mjs build/windows/x64/runner/Release/*.exe
 
+      # JVM unit tests for the pure-Kotlin parts of the native voice bridge
+      # (sentence splitting, the neural-speech playback pipeline). Runs after
+      # the APK build so Flutter has generated the Gradle wrapper and
+      # local.properties, and the release variant's classes are already
+      # compiled.
+      - name: Android unit tests
+        if: matrix.platform == 'android'
+        shell: bash
+        working-directory: apps/companion/android
+        run: |
+          set -euo pipefail
+          # Flutter writes the wrapper on first build; plain gradle is a fallback.
+          if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=gradle; fi
+          "$GRADLE" --no-daemon :app:testReleaseUnitTest
+
+      # Report the APK and its native-library weight per ABI so size changes
+      # (e.g. the neural-voice JNI library) are visible on every PR.
+      - name: APK size report
+        if: matrix.platform == 'android'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          {
+            echo "### Android APK size"
+            echo
+            echo "\`app-release.apk\`: $(stat -c %s "$APK") bytes"
+            echo
+            echo '```'
+            unzip -lv "$APK" 'lib/*' | awk 'NR>3 && $NF ~ /^lib\// {printf "%-50s %12s %12s\n", $NF, $1, $3}'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       # Belt and braces for the keystore guard above: read the signer back
       # out of the built APK. PR/fork builds are debug-signed by design and
       # only print it; a release APK signed with the debug key fails here.

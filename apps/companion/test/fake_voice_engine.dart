@@ -60,6 +60,7 @@ class SilentVoiceEngine implements VoiceEngine {
     double pitch = 1.0,
     String? voiceName,
     bool flush = true,
+    int? neuralSpeaker,
   }) async =>
       true;
   @override

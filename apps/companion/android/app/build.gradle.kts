@@ -1,3 +1,6 @@
+import java.net.URI
+import java.security.MessageDigest
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -67,6 +70,26 @@ android {
         }
     }
 
+    // The sherpa-onnx AAR ships its JNI library for four ABIs. Flutter's APK
+    // also carries x86_64 (emulators only), and x86 is not a Flutter target at
+    // all: drop the neural-voice library for both. On those ABIs the native
+    // load fails cleanly and voice mode stays on Android TTS.
+    packaging {
+        jniLibs {
+            excludes += setOf(
+                "lib/x86/libsherpa-onnx-jni.so",
+                "lib/x86/libonnxruntime.so",
+                "lib/x86_64/libsherpa-onnx-jni.so",
+            )
+        }
+    }
+
+    testOptions {
+        // JVM unit tests (src/test) cover pure-Kotlin logic only; any stray
+        // android.* call returns a default instead of throwing.
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildTypes {
         release {
             signingConfig = if (releaseKeystore != null) {
@@ -94,6 +117,58 @@ kotlin {
     }
 }
 
+// ── sherpa-onnx (on-device neural voice) ────────────────────────────────────
+//
+// Kokoro TTS runs on sherpa-onnx. The AAR is the upstream GitHub release
+// artifact, pinned by version AND SHA-256 and fetched once into the Gradle
+// user home (which CI caches), rather than a JitPack build or an unpinned
+// Maven coordinate. Android only: no other platform's build references it.
+//
+// Licensing: this AAR statically links espeak-ng (GPL-3.0), so the APK it is
+// built into is distributed under GPL-3.0 as a combined work. See NOTICE.
+// TODO(sherpa-onnx 2.0): upstream plans to drop espeak-ng
+// (https://github.com/k2-fsa/sherpa-onnx/issues/3731). Re-pin then and revisit
+// the APK licence note in NOTICE and docs/companion-voice.md.
+val sherpaOnnxVersion = "1.13.8"
+val sherpaOnnxSha256 = "b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471"
+
+fun sha256Hex(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(1 shl 16)
+        while (true) {
+            val n = input.read(buffer)
+            if (n < 0) break
+            digest.update(buffer, 0, n)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+// Static-onnxruntime variant: one .so per ABI instead of two, ~12 MB smaller.
+val sherpaOnnxAar: File = run {
+    val name = "sherpa-onnx-static-link-onnxruntime-$sherpaOnnxVersion.aar"
+    val dir = File(gradle.gradleUserHomeDir, "caches/talon-pinned/sherpa-onnx")
+    val aar = File(dir, name)
+    if (aar.isFile && sha256Hex(aar) == sherpaOnnxSha256) return@run aar
+    dir.mkdirs()
+    val url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$sherpaOnnxVersion/$name"
+    logger.lifecycle("Downloading $url")
+    val partial = File(dir, "$name.part")
+    URI(url).toURL().openStream().use { input ->
+        partial.outputStream().use { output -> input.copyTo(output) }
+    }
+    val actual = sha256Hex(partial)
+    if (actual != sherpaOnnxSha256) {
+        partial.delete()
+        throw GradleException(
+            "sherpa-onnx AAR checksum mismatch: expected $sherpaOnnxSha256, got $actual",
+        )
+    }
+    if (!partial.renameTo(aar)) throw GradleException("Could not move $partial to $aar")
+    aar
+}
+
 dependencies {
     // Backports java.time et al. so flutter_local_notifications' AAR metadata
     // check passes (see isCoreLibraryDesugaringEnabled above).
@@ -111,6 +186,12 @@ dependencies {
     // on the classpath transitively via the Flutter embedding; declared so the
     // self-updater doesn't silently depend on someone else's dependency.
     implementation("androidx.core:core-ktx:1.13.1")
+
+    // On-device neural voice (Kokoro). Pinned + hash-checked above.
+    implementation(files(sherpaOnnxAar))
+
+    // JVM unit tests for the pure-Kotlin voice pipeline (src/test).
+    testImplementation("junit:junit:4.13.2")
 }
 
 flutter {
