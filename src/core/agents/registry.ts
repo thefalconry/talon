@@ -22,6 +22,7 @@ import type {
   AgentRecord,
   AgentResult,
   AgentState,
+  AgentTrail,
 } from "./types.js";
 import type { TaskUsage } from "../tasks/types.js";
 import type { AgentSettledEvent, AgentSpawnedEvent } from "../bus/events.js";
@@ -73,6 +74,8 @@ export interface AgentSettlement {
   readonly result?: AgentResult;
   readonly error?: string;
   readonly usage?: TaskUsage;
+  /** What the run had been doing — see `trail.ts`. */
+  readonly trail?: AgentTrail;
 }
 
 export type RegisterOutcome =
@@ -559,6 +562,7 @@ export class AgentRegistry {
     if (patch.result !== undefined) record.result = patch.result;
     if (patch.error !== undefined) record.error = patch.error;
     if (patch.usage !== undefined) record.usage = patch.usage;
+    if (patch.trail !== undefined) record.trail = patch.trail;
 
     const settled = snapshot(entry);
     this.persist(entry);

@@ -25,7 +25,8 @@ other agent work started. It has:
   move it to one with more headroom) and that backend's default model. An
   optional `agents.allowedBackends` allowlist bounds both;
 - a **mailbox** its parent can put instructions in;
-- a hard **timeout**, a **task-table** entry, and a per-run markdown log at
+- an optional hard **timeout** (none by default), a **no-progress
+  watchdog**, a **task-table** entry, and a per-run markdown log at
   `~/.talon/workspace/logs/agents/<id>.md`.
 
 Spawning returns immediately with the id. The parent keeps working; the
@@ -69,6 +70,34 @@ so there is nothing to report on) and the tool returns the reason.
 A result reported before a kill or a timeout is kept: the parent gets the
 partial answer plus the terminal state. **Every** terminal state is
 delivered — silence is never an outcome.
+
+**Work survives a cut-short run.** While an agent runs, Talon keeps a small
+trail of it (`core/agents/trail.ts`): its last three `message_parent` notes,
+its last three assistant texts, and the files it wrote or edited (scraped
+from the run log — Claude-style `Write`/`Edit` tool calls and Codex file
+changes; best-effort). When a run ends `killed`, `timed_out` or `failed`,
+the parent's wake-up carries that trail under the error, so it can pick up
+from where the agent stopped instead of starting over.
+
+### Timeouts and the watchdog
+
+There is **no hard timeout by default**: a run ends when it reports, is
+killed, or stalls. A spawn may still pass `timeout_s` (floored at 30s), a
+deployment may set `agents.defaultTimeoutMs` for spawns that pass none, and
+`agents.maxTimeoutMs` caps every run when set.
+
+What ends a run that has gone quiet is the **no-progress watchdog**
+(`core/agents/watchdog.ts`). Any run-log line (a tool call, a tool result)
+or assistant text is a sign of life. With `agents.stallTimeoutMs = N`
+(default 15 min):
+
+1. after **N** of silence the agent gets a `[Watchdog]` note in its mailbox;
+2. after **2N** its parent gets an interim note (it can `send_to_agent` or
+   `kill_agent`);
+3. after **3N** the run is aborted and settles `timed_out` with
+   `stalled: …` as its error, plus its trail.
+
+Any activity starts the ladder over. `stallTimeoutMs: 0` disables it.
 
 When an agent settles, its own still-running children are killed. Their
 reports would have nowhere to go, so leaving them running only spends tokens.
@@ -253,7 +282,8 @@ the decision to talk to a human is made.
 "agents": {
   "maxConcurrent": 6,
   "maxDepth": 2,
-  "defaultTimeoutMs": 900000,
+  "stallTimeoutMs": 900000,
+  "maxTimeoutMs": 7200000,
   "allowedBackends": ["claude", "codex"]
 }
 ```
@@ -263,8 +293,12 @@ the decision to talk to a human is made.
   Claimed synchronously at registration, so concurrent spawns cannot both
   slip past it. A refused spawn's error names `agents.maxConcurrent`.
 - `maxDepth` (default 2) — `0` = chats only, `2` = chat → agent → agent.
-- `defaultTimeoutMs` (default 15 min) — per-spawn `timeout_s` is clamped to
-  [30s, 60min] at the tool boundary.
+- `defaultTimeoutMs` (optional, unset = none) — hard timeout for a spawn
+  that passes no `timeout_s`. Per-spawn values are floored at 30s.
+- `maxTimeoutMs` (optional, unset = none) — global ceiling on every run's
+  hard timeout, including spawns that set none.
+- `stallTimeoutMs` (default 15 min, 0 = off) — the watchdog step: ping at
+  N, warn the parent at 2N, kill at 3N.
 - `allowedBackends` (optional, unset = any) — backend ids a sub-agent may
   run on. `spawn_agent` refuses a backend outside it, whether named or
   inherited, with an error naming the list; a routed choice outside it
@@ -310,8 +344,8 @@ current on every lifecycle change.
     mid-flight, drain `check_inbox`, report once;
   - otherwise it starts a fresh conversation with the original brief plus
     the tail of its previous run log, told to continue rather than redo.
-- **Bounds.** The resumed run gets its remaining timeout (at least 10
-  minutes). An agent whose report had already landed is settled and
+- **Bounds.** A run with a hard timeout gets what it had left (at least 10
+  minutes); an uncapped run stays uncapped. An agent whose report had already landed is settled and
   delivered without rerunning. An agent interrupted more than
   `MAX_AGENT_RESUMES` (3) times, or down for more than 24 hours, or whose
   backend is gone, settles as `failed` and its parent is told why.

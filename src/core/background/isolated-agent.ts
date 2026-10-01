@@ -37,8 +37,11 @@ export interface IsolatedRunOptions {
   readonly background: BackgroundRunner;
   /** Fully-built one-shot params (must carry an `abortController`). */
   readonly params: OneShotAgentParams;
-  /** Hard timeout before the run is aborted. */
-  readonly timeoutMs: number;
+  /**
+   * Hard timeout before the run is aborted. Unset = none: the run is only
+   * ended by its own completion or by an abort of `params.abortController`.
+   */
+  readonly timeoutMs?: number;
   /** Bounded grace for the backend to honour the abort (default 30s). */
   readonly abortGraceMs?: number;
   /**
@@ -91,6 +94,7 @@ export async function runIsolatedAgent(
   const agentPromise = background.runOneShotAgent(params);
 
   const timeoutPromise = new Promise<never>((_, reject) => {
+    if (timeoutMs === undefined) return;
     timer = setTimeout(() => {
       timeoutError = new IsolatedAgentTimeoutError(timeoutMs);
       try {

@@ -4,8 +4,8 @@
  *
  * The shape is the heartbeat / cron-job shape, because a sub-agent *is* one
  * of those: acquire a backend, resolve a model, open a run log, register a
- * task, and hand `runOneShotAgent` to `runIsolatedAgent` for the hard
- * timeout → abort → grace → eviction discipline. Nothing here is
+ * task, and hand `runOneShotAgent` to `runIsolatedAgent` for the (optional)
+ * hard timeout → abort → grace → eviction discipline. Nothing here is
  * backend-specific, which is the whole point: sub-agents work on Claude,
  * Codex, Kilo, OpenCode and any future backend with a background capability.
  *
@@ -65,6 +65,7 @@ import {
 import { openRunLog } from "../background/run-log.js";
 import { agentContextLabel } from "./context.js";
 import {
+  deliverMessage,
   deliverSettlement,
   initAgentDelivery,
   type AgentDeliveryDeps,
@@ -77,7 +78,11 @@ import {
   buildAgentSystemPrompt,
   buildRebriefPrompt,
   buildResumePrompt,
+  buildStallPing,
+  buildStallWarning,
 } from "./prompt.js";
+import { closeTrail, openTrail, type RunTrail } from "./trail.js";
+import { startWatchdog, type WatchdogHandle } from "./watchdog.js";
 import * as agentsRepo from "../../storage/agents/repo.js";
 import type { PersistedAgent } from "../../storage/agents/repo.js";
 import { agentRegistry } from "./registry.js";
@@ -87,18 +92,32 @@ import type {
   AgentRecord,
   AgentSpawnOutcome,
   AgentSpawnSpec,
+  AgentTrail,
 } from "./types.js";
 
-/** Defaults for `config.agents`, applied when the block is absent. */
+/**
+ * Defaults for `config.agents`, applied when the block is absent. No hard
+ * timeout: the no-progress watchdog ends a run that has gone quiet, and a
+ * run that is still working is left to finish.
+ */
 export const DEFAULT_AGENT_CAPS: AgentCaps = {
   maxConcurrent: 6,
   maxDepth: 2,
-  defaultTimeoutMs: 15 * 60 * 1000,
+  stallTimeoutMs: 15 * 60 * 1000,
 };
 
-/** Floor and ceiling the tool boundary clamps a requested `timeout_s` into. */
+/** Floor the tool boundary clamps a requested `timeout_s` up to. */
 const MIN_TIMEOUT_MS = 30_000;
-const MAX_TIMEOUT_MS = 60 * 60 * 1000;
+
+/** Raised to abort a run the no-progress watchdog gave up on. */
+class AgentStalledError extends Error {
+  constructor(idleMs: number) {
+    super(
+      `stalled: no tool call or output for ${Math.round(idleMs / 60_000)} min`,
+    );
+    this.name = "AgentStalledError";
+  }
+}
 
 const capsHolder: { caps: AgentCaps } = { caps: DEFAULT_AGENT_CAPS };
 
@@ -112,7 +131,9 @@ export function initAgents(
     "agents",
     `Initialized — maxConcurrent=${capsHolder.caps.maxConcurrent} ` +
       `maxDepth=${capsHolder.caps.maxDepth} ` +
-      `timeout=${Math.round(capsHolder.caps.defaultTimeoutMs / 1000)}s` +
+      `timeout=${describeTimeout(capsHolder.caps.defaultTimeoutMs)} ` +
+      `ceiling=${describeTimeout(capsHolder.caps.maxTimeoutMs)} ` +
+      `stall=${describeTimeout(capsHolder.caps.stallTimeoutMs || undefined)}` +
       (capsHolder.caps.allowedBackends?.length
         ? ` allowedBackends=${capsHolder.caps.allowedBackends.join(",")}`
         : ""),
@@ -124,14 +145,38 @@ export function getAgentCaps(): AgentCaps {
   return capsHolder.caps;
 }
 
+/** "15m" / "90s" / "none" — for logs and tool text. */
+export function describeTimeout(ms: number | undefined): string {
+  if (ms === undefined || !(ms > 0)) return "none";
+  return ms % 60_000 === 0 ? `${ms / 60_000}m` : `${Math.round(ms / 1000)}s`;
+}
+
 /**
- * Clamp a model-supplied timeout into the supported window, or fall back to
- * the configured default. Applied at the tool boundary — `spawnAgent` itself
- * honours whatever it is handed, so the runner has one rule and not two.
+ * The hard timeout a run gets: the requested one, else
+ * `agents.defaultTimeoutMs`, either capped by `agents.maxTimeoutMs`; with
+ * none of those set, `undefined` — no hard timeout. Applied by the runner,
+ * so a resumed run follows the same rule as a fresh one.
  */
-export function clampTimeout(requestedMs: number | undefined): number {
-  if (requestedMs === undefined) return capsHolder.caps.defaultTimeoutMs;
-  return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, requestedMs));
+function effectiveTimeout(requestedMs: number | undefined): number | undefined {
+  const { defaultTimeoutMs, maxTimeoutMs } = capsHolder.caps;
+  const base = requestedMs ?? defaultTimeoutMs;
+  if (base === undefined) return maxTimeoutMs;
+  return maxTimeoutMs !== undefined ? Math.min(maxTimeoutMs, base) : base;
+}
+
+/**
+ * The tool boundary's rule: a model-supplied timeout is floored at 30s,
+ * then resolved like any other (`effectiveTimeout`). Returns `undefined`
+ * for "no hard timeout".
+ */
+export function clampTimeout(
+  requestedMs: number | undefined,
+): number | undefined {
+  return effectiveTimeout(
+    requestedMs !== undefined && Number.isFinite(requestedMs)
+      ? Math.max(MIN_TIMEOUT_MS, requestedMs)
+      : undefined,
+  );
 }
 
 /** The backend an agent inherits when the caller didn't pick one. */
@@ -326,7 +371,7 @@ export async function spawnAgent(
         ? { reasoningEffort: spec.reasoningEffort }
         : {}),
       ...(spec.model ? { requestedModel: spec.model } : {}),
-      timeoutMs: spec.timeoutMs ?? capsHolder.caps.defaultTimeoutMs,
+      ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
       cwd: dirs.workspace,
       ...(spec.preflight ? { preflight: true } : {}),
     },
@@ -382,9 +427,10 @@ async function buildRunParams(
   model: string,
   abortController: AbortController,
   capture: { last: string },
+  trail: RunTrail,
   resume?: ResumePlan,
 ): Promise<OneShotAgentParams> {
-  const appendLog = await openRunLog(
+  const writeLog = await openRunLog(
     agentLogPath(record.id),
     resume
       ? agentResumeLogHeader(
@@ -396,6 +442,10 @@ async function buildRunParams(
       : agentLogHeader(record, model),
   );
   const id = record.id;
+  const appendLog = (text: string): Promise<void> => {
+    trail.onLog(text);
+    return writeLog(text);
+  };
   return {
     prompt: resume
       ? resume.prompt
@@ -417,6 +467,7 @@ async function buildRunParams(
     onAssistantText: (text) => {
       const trimmed = text.trim();
       if (trimmed) capture.last = trimmed;
+      trail.onAssistantText(text);
     },
     // Persisted the moment the backend reports it, so a restart at any
     // point after the first message can resume the conversation.
@@ -432,11 +483,13 @@ function settleSuccess(
   task: TaskHandle,
   lastText: string,
   usage: TaskUsage | undefined,
+  trail: AgentTrail,
 ): AgentRecord | null {
   if (agentRegistry.hasReported(id)) {
     task.succeed(usage);
     return agentRegistry.settle(id, {
       state: "done",
+      trail,
       ...(usage ? { usage } : {}),
     });
   }
@@ -445,6 +498,7 @@ function settleSuccess(
     return agentRegistry.settle(id, {
       state: "done",
       result: { summary: lastText },
+      trail,
       ...(usage ? { usage } : {}),
     });
   }
@@ -454,24 +508,82 @@ function settleSuccess(
   return agentRegistry.settle(id, {
     state: "failed",
     error,
+    trail,
     ...(usage ? { usage } : {}),
   });
 }
 
-/** Settle a run that threw: timeout, kill, or a genuine failure. */
+/**
+ * Settle a run that threw: timeout, stall, kill, or a genuine failure.
+ * `stalled` is the watchdog's own abort reason, checked first because a
+ * backend that honours the abort rejects with its own error.
+ */
 function settleFailure(
   id: string,
   task: TaskHandle,
   err: unknown,
+  trail: AgentTrail,
+  stalled?: AgentStalledError,
 ): AgentRecord | null {
   const state =
-    err instanceof IsolatedAgentTimeoutError
+    stalled || err instanceof IsolatedAgentTimeoutError
       ? "timed_out"
       : agentRegistry.killRequested(id)
         ? "killed"
         : "failed";
-  task.fail(err);
-  return agentRegistry.settle(id, { state, error: errText(err) });
+  task.fail(stalled ?? err);
+  return agentRegistry.settle(id, {
+    state,
+    error: errText(stalled ?? err),
+    trail,
+  });
+}
+
+/**
+ * Start the no-progress watchdog for one run (see `watchdog.ts`). Its kill
+ * aborts the run with an `AgentStalledError` recorded in `watch.stalled`,
+ * which the settle path reads to classify the run `timed_out`.
+ */
+function watchRun(
+  id: string,
+  trail: RunTrail,
+  abortController: AbortController,
+): { watch: { stalled?: AgentStalledError }; watchdog: WatchdogHandle } {
+  const watch: { stalled?: AgentStalledError } = {};
+  const watchdog = startWatchdog(capsHolder.caps.stallTimeoutMs, {
+    lastActivityAt: () => trail.lastActivityAt,
+    pingAgent: (idleMs) => {
+      agentRegistry.push(id, {
+        from: "watchdog",
+        text: buildStallPing(idleMs, capsHolder.caps.stallTimeoutMs),
+        at: Date.now(),
+      });
+      logWarn(
+        "agents",
+        `${id} quiet for ${Math.round(idleMs / 1000)}s — pinged`,
+      );
+    },
+    warnParent: (idleMs, killInMs) => {
+      const current = agentRegistry.get(id);
+      if (!current) return;
+      void deliverMessage(
+        current,
+        buildStallWarning(current, idleMs, killInMs),
+      ).catch((err: unknown) =>
+        logError("agents", `stall warning delivery failed for ${id}`, err),
+      );
+    },
+    kill: (idleMs) => {
+      watch.stalled = new AgentStalledError(idleMs);
+      logWarn("agents", `${id}: ${watch.stalled.message} — aborting`);
+      try {
+        abortController.abort(watch.stalled);
+      } catch {
+        /* the settle path below still runs */
+      }
+    },
+  });
+  return { watch, watchdog };
 }
 
 /**
@@ -491,7 +603,9 @@ async function runAgent(
   const id = record.id;
   const abortController = new AbortController();
   const capture = { last: "" };
-  const timeoutMs = spec.timeoutMs ?? capsHolder.caps.defaultTimeoutMs;
+  const timeoutMs = effectiveTimeout(spec.timeoutMs);
+  const trail = openTrail(id);
+  const { watch, watchdog } = watchRun(id, trail, abortController);
 
   // Registered as queued, bound, then started — so a kill arriving in the
   // gap between the task existing and the abort handle being published still
@@ -515,6 +629,7 @@ async function runAgent(
       model,
       abortController,
       capture,
+      trail,
       resume,
     );
     if (agentRegistry.isInterrupted(id)) {
@@ -528,12 +643,13 @@ async function runAgent(
         id,
         task,
         new Error("aborted before the run started"),
+        trail.snapshot(),
       );
     } else {
       const usage = await runIsolatedAgent({
         background,
         params,
-        timeoutMs,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         logCategory: "agents",
         // Safe to sweep: the context label is unique to this agent, so no
         // other context's subprocesses share the tag.
@@ -546,18 +662,37 @@ async function runAgent(
       if (agentRegistry.isInterrupted(id)) {
         settled = null;
       } else {
-        recordBackendRunSuccess(record.backendId);
-        settled = settleSuccess(id, task, capture.last, usage ?? undefined);
+        if (watch.stalled) {
+          // The backend swallowed the watchdog's abort and returned.
+          settled = settleFailure(
+            id,
+            task,
+            watch.stalled,
+            trail.snapshot(),
+            watch.stalled,
+          );
+        } else {
+          recordBackendRunSuccess(record.backendId);
+          settled = settleSuccess(
+            id,
+            task,
+            capture.last,
+            usage ?? undefined,
+            trail.snapshot(),
+          );
+        }
       }
     }
   } catch (err) {
     if (agentRegistry.isInterrupted(id)) {
       settled = null;
     } else {
-      recordBackendRunFailure(record.backendId, err);
-      settled = settleFailure(id, task, err);
+      if (!watch.stalled) recordBackendRunFailure(record.backendId, err);
+      settled = settleFailure(id, task, err, trail.snapshot(), watch.stalled);
     }
   } finally {
+    watchdog.stop();
+    closeTrail(id);
     await release().catch((err: unknown) =>
       logError("agents", `failed to release backend for ${id}`, err),
     );
@@ -576,7 +711,7 @@ async function runAgent(
   log(
     "agents",
     `${id} "${settled.label}" → ${settled.state} ` +
-      `(${settled.backendId}/${model}, ${timeoutMs}ms cap)`,
+      `(${settled.backendId}/${model}, timeout ${describeTimeout(timeoutMs)})`,
   );
   reapChildren(settled);
   await deliverSettlement(settled).catch((err: unknown) =>
@@ -812,9 +947,12 @@ async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
         interruptedAt,
       };
 
-  const budget =
-    (saved.timeoutMs ?? capsHolder.caps.defaultTimeoutMs) - elapsedMs;
-  const timeoutMs = Math.max(AGENT_RESUME_MIN_TIMEOUT_MS, budget);
+  // An uncapped run stays uncapped; a capped one gets what it had left.
+  const cap = effectiveTimeout(saved.timeoutMs);
+  const timeoutMs =
+    cap === undefined
+      ? undefined
+      : Math.max(AGENT_RESUME_MIN_TIMEOUT_MS, cap - elapsedMs);
   const spec: AgentSpawnSpec = {
     brief: saved.brief,
     label: saved.label,
@@ -824,7 +962,7 @@ async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
     ...(record.reasoningEffort
       ? { reasoningEffort: record.reasoningEffort }
       : {}),
-    timeoutMs,
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(saved.preflight ? { preflight: true } : {}),
   };
   agentRegistry.markResumed(record.id);
@@ -832,7 +970,7 @@ async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
     "agents",
     `${record.id} "${record.label}" resuming after restart ` +
       `(${canResume ? `session ${saved.sessionId}` : "re-briefed"}, ` +
-      `${backendId}/${resolved.model}, ${Math.round(timeoutMs / 1000)}s left, ` +
+      `${backendId}/${resolved.model}, timeout ${describeTimeout(timeoutMs)}, ` +
       `resume #${saved.resumeCount + 1})`,
   );
   void runAgent(record, spec, resolved, acquired, plan);

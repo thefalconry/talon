@@ -37,12 +37,15 @@ import {
 import {
   agentContextLabel,
   agentRegistry,
+  clampTimeout,
   initAgents,
   killAgent,
+  recordInterimMessage,
   spawnAgent,
   type AgentParent,
 } from "../core/agents/index.js";
 import { taskTable } from "../core/tasks/index.js";
+import { getTrail } from "../core/agents/trail.js";
 import { bus } from "../core/bus/index.js";
 
 // The plan-aware router, stubbed. These tests assert what the runner ASKS
@@ -272,7 +275,12 @@ function twoModels(defaultId: string, other: string): ModelCatalog {
 function liveParent(backendId: string, model: string): AgentParent {
   const parent = agentRegistry.register(
     { label: "parent", brief: "b", parent: CHAT, backendId },
-    { maxConcurrent: 10, maxDepth: 2, defaultTimeoutMs: 60_000 },
+    {
+      maxConcurrent: 10,
+      maxDepth: 2,
+      defaultTimeoutMs: 60_000,
+      stallTimeoutMs: 0,
+    },
   );
   if (!parent.ok) throw new Error(parent.error);
   agentRegistry.start(parent.record.id, {
@@ -601,7 +609,12 @@ describe("spawnAgent settlement", () => {
           parent: { kind: "agent", agentId: parentId },
           backendId: "codex",
         },
-        { maxConcurrent: 10, maxDepth: 2, defaultTimeoutMs: 1000 },
+        {
+          maxConcurrent: 10,
+          maxDepth: 2,
+          defaultTimeoutMs: 1000,
+          stallTimeoutMs: 0,
+        },
       );
       if (child.ok) {
         childId = child.record.id;
@@ -651,5 +664,92 @@ describe("spawnAgent observability", () => {
     expect(wake?.prompt).toContain("AGENT FINISHED");
     expect(wake?.prompt).toContain(outcome.agentId);
     expect(wake?.prompt).toContain("probe");
+  });
+});
+
+describe("timeouts, the watchdog and the trail", () => {
+  /** A run that only ends when aborted, after doing some visible work. */
+  function busyThenHang(): OneShot {
+    return async (params) => {
+      await params.appendLog?.(
+        '\n**Tool call:** `Write`\n```json\n{\n  "file_path": "/tmp/work.ts"\n}\n```\n',
+      );
+      params.onAssistantText?.("wrote the first half");
+      await new Promise<void>((_resolve, reject) => {
+        const stop = (): void => reject(new Error("aborted"));
+        if (params.abortController.signal.aborted) stop();
+        params.abortController.signal.addEventListener("abort", stop);
+      });
+    };
+  }
+
+  it("has no hard timeout by default, and a ceiling caps it when set", async () => {
+    expect(clampTimeout(undefined)).toBeUndefined();
+    expect(clampTimeout(5_000_000)).toBe(5_000_000);
+    expect(clampTimeout(10)).toBe(30_000);
+    initAgents({ execute, caps: { maxTimeoutMs: 60_000 } });
+    expect(clampTimeout(undefined)).toBe(60_000);
+    expect(clampTimeout(5_000_000)).toBe(60_000);
+    initAgents({ execute, caps: { defaultTimeoutMs: 45_000 } });
+    expect(clampTimeout(undefined)).toBe(45_000);
+  });
+
+  it("applies the global ceiling to a spawn that set no timeout", async () => {
+    initAgents({ execute, caps: { maxTimeoutMs: 40, stallTimeoutMs: 0 } });
+    await withBackend(busyThenHang());
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("timed_out");
+  });
+
+  it("kills a stalled run, warns the parent first, and reports its trail", async () => {
+    initAgents({ execute, caps: { stallTimeoutMs: 30 } });
+    await withBackend(busyThenHang());
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("timed_out");
+    expect(record?.error).toMatch(/stalled/);
+    expect(record?.inboxDepth).toBeGreaterThanOrEqual(1);
+    expect(record?.trail?.files).toEqual(["/tmp/work.ts"]);
+    expect(record?.trail?.notes).toEqual(["wrote the first half"]);
+
+    await vi.waitFor(() => {
+      const prompts = execute.mock.calls.map((c) => c[0].prompt);
+      expect(prompts.some((p) => p.includes("[Watchdog]"))).toBe(true);
+      expect(
+        prompts.some(
+          (p) => p.includes("AGENT FINISHED") && p.includes("/tmp/work.ts"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("hands a killed run's interim messages and files to its parent", async () => {
+    initAgents({ execute, caps: { stallTimeoutMs: 0 } });
+    await withBackend(busyThenHang());
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    await vi.waitFor(() =>
+      expect(agentRegistry.get(outcome.agentId)?.taskId).toBeDefined(),
+    );
+    recordInterimMessage(outcome.agentId, "schema migrated");
+    await vi.waitFor(() =>
+      expect(getTrail(outcome.agentId)?.snapshot().files).toEqual([
+        "/tmp/work.ts",
+      ]),
+    );
+    killAgent(outcome.agentId);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("killed");
+    expect(record?.trail?.messages).toEqual(["schema migrated"]);
+    await vi.waitFor(() => {
+      const report = execute.mock.calls
+        .map((c) => c[0].prompt)
+        .find((p) => p.includes("AGENT FINISHED"));
+      expect(report).toContain("schema migrated");
+      expect(report).toContain("/tmp/work.ts");
+    });
   });
 });

@@ -37,7 +37,14 @@ could do in one tool call, or work whose result you need in the next second
 
 Backend and model default to the caller's (a sub-agent's own children
 inherit its backend and model); pass them to put the agent somewhere else (e.g. a cheap model for a mechanical sweep, or a backend with
-a bigger context window). Returns the agent id immediately.`;
+a bigger context window). Returns the agent id immediately.
+
+There is no hard timeout unless you pass timeout_s (or the deployment sets
+one): an agent runs until it reports, is killed, or goes quiet. A no-progress
+watchdog pings an agent that has made no tool call or output for a while,
+then tells you, then kills it. A killed, timed-out or stalled agent's report
+still carries its last interim messages, progress notes and the files it
+changed, so its work is not lost.`;
 
 export const agentTools: ToolDefinition[] = [
   {
@@ -81,7 +88,7 @@ export const agentTools: ToolDefinition[] = [
         .positive()
         .optional()
         .describe(
-          "Hard wall-clock cap in seconds (default 900, min 30, max 3600). On timeout the agent is aborted and you are told.",
+          "Optional hard wall-clock cap in seconds (min 30). Unset = no cap unless the deployment sets agents.defaultTimeoutMs; agents.maxTimeoutMs, when set, caps every run. Stalled agents are ended by the no-progress watchdog regardless. On timeout the agent is aborted and you are told, with what it had done so far.",
         ),
       preflight: z
         .boolean()

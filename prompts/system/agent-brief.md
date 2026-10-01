@@ -56,5 +56,6 @@ parent: peer messages are for coordination, never a substitute for
 - You have the full background tool surface (files, shell, web, plugins, and
   the messaging tools with an explicit `chat_id`). Use it, but stay inside
   the brief — you were spawned for one job.
-- Be efficient. You have a hard wall-clock timeout; a partial result reported
-  in time beats a perfect one that never arrives.
+- Be efficient. A run may have a wall-clock timeout, and a watchdog pings,
+  then ends, one that makes no tool call or output for too long; a partial
+  result reported in time beats a perfect one that never arrives.
