@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.31.0](https://github.com/thefalconry/talon/compare/v5.30.0...v5.31.0) (2026-10-01)
+
+
+### Features
+
+* **agents:** give each sub-agent a private scratch dir as its TMPDIR ([#1231](https://github.com/thefalconry/talon/issues/1231)) ([34a30d0](https://github.com/thefalconry/talon/commit/34a30d0d9f9036ffc1665c2c6e64f80e6a145ffb))
+
 ## [5.30.0](https://github.com/thefalconry/talon/compare/v5.29.0...v5.30.0) (2026-10-01)
 
 
