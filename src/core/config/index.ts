@@ -642,7 +642,15 @@ const configSchema = z.object({
    *   - `maxDepth` — how far delegation may nest. 0 = chats only, 2 (the
    *     default) = chat → agent → agent.
    *   - `defaultTimeoutMs` — hard wall-clock cap when a spawn doesn't pass
-   *     its own. Per-spawn values are clamped to [30s, 60min].
+   *     its own. Unset (the default) = no hard cap: a run ends when it is
+   *     done, killed, or stalled (see `stallTimeoutMs`).
+   *   - `maxTimeoutMs` — optional global ceiling on every run's hard cap,
+   *     including spawns that pass none. Unset = no ceiling. Per-spawn
+   *     values are floored at 30s.
+   *   - `stallTimeoutMs` — the no-progress watchdog step N (default 15
+   *     min): after N with no tool call or output the agent is pinged,
+   *     after 2N its parent is warned, after 3N it is killed (`timed_out`).
+   *     0 disables it.
    *   - `allowedBackends` — optional allowlist of backend ids sub-agents
    *     may run on. Unset = any backend with a background capability. A
    *     spawn that names (or inherits) a backend outside it is refused.
@@ -651,11 +659,12 @@ const configSchema = z.object({
     .object({
       maxConcurrent: z.number().int().min(1).max(64).default(6),
       maxDepth: z.number().int().min(0).max(5).default(2),
-      defaultTimeoutMs: z
+      defaultTimeoutMs: z.number().int().min(30_000).optional(),
+      maxTimeoutMs: z.number().int().min(30_000).optional(),
+      stallTimeoutMs: z
         .number()
         .int()
-        .min(30_000)
-        .max(3_600_000)
+        .min(0)
         .default(15 * 60 * 1000),
       allowedBackends: z.array(z.string().min(1)).optional(),
     })

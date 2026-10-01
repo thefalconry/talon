@@ -53,7 +53,12 @@ function live(parent: AgentParent, label = "probe"): AgentRecord {
       parent,
       backendId: "claude",
     },
-    { maxConcurrent: 10, maxDepth: 3, defaultTimeoutMs: 1000 },
+    {
+      maxConcurrent: 10,
+      maxDepth: 3,
+      defaultTimeoutMs: 1000,
+      stallTimeoutMs: 0,
+    },
   );
   if (!outcome.ok) throw new Error(outcome.error);
   agentRegistry.start(outcome.record.id, {

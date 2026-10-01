@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 import { dirs } from "../../util/paths.js";
 import { loadSystemTemplate } from "../prompt/templates.js";
 import type { AgentParent, AgentRecord } from "./types.js";
+import { trailIsEmpty } from "./trail.js";
 
 /** Where sub-agent run logs live: `~/.talon/workspace/logs/agents/`. */
 const AGENT_LOGS_DIR = resolve(dirs.logs, "agents");
@@ -181,6 +182,69 @@ function usageLine(record: AgentRecord): string {
   );
 }
 
+/** Human duration for prompts: "45 min" / "30s". */
+function minutes(ms: number): string {
+  return ms >= 60_000
+    ? `${Math.round(ms / 60_000)} min`
+    : `${Math.round(ms / 1000)}s`;
+}
+
+/**
+ * The "what it was doing" block appended to a report when the run did not
+ * end `done` — so a kill or a timeout never throws the work away.
+ */
+function renderTrail(record: AgentRecord): string {
+  const trail = record.trail;
+  if (record.state === "done" || trailIsEmpty(trail) || !trail) return "";
+  const parts: string[] = [];
+  if (trail.messages.length > 0) {
+    parts.push(
+      `Its last interim messages:\n` +
+        trail.messages.map((m) => `- ${m}`).join("\n"),
+    );
+  }
+  if (trail.notes.length > 0) {
+    parts.push(
+      `Its last progress notes:\n` +
+        trail.notes.map((n) => `- ${n}`).join("\n"),
+    );
+  }
+  if (trail.files.length > 0) {
+    parts.push(
+      `Files it wrote or edited:\n` +
+        trail.files.map((f) => `- ${f}`).join("\n"),
+    );
+  }
+  return (
+    `\n\n--- What it had done before it ended (run log: ` +
+    `${agentLogPath(record.id)}) ---\n\n${parts.join("\n\n")}`
+  );
+}
+
+/** Mailbox note the watchdog leaves an agent that has gone quiet. */
+export function buildStallPing(idleMs: number, stallMs: number): string {
+  return (
+    `[Watchdog] No tool call or output from you for ${minutes(idleMs)}. ` +
+    `If you are stuck, report_result now with what you have. Your parent ` +
+    `is told at ${minutes(2 * stallMs)} of silence and the run is killed ` +
+    `at ${minutes(3 * stallMs)}.`
+  );
+}
+
+/** The interim note a parent gets when its agent has stalled. */
+export function buildStallWarning(
+  record: AgentRecord,
+  idleMs: number,
+  killInMs: number,
+): string {
+  return (
+    `[Watchdog] Agent ${record.id} "${record.label}" has made no progress ` +
+    `(no tool call or output) for ${minutes(idleMs)}. It will be killed in ` +
+    `${minutes(killInMs)} unless it resumes. Use send_to_agent to nudge it, ` +
+    `or kill_agent to end it now.`
+  );
+}
+
 /**
  * The wake prompt a parent chat receives when one of its agents settles.
  * Shaped like the trigger wake-up: a `[System: …]` header telling the model
@@ -203,7 +267,7 @@ export function buildSettlementPrompt(record: AgentRecord): string {
     `an agent you spawned earlier. Decide whether to act on it, tell the ` +
     `user, or do nothing.]\n\n` +
     `[Agent "${record.label}" (${record.id}) — ${record.state}]\n\n` +
-    `${body}${usageLine(record)}`
+    `${body}${renderTrail(record)}${usageLine(record)}`
   );
 }
 

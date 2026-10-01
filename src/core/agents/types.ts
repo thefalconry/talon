@@ -87,6 +87,21 @@ export interface AgentRecord {
   readonly children: readonly string[];
   /** Messages waiting to be drained by `check_inbox`. */
   readonly inboxDepth: number;
+  /**
+   * What the run had been doing when it settled — set on every settlement
+   * the runner makes, shown to the parent when the run did not end `done`.
+   */
+  readonly trail?: AgentTrail;
+}
+
+/** A settled run's last interim messages, progress notes and changed files. */
+export interface AgentTrail {
+  /** Last `message_parent` notes, oldest first. */
+  readonly messages: readonly string[];
+  /** Last assistant texts, oldest first. */
+  readonly notes: readonly string[];
+  /** Files it wrote or edited (best-effort, from the run log). */
+  readonly files: readonly string[];
 }
 
 /** What `spawnAgent` is asked for. */
@@ -106,7 +121,11 @@ export interface AgentSpawnSpec {
    */
   readonly model?: string;
   readonly reasoningEffort?: ReasoningEffortLevel;
-  /** Hard wall-clock cap. Defaults to `agents.defaultTimeoutMs`. */
+  /**
+   * Hard wall-clock cap. Unset = `agents.defaultTimeoutMs`, and with that
+   * unset too, no cap at all — the no-progress watchdog is what ends a run
+   * that has gone quiet.
+   */
   readonly timeoutMs?: number;
   /**
    * Append the pre-flight lane instruction (run `npm run preflight` before
@@ -137,8 +156,15 @@ export interface AgentCaps {
   readonly maxConcurrent: number;
   /** Deepest `depth` an agent may have — 2 means chat → A → B. */
   readonly maxDepth: number;
-  /** Default hard timeout for one run. */
-  readonly defaultTimeoutMs: number;
+  /** Hard timeout for a spawn that sets none. Unset = no hard timeout. */
+  readonly defaultTimeoutMs?: number;
+  /** Ceiling on any run's hard timeout, requested or not. Unset = none. */
+  readonly maxTimeoutMs?: number;
+  /**
+   * No-progress watchdog step N: ping the agent after N ms of silence, warn
+   * its parent after 2N, kill it after 3N. 0 disables the watchdog.
+   */
+  readonly stallTimeoutMs: number;
   /**
    * Backends a sub-agent may run on. Unset or empty = any backend with a
    * background capability. Enforced by `spawnAgent` on the final choice.

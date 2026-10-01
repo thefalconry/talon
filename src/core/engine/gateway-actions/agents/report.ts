@@ -18,6 +18,7 @@ import {
   deliverMessage,
   deliverToAgent,
   describeParent,
+  recordInterimMessage,
 } from "../../../agents/index.js";
 import { logError } from "../../../../util/log.js";
 import type { ActionResult } from "../../../types.js";
@@ -72,6 +73,8 @@ export const agentReportHandlers: SharedActionHandlers = {
     if (!record) return notAnAgent("message_parent");
     const text = String(body.text ?? "").trim();
     if (!text) return { ok: false, error: "Missing text" };
+    // Kept for the parent's wake-up should the run be cut short.
+    recordInterimMessage(record.id, text);
     // Fire-and-forget: waking a chat runs a whole turn, and this tool call
     // must not block for the length of the parent's reply.
     void deliverMessage(record, text).catch((err: unknown) =>

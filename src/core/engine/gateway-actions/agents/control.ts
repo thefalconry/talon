@@ -16,6 +16,7 @@ import {
   agentIdFromContextLabel,
   agentRegistry,
   clampTimeout,
+  describeTimeout,
   deliverToAgent,
   getAgentCaps,
   killAgent,
@@ -210,7 +211,8 @@ export const agentControlHandlers: SharedActionHandlers = {
       preflight: parsed.preflight,
     });
     if (!outcome.ok) return { ok: false, error: outcome.error };
-    const timeoutS = Math.round(clampTimeout(parsed.timeoutMs) / 1000);
+    const timeout = describeTimeout(clampTimeout(parsed.timeoutMs));
+    const stall = getAgentCaps().stallTimeoutMs;
     log("gateway", `spawn_agent: "${parsed.label}" [${outcome.agentId}]`);
     return {
       ok: true,
@@ -218,7 +220,12 @@ export const agentControlHandlers: SharedActionHandlers = {
         `Spawned agent "${parsed.label}" (id: ${outcome.agentId})\n` +
         `Backend: ${outcome.backendId}/${outcome.model}` +
         `${outcome.routing ? ` (routed: ${outcome.routing})` : ""}\n` +
-        `Timeout: ${timeoutS}s\n` +
+        `Timeout: ${timeout}` +
+        (stall > 0
+          ? ` (watchdog: pinged after ${describeTimeout(stall)} quiet, ` +
+            `killed after ${describeTimeout(3 * stall)})`
+          : "") +
+        `\n` +
         (parsed.preflight ? `Pre-flight lane: on\n` : "") +
         `It runs in the background. You will be woken with its report — ` +
         `carry on with what you were doing.`,
