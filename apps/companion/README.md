@@ -33,6 +33,15 @@ that speaks the protocol works.
   one itself (silently on a rooted/Shizuku phone, swap-and-relaunch on
   desktop). See [Updates](#updates).
 
+- **Voice mode** (Android) — hands-free conversation with on-device speech,
+  plus an optional on-device neural voice (Kokoro). See
+  [docs/companion-voice.md](../../docs/companion-voice.md).
+
+> **Licence note (Android APK):** the neural voice links espeak-ng (GPL-3.0)
+> through sherpa-onnx, so the Android companion APK is distributed under the
+> GPL-3.0; its corresponding source is this repository. The source files stay
+> Apache-2.0, and the desktop builds are unaffected. See [NOTICE](../../NOTICE).
+
 See [docs/companion-ui.md](../../docs/companion-ui.md) for a visual tour of the
 main surfaces and the reasoning behind their layout.
 

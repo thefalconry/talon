@@ -13,6 +13,7 @@ import '../../services/haptics.dart';
 import '../../services/voice.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
+import 'neural_voice_section.dart';
 import 'settings_widgets.dart';
 
 class VoiceCard extends StatefulWidget {
@@ -290,7 +291,9 @@ class _VoiceCardState extends State<VoiceCard> with WidgetsBindingObserver {
               ),
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
+          NeuralVoiceSection(prefs: prefs),
+          const SizedBox(height: 4),
           settingsSwitchRow(
             'Hands-free conversation',
             'Keep listening after each reply — talk back and forth without '

@@ -22,6 +22,8 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
@@ -40,15 +42,24 @@ import io.flutter.plugin.common.MethodChannel
  * Dart ↔ native protocol (channel `talon/voice`):
  *   Dart → native: isSttAvailable, hasMicPermission, requestMicPermission,
  *     startListening{sessionId}, stopListening{sessionId},
- *     cancelListening{sessionId}, speak{text,id,rate,pitch,voice,flush},
+ *     cancelListening{sessionId},
+ *     speak{text,id,rate,pitch,voice,flush,neuralSpeaker},
  *     stopSpeaking, listVoices,
+ *     neuralSupported, neuralLoad{modelDir,threads}, neuralUnload,
  *     isDefaultAssistant, openAssistantSettings, consumeAssistLaunch
  *   native → Dart (invokeMethod, fire-and-forget):
  *     stt.ready{sessionId}, stt.partial{sessionId,text},
  *     stt.final{sessionId,text}, stt.rms{sessionId,level},
  *     stt.end{sessionId}, stt.error{sessionId,code,message},
  *     tts.start{id}, tts.done{id}, tts.error{id,code}, tts.stop{id},
- *     assist.launch.
+ *     tts.neuralFailed{message}, assist.launch.
+ *
+ * `speak` with a `neuralSpeaker` goes to the on-device neural voice
+ * ([KokoroTts]) when one is loaded, and to Android TTS otherwise. Both engines
+ * report through the same tts.* events, so the Dart voice session does not
+ * care which one spoke. If neural synthesis fails mid-reply, the rest of the
+ * reply is re-queued on Android TTS under the same utterance IDs and Dart is
+ * told via tts.neuralFailed.
  */
 class VoiceBridge(
     private val channel: MethodChannel,
@@ -94,6 +105,21 @@ class VoiceBridge(
 
     private var pendingPermission: MethodChannel.Result? = null
 
+    /// On-device neural voice, loaded while voice mode is open. Load/release
+    /// are slow and blocking, so they run on [neuralExecutor], one at a time.
+    private var kokoro: KokoroTts? = null
+    private var neuralLoadingDir: String? = null
+    private val pendingNeuralLoads = mutableListOf<MethodChannel.Result>()
+    private val neuralExecutor: ExecutorService = Executors.newSingleThreadExecutor { r ->
+        Thread(r, "talon-tts-load").apply { isDaemon = true }
+    }
+
+    /// Android TTS parameters of the last request, reused when neural speech
+    /// has to fall back mid-reply.
+    private var lastRate = 1.0f
+    private var lastPitch = 1.0f
+    private var lastVoiceName: String? = null
+
     /// Set when the activity was (re)launched by the system assist gesture;
     /// cleared when Dart consumes it. The warm path additionally pushes an
     /// `assist.launch` event, so a running UI reacts immediately while a
@@ -136,14 +162,23 @@ class VoiceBridge(
                     (call.argument<Number>("pitch") ?: 1.0).toFloat(),
                     call.argument<String>("voice"),
                     call.argument<Boolean>("flush") ?: true,
+                    call.argument<Number>("neuralSpeaker")?.toInt(),
                     result,
                 )
                 "stopSpeaking" -> {
                     activeTtsId = null
                     tts?.stop()
+                    kokoro?.stop()
                     abandonTtsAudioFocus()
                     result.success(true)
                 }
+                "neuralSupported" -> result.success(KokoroTts.deviceSupported)
+                "neuralLoad" -> neuralLoad(
+                    call.argument<String>("modelDir") ?: "",
+                    call.argument<Number>("threads")?.toInt() ?: 0,
+                    result,
+                )
+                "neuralUnload" -> neuralUnload(result)
                 "listVoices" -> listVoices(result)
                 "isDefaultAssistant" -> result.success(isDefaultAssistant())
                 "openAssistantSettings" -> result.success(openAssistantSettings())
@@ -581,19 +616,56 @@ class VoiceBridge(
         pitch: Float,
         voiceName: String?,
         flush: Boolean,
+        neuralSpeaker: Int?,
         result: MethodChannel.Result,
     ) {
         if (text.isBlank()) {
             result.success(false)
             return
         }
+        lastRate = rate
+        lastPitch = pitch
+        lastVoiceName = voiceName
+        val neural = kokoro?.takeIf { neuralSpeaker != null && !it.failed }
+        if (neural != null && neuralSpeaker != null) {
+            // Same queue semantics as Android TTS: a flush silences the other
+            // engine too, so a barge-in never leaves stale audio playing.
+            if (flush) tts?.stop()
+            Log.i(TAG, "speak id=$id chars=${text.length} flush=$flush voice=neural#$neuralSpeaker")
+            requestTtsAudioFocus()
+            activeTtsId = id
+            neural.speak(id, text, neuralSpeaker, rate, flush)
+            result.success(true)
+            return
+        }
+        if (flush) kokoro?.stop()
+        speakSystem(text, id, rate, pitch, voiceName, flush) { outcome ->
+            when (outcome) {
+                null -> result.success(true)
+                "" -> result.success(false)
+                else -> result.error("tts_unavailable", outcome, null)
+            }
+        }
+    }
+
+    /// Speak through Android's TextToSpeech. [done] gets null when queued, ""
+    /// when the engine refused the utterance, or an error message.
+    private fun speakSystem(
+        text: String,
+        id: String,
+        rate: Float,
+        pitch: Float,
+        voiceName: String?,
+        flush: Boolean,
+        done: (String?) -> Unit,
+    ) {
         ensureTts { ok ->
             if (!ok) {
-                result.error("tts_unavailable", "Text-to-speech failed to initialize", null)
+                done("Text-to-speech failed to initialize")
                 return@ensureTts
             }
             val engine = tts ?: run {
-                result.error("tts_unavailable", "Text-to-speech disposed", null)
+                done("Text-to-speech disposed")
                 return@ensureTts
             }
             val wanted = voiceName?.takeIf { it.isNotBlank() }
@@ -656,7 +728,111 @@ class VoiceBridge(
                 if (activeTtsId == id) activeTtsId = null
                 releaseTtsAudioFocusSoon()
             }
-            result.success(queued == TextToSpeech.SUCCESS)
+            done(if (queued == TextToSpeech.SUCCESS) null else "")
+        }
+    }
+
+    // ── Neural voice (Kokoro via sherpa-onnx) ──────────────────────────────
+
+    private fun neuralLoad(modelDir: String, threads: Int, result: MethodChannel.Result) {
+        if (modelDir.isBlank()) {
+            result.error("invalid_model", "Missing model directory", null)
+            return
+        }
+        val current = kokoro
+        if (current != null && current.modelDir == modelDir && !current.failed) {
+            result.success(true)
+            return
+        }
+        // Coalesce: voice mode and a settings preview can both ask at once.
+        if (neuralLoadingDir == modelDir) {
+            pendingNeuralLoads.add(result)
+            return
+        }
+        kokoro = null
+        neuralLoadingDir = modelDir
+        pendingNeuralLoads.add(result)
+        val count = if (threads > 0) threads else KokoroTts.defaultThreads()
+        neuralExecutor.execute {
+            current?.release()
+            val outcome = try {
+                Result.success(
+                    KokoroTts.load(modelDir, count, speechAudioAttributes(), neuralListener),
+                )
+            } catch (t: Throwable) {
+                // Throwable, not Exception: a missing native library for this
+                // ABI surfaces as UnsatisfiedLinkError.
+                Log.w(TAG, "neural voice load failed", t)
+                Result.failure(t)
+            }
+            main.post { settleNeuralLoad(modelDir, outcome) }
+        }
+    }
+
+    private fun settleNeuralLoad(modelDir: String, outcome: Result<KokoroTts>) {
+        val waiting = pendingNeuralLoads.toList()
+        pendingNeuralLoads.clear()
+        if (neuralLoadingDir == modelDir) neuralLoadingDir = null
+        val loaded = outcome.getOrNull()
+        if (loaded != null && (disposed || neuralLoadingDir != null)) {
+            // Disposed meanwhile, or superseded by a load of another model.
+            Thread { loaded.release() }.start()
+            waiting.forEach { it.success(false) }
+            return
+        }
+        if (loaded != null) {
+            kokoro = loaded
+            waiting.forEach { it.success(true) }
+        } else {
+            val error = outcome.exceptionOrNull()
+            val message = error?.message ?: error?.javaClass?.simpleName ?: "unknown"
+            waiting.forEach { it.error("neural_load_failed", message, null) }
+        }
+    }
+
+    private fun neuralUnload(result: MethodChannel.Result?) {
+        val current = kokoro ?: run {
+            result?.success(true)
+            return
+        }
+        kokoro = null
+        current.stop()
+        neuralExecutor.execute {
+            current.release()
+            main.post { result?.success(true) }
+        }
+    }
+
+    private val neuralListener = object : NeuralSpeechPipeline.Listener {
+        override fun onStart(id: String) {
+            Log.i(TAG, "tts audio start $id (neural)")
+            emit("tts.start", mapOf("id" to id))
+        }
+
+        override fun onDone(id: String) = finishTts("tts.done", id)
+
+        override fun onStopped(id: String, interrupted: Boolean) =
+            finishTts("tts.stop", id, extra = mapOf("interrupted" to interrupted))
+
+        override fun onFallback(
+            id: String,
+            remainingText: String,
+            started: Boolean,
+            error: Throwable,
+        ) {
+            main.post {
+                if (disposed) return@post
+                Log.w(TAG, "neural voice failed; falling back to Android TTS for $id")
+                invokeChannel(
+                    "tts.neuralFailed",
+                    mapOf("message" to (error.message ?: error.javaClass.simpleName)),
+                )
+                speakSystem(remainingText, id, lastRate, lastPitch, lastVoiceName, flush = false) {
+                    if (it != null) {
+                        finishTts("tts.error", id, TextToSpeech.ERROR)
+                    }
+                }
+            }
         }
     }
 
@@ -715,6 +891,7 @@ class VoiceBridge(
             change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
         ) {
             tts?.stop()
+            kokoro?.stop()
         }
     }
 
@@ -855,6 +1032,13 @@ class VoiceBridge(
         tts = null
         ttsReady = false
         resetVoiceCache()
+        kokoro?.let { neural ->
+            kokoro = null
+            neural.stop()
+            neuralExecutor.execute { neural.release() }
+        }
+        neuralExecutor.shutdown()
+        pendingNeuralLoads.clear()
         activeTtsId = null
         abandonTtsAudioFocus()
         pendingTtsInit.clear()

@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:talon_companion/src/models/bridge_models.dart';
+import 'package:talon_companion/src/services/neural_tts.dart';
 import 'package:talon_companion/src/services/prefs.dart';
 import 'package:talon_companion/src/services/voice.dart';
 import 'package:talon_companion/src/state/app_state.dart';
 import 'package:talon_companion/src/state/voice_session.dart';
 
 void main() {
+  _neuralRoutingTests();
+
   group('speechify', () {
     test('strips markdown emphasis and headings', () {
       expect(
@@ -744,6 +747,7 @@ class _Spoken {
   final String? voiceName;
   final double pitch;
   final bool flush;
+  final int? neuralSpeaker;
 
   const _Spoken(
     this.id,
@@ -752,6 +756,7 @@ class _Spoken {
     this.voiceName, {
     this.pitch = 1.0,
     this.flush = true,
+    this.neuralSpeaker,
   });
 }
 
@@ -775,6 +780,9 @@ class _FakeVoiceEngine implements VoiceEngine {
   bool available = true;
   bool permission = true;
   bool nextSpeakAccepted = true;
+
+  /// Refuse every utterance routed to the neural voice.
+  bool refuseNeural = false;
   int stopSpeakingCalls = 0;
 
   @override
@@ -830,8 +838,20 @@ class _FakeVoiceEngine implements VoiceEngine {
     double pitch = 1.0,
     String? voiceName,
     bool flush = true,
+    int? neuralSpeaker,
   }) async {
-    spoken.add(_Spoken(id, text, rate, voiceName, pitch: pitch, flush: flush));
+    spoken.add(
+      _Spoken(
+        id,
+        text,
+        rate,
+        voiceName,
+        pitch: pitch,
+        flush: flush,
+        neuralSpeaker: neuralSpeaker,
+      ),
+    );
+    if (neuralSpeaker != null && refuseNeural) return false;
     ttsStarts.add(TtsEvent(id));
     final accepted = nextSpeakAccepted;
     nextSpeakAccepted = true;
@@ -866,4 +886,173 @@ class _FakeVoiceEngine implements VoiceEngine {
     ttsErrors.close();
     ttsStops.close();
   }
+}
+
+class _FakeNeuralBackend implements NeuralTtsBackend {
+  final failures = StreamController<String>.broadcast(sync: true);
+  final loads = <String>[];
+  bool supported = true;
+  bool loadResult = true;
+  int unloads = 0;
+
+  @override
+  Future<bool> isNeuralTtsSupported() async => supported;
+
+  @override
+  Future<bool> loadNeuralTts(String modelDir, {int threads = 0}) async {
+    loads.add(modelDir);
+    return loadResult;
+  }
+
+  @override
+  Future<void> unloadNeuralTts() async {
+    unloads++;
+  }
+
+  @override
+  Stream<String> get onNeuralTtsFailed => failures.stream;
+}
+
+/// Engine selection inside a live [VoiceSession]: which engine each reply is
+/// handed to, with a fake bridge standing in for Android TTS + Kokoro.
+void _neuralRoutingTests() {
+  group('VoiceSession neural voice routing', () {
+    late Prefs prefs;
+    late _VoiceAppState state;
+    late _FakeVoiceEngine engine;
+    late _FakeNeuralBackend backend;
+    final sessions = <VoiceSession>[];
+
+    setUp(() async {
+      SharedPreferences.setMockInitialValues({});
+      prefs = await Prefs.load();
+      state = _VoiceAppState(prefs);
+      engine = _FakeVoiceEngine();
+      backend = _FakeNeuralBackend();
+    });
+
+    tearDown(() {
+      for (final session in sessions) {
+        session.dispose();
+      }
+      sessions.clear();
+      engine.dispose();
+      state.dispose();
+    });
+
+    VoiceSession build({bool enabled = true, String? modelDir = '/models/k'}) {
+      final session = VoiceSession(
+        state,
+        handsFree: false,
+        engine: engine,
+        timing: _testTiming,
+        neuralTts: NeuralTtsRouter(
+          backend: backend,
+          enabled: () => enabled,
+          installedModelDir: () async => modelDir,
+          voiceName: () => prefs.neuralVoiceName,
+        ),
+      );
+      sessions.add(session);
+      return session;
+    }
+
+    Future<void> ask(VoiceSession session, String sttId, String reply) async {
+      engine.ready(sttId);
+      engine.finalResult(sttId, 'question');
+      await _flush();
+      state.beginTurn();
+      state.deliver(reply);
+      await _flush();
+      await _flush();
+    }
+
+    test('speaks with the neural voice once the model is loaded', () async {
+      final session = build();
+      await session.start();
+      await _flush();
+      expect(backend.loads, ['/models/k']);
+
+      await ask(session, 'stt0', 'Hello there');
+      expect(engine.spoken.single.neuralSpeaker, 3, reason: 'af_heart');
+    });
+
+    test('uses the chosen Kokoro speaker', () async {
+      await prefs.setNeuralVoiceName('bm_george');
+      final session = build();
+      await session.start();
+      await _flush();
+      await ask(session, 'stt0', 'Hello there');
+      expect(engine.spoken.single.neuralSpeaker, 26);
+    });
+
+    test('stays on Android TTS while the model is still downloading', () async {
+      final session = build(modelDir: null);
+      await session.start();
+      await _flush();
+      await ask(session, 'stt0', 'Hello there');
+
+      expect(backend.loads, isEmpty);
+      expect(engine.spoken.single.neuralSpeaker, isNull);
+    });
+
+    test('falls back to Android TTS when the model fails to load', () async {
+      backend.loadResult = false;
+      final session = build();
+      await session.start();
+      await _flush();
+      await ask(session, 'stt0', 'Hello there');
+
+      expect(backend.loads, ['/models/k']);
+      expect(session.neuralTts.state, NeuralLoadState.failed);
+      expect(engine.spoken.single.neuralSpeaker, isNull);
+    });
+
+    test('stays on Android TTS when the neural voice is disabled', () async {
+      final session = build(enabled: false);
+      await session.start();
+      await _flush();
+      await ask(session, 'stt0', 'Hello there');
+
+      expect(backend.loads, isEmpty);
+      expect(engine.spoken.single.neuralSpeaker, isNull);
+    });
+
+    test('re-speaks a refused neural utterance with Android TTS', () async {
+      engine.refuseNeural = true;
+      final session = build();
+      await session.start();
+      await _flush();
+      await ask(session, 'stt0', 'Hello there');
+
+      expect(engine.spoken, hasLength(2));
+      expect(engine.spoken[0].neuralSpeaker, 3);
+      expect(engine.spoken[1].neuralSpeaker, isNull);
+      expect(engine.spoken[1].id, engine.spoken[0].id);
+      expect(engine.spoken[1].text, engine.spoken[0].text);
+      expect(session.neuralTts.route, TtsRoute.system);
+    });
+
+    test('a runtime synthesis failure moves the session to Android TTS',
+        () async {
+      final session = build();
+      await session.start();
+      await _flush();
+      expect(session.neuralTts.route, TtsRoute.neural);
+
+      backend.failures.add('onnx runtime error');
+      await ask(session, 'stt0', 'Hello there');
+      expect(engine.spoken.single.neuralSpeaker, isNull);
+    });
+
+    test('unloads the model when voice mode closes', () async {
+      final session = build();
+      await session.start();
+      await _flush();
+      sessions.remove(session);
+      session.dispose();
+      await _flush();
+      expect(backend.unloads, 1);
+    });
+  });
 }
