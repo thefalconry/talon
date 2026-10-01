@@ -512,17 +512,19 @@ class VoiceBridge(
     /// The engine's best voice for this device, or null to keep whatever the
     /// engine defaults to.
     ///
-    /// Android's `defaultVoice` is frequently the small embedded "compact"
-    /// variant even when a high-quality one is installed, which is exactly the
-    /// robotic voice users complain about. Rank instead by: matching country
-    /// first (en-IE beats en-US for an Irish device), then engine-reported
-    /// quality, then locally synthesized over network-only (a network voice
-    /// stalls or silently downgrades when the connection is poor), then
-    /// latency.
+    /// Rank by engine-reported quality first: the old order put country ahead
+    /// of quality, so a low-quality en-IE/en-GB variant could beat a very-high
+    /// en-US one, and Google's engine reports equal quality for most variants
+    /// so ties fell through to "lowest latency" — the smallest, most robotic
+    /// model. Among equal-quality voices, prefer the voice the user picked in
+    /// system TTS settings (`defaultVoice`), then a matching country, then
+    /// locally synthesized over network-only (a network voice stalls or
+    /// silently downgrades on a poor connection), then latency.
     private fun bestVoice(engine: TextToSpeech): Voice? {
         if (autoVoiceResolved) return autoVoice
         autoVoiceResolved = true
         val target = Locale.getDefault()
+        val systemDefault = runCatching { engine.defaultVoice }.getOrNull()
         val usable = engine.voices.orEmpty().filter { voice ->
             !voice.features.orEmpty()
                 .contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) &&
@@ -530,12 +532,19 @@ class VoiceBridge(
         }
         autoVoice = usable.maxWithOrNull(
             compareBy<Voice>(
-                { if (it.locale.country.equals(target.country, true)) 1 else 0 },
                 { it.quality },
+                { if (it.name == systemDefault?.name) 1 else 0 },
+                { if (it.locale.country.equals(target.country, true)) 1 else 0 },
                 { if (it.isNetworkConnectionRequired) 0 else 1 },
                 { -it.latency },
             ),
-        ) ?: engine.defaultVoice
+        ) ?: systemDefault
+        Log.i(
+            TAG,
+            "tts voices=${usable.size} systemDefault=${systemDefault?.name} " +
+                "picked=${autoVoice?.name} q=${autoVoice?.quality} " +
+                "net=${autoVoice?.isNetworkConnectionRequired}",
+        )
         return autoVoice
     }
 
@@ -631,7 +640,7 @@ class VoiceBridge(
             activeTtsId = id
             val params = Bundle().apply {
                 // Engines default to the stream volume they were last handed;
-                // pin speech at full scale and let the assistant stream's own
+                // pin speech at full scale and let the media stream's own
                 // volume do the attenuating.
                 putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
                 putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, id)
@@ -687,13 +696,16 @@ class VoiceBridge(
 
     private fun speechAudioAttributes(): AudioAttributes =
         AudioAttributes.Builder()
-            .setUsage(
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    AudioAttributes.USAGE_ASSISTANT
-                } else {
-                    AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY
-                },
-            )
+            // USAGE_MEDIA, not USAGE_ASSISTANT: the assistant usage routes
+            // through its own strategy/stream (AUDIO_STREAM_ASSISTANT, with a
+            // separate, often low volume curve and OEM speech processing),
+            // which made replies sound thin and quiet next to any other
+            // audio. Media is the full-band music path at the user's media
+            // volume. Voice mode is half-duplex (the recognizer is stopped
+            // while we speak), so no echo cancellation is needed and
+            // USAGE_VOICE_COMMUNICATION — narrowband telephony processing —
+            // would only make it worse.
+            .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
