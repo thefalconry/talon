@@ -91,6 +91,7 @@
     "format": "prettier --write src/ prompts/",
     "format:check": "prettier --check src/ prompts/",
     "preflight": "bash scripts/preflight.sh",
+    "worktree": "node scripts/worktree.mjs",
     "ci:protect": "node .github/scripts/enforce-ci-gate.mjs",
     "build:gleam": "cd native/scheduler-core && gleam build --target javascript && node embed.mjs",
     "build:zig": "node native/textops-wasm/build.mjs",

@@ -28,6 +28,10 @@ const PREFLIGHT_TIMEOUT_MS = 600_000;
 const KILL_GRACE_MS = 5_000;
 /** Lines of each failing step's log to hand back. */
 const FAIL_TAIL_LINES = 30;
+/** How to give a checkout dependencies without a fresh ~1.2 GB `npm ci`. */
+const LINK_HINT =
+  "No node_modules in this checkout: run `node scripts/worktree.mjs link` " +
+  "in it (hardlinks a shared install, ~0 extra disk), then retry.";
 
 interface PreflightStep {
   readonly name: string;
@@ -62,6 +66,15 @@ function repoRoot(dir: string): Promise<string> {
       resolveRoot(code === 0 && out.trim() ? out.trim() : dir),
     );
   });
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function isFile(path: string): Promise<boolean> {
@@ -193,11 +206,14 @@ async function runPreflight(
   }
   const summary = await readSummary(root);
   if (!summary) {
+    const hint = (await exists(join(root, "node_modules")))
+      ? ""
+      : `\n${LINK_HINT}`;
     return {
       ok: false,
       error:
         `Pre-flight exited ${run.code} without writing .preflight/last.json. ` +
-        `Output:\n${run.output.slice(-2_000)}`,
+        `Output:\n${run.output.slice(-2_000)}${hint}`,
     };
   }
   // A red lane is a successful tool call with a red verdict — the model is

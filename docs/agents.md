@@ -150,7 +150,8 @@ tests`) and writes `.preflight/last.json` (verdict, per-step status and
 duration, failing steps) plus one `.preflight/<step>.log` per step; exit 0 is
 green, 1 is red. `PREFLIGHT_BASE` (default `origin/main`) is the diff base,
 `PREFLIGHT_SKIP=knip,tests` skips steps, `PREFLIGHT_QUIET=1` keeps step
-output in the logs only. It needs `npm ci` done in the checkout.
+output in the logs only. It needs a `node_modules` in the checkout — make
+the worktree with `scripts/worktree.mjs` (below) rather than `npm ci`.
 
 The changed set is everything since the merge-base with the base, plus
 staged, unstaged and untracked work. A change to `package-lock.json`,
@@ -162,6 +163,54 @@ the lane is slower there — which is exactly when it is worth waiting for.
 
 It is not the whole of CI: functional/integration suites, native builds,
 coverage and the Windows/macOS matrix still only run on GitHub.
+
+### Worktrees with shared node_modules
+
+A plain `git worktree add` + `npm ci` costs ~1.2 GB per checkout (about
+500 MB of it the bundled claude and codex binaries); four agents doing that
+at once once filled the host disk. `scripts/worktree.mjs` (`npm run
+worktree --`) gives each worktree a `node_modules` made of hardlinks into one
+shared store per lockfile:
+
+```sh
+node scripts/worktree.mjs add /tmp/fix-foo fix/foo   # new branch off origin/main
+node scripts/worktree.mjs add /tmp/fix-foo fix/foo --base origin/release
+node scripts/worktree.mjs link [dir] [--force]       # existing checkout
+node scripts/worktree.mjs remove /tmp/fix-foo        # remove + prune the store
+node scripts/worktree.mjs prune [--max-age-days 3] [--dry-run]
+```
+
+The store lives at `~/.cache/talon-node-modules/<hash>/node_modules`
+(`TALON_NM_STORE` overrides), keyed by the sha256 of `package-lock.json` plus
+platform, arch and Node major. The first worktree for a lockfile builds the
+entry once: a real copy (reflink when the filesystem supports it) of any
+worktree of the repo whose lockfile hashes the same, else `npm ci` into the
+store. Every later worktree is `cp -al` of it — about 15 MB of directory
+entries and seconds instead of 1.2 GB and a minute. `prune` drops entries no
+worktree uses that have not been linked for `--max-age-days`.
+
+Safety: a hardlink shares the inode, so an in-place write through one link
+would change every worktree.
+
+- Store files are `chmod a-w`, so an in-place write fails with `EACCES`
+  instead of corrupting other worktrees. Unlink, rename and
+  `rm -rf node_modules` still work, because each worktree's directories are
+  its own.
+- Mutable state is never shared. `node_modules/.cache`, `.vite`,
+  `.vite-temp` and `.vitest` (vitest, vite, prettier and babel caches) are left
+  out of the store and get created fresh per worktree. npm's hidden lockfile
+  `node_modules/.package-lock.json` is copied, not linked.
+- The store never shares inodes with the prod checkout: it is seeded by a
+  copy, so a worktree cannot reach the running daemon's dependencies.
+- The pre-flight lane itself writes nothing into existing `node_modules`
+  files: tsc runs `--noEmit`, there is no prettier or knip cache, and vitest's
+  results cache goes to a fresh `node_modules/.vite`. The package has no
+  `postinstall`/`prepare` script and no workspaces or `file:` links.
+- Changing dependencies in a worktree: run `npm ci` (or `npm install <pkg>`).
+  npm removes and re-extracts packages instead of writing into them, so the
+  store is untouched. The worktree then has a private `node_modules`.
+- Root ignores file modes, so do not run agents' builds as root against a
+  store.
 
 **Wiring into sub-agents.** `spawn_agent` takes `preflight?: boolean`. Unset,
 it defaults on for any brief that mentions a PR (`PR`, `PRs`, "pull

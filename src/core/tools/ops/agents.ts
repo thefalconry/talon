@@ -229,7 +229,7 @@ export const preflightTools: ToolDefinition[] = [
   {
     name: "run_preflight",
     description:
-      "Run the pre-flight lane (`npm run preflight`: typecheck, lint, format, architecture/knip/ratchet gates, the unit tests touched by your diff, gitleaks) in a talon checkout on the daemon host and get its verdict. Run it before every `git push` on a PR branch and push only when it is GREEN; a RED result lists each failing step with the tail of its log. Takes a few minutes (hard cap 10). Needs `npm ci` done in the checkout.",
+      "Run the pre-flight lane (`npm run preflight`: typecheck, lint, format, architecture/knip/ratchet gates, the unit tests touched by your diff, gitleaks) in a talon checkout on the daemon host and get its verdict. Run it before every `git push` on a PR branch and push only when it is GREEN; a RED result lists each failing step with the tail of its log. Takes a few minutes (hard cap 10). Needs node_modules in the checkout: make worktrees with `node scripts/worktree.mjs add <path> <branch>` (hardlinked shared install, ~0 extra disk) rather than `npm ci`.",
     schema: {
       cwd: z
         .string()

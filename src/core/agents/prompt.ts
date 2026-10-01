@@ -60,7 +60,11 @@ const PREFLIGHT_INSTRUCTION =
   "the repo (or call the run_preflight tool with cwd set to your checkout). " +
   "Push only when it is green. If it is red, fix it — or, when a failure " +
   "is genuinely out of scope, say in the PR body which step failed and why " +
-  "you pushed anyway.";
+  "you pushed anyway. Make your checkout with `node scripts/worktree.mjs " +
+  "add /tmp/fix-<name> <branch>` (run it in an existing talon checkout): " +
+  "its node_modules is hardlinked from a shared store, so do NOT run " +
+  "`npm ci` there (~1.2 GB each). Clean up with `node scripts/worktree.mjs " +
+  "remove <path>`.";
 
 /** A brief that opens, updates or talks about a pull request. */
 const PR_BRIEF = /\bPRs?\b|pull[ -]requests?/i;
