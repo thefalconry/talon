@@ -50,13 +50,16 @@ class KokoroTts private constructor(
         )
 
         /// Whether this device can run the engine at all. The native library
-        /// ships for arm64-v8a only (see build.gradle.kts: 32-bit phones and
-        /// x86 emulators fall back to Android TTS), and the float AudioTrack
+        /// ships for arm64-v8a and armeabi-v7a (see build.gradle.kts: x86
+        /// emulators fall back to Android TTS), and the float AudioTrack
         /// builder needs API 23.
         val deviceSupported: Boolean
             get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                Process.is64Bit() &&
-                Build.SUPPORTED_64_BIT_ABIS.contains("arm64-v8a")
+                if (Process.is64Bit()) {
+                    Build.SUPPORTED_64_BIT_ABIS.contains("arm64-v8a")
+                } else {
+                    Build.SUPPORTED_32_BIT_ABIS.contains("armeabi-v7a")
+                }
 
         /// Big cores do the work; past four threads the int8 matmuls stop
         /// scaling on phone SoCs and only steal time from the UI.

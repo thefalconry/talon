@@ -70,17 +70,14 @@ android {
         }
     }
 
-    // The sherpa-onnx AAR ships its JNI library for four ABIs; only the
-    // arm64-v8a one is kept. x86/x86_64 are emulators, and a 32-bit-only ARM
-    // phone is too slow to run an 82M-parameter voice in real time — keeping
-    // armeabi-v7a would add ~16 MB (APK native libraries are stored
-    // uncompressed) for devices that could not use it well. On those ABIs the
-    // native load fails cleanly and voice mode stays on Android TTS
+    // The sherpa-onnx AAR ships its JNI library for four ABIs; the two ARM
+    // ones (arm64-v8a, armeabi-v7a) are kept so 32-bit phones get the neural
+    // voice too. x86/x86_64 are emulators only: dropped to save size, and on
+    // those the native load fails cleanly and voice mode stays on Android TTS
     // (KokoroTts.deviceSupported).
     packaging {
         jniLibs {
             excludes += setOf(
-                "lib/armeabi-v7a/libsherpa-onnx-jni.so",
                 "lib/x86/libsherpa-onnx-jni.so",
                 "lib/x86/libonnxruntime.so",
                 "lib/x86_64/libsherpa-onnx-jni.so",
