@@ -19,8 +19,11 @@ other agent work started. It has:
 - a **brief** — the entire context it gets, because it has no conversation
   history and no shared scratchpad;
 - a **parent**, which is either a chat or another sub-agent;
-- its own **backend and model**, defaulting to the parent's backend and that
-  backend's default model;
+- its own **backend and model**. Unpinned, a child of another agent
+  inherits its parent's backend _and_ model, so a tree stays where its root
+  was put; a top-level spawn starts from the chat's backend (the router may
+  move it to one with more headroom) and that backend's default model. An
+  optional `agents.allowedBackends` allowlist bounds both;
 - a **mailbox** its parent can put instructions in;
 - a hard **timeout**, a **task-table** entry, and a per-run markdown log at
   `~/.talon/workspace/logs/agents/<id>.md`.
@@ -201,7 +204,8 @@ the decision to talk to a human is made.
 "agents": {
   "maxConcurrent": 6,
   "maxDepth": 2,
-  "defaultTimeoutMs": 900000
+  "defaultTimeoutMs": 900000,
+  "allowedBackends": ["claude", "codex"]
 }
 ```
 
@@ -212,6 +216,10 @@ the decision to talk to a human is made.
 - `maxDepth` (default 2) — `0` = chats only, `2` = chat → agent → agent.
 - `defaultTimeoutMs` (default 15 min) — per-spawn `timeout_s` is clamped to
   [30s, 60min] at the tool boundary.
+- `allowedBackends` (optional, unset = any) — backend ids a sub-agent may
+  run on. `spawn_agent` refuses a backend outside it, whether named or
+  inherited, with an error naming the list; a routed choice outside it
+  falls back to the inherited backend instead of failing.
 
 There is no on/off switch: a deployment that wants no fan-out sets
 `maxConcurrent: 1, maxDepth: 0`.

@@ -35,8 +35,8 @@ Bad uses: anything needing a back-and-forth with the user, trivial work you
 could do in one tool call, or work whose result you need in the next second
 (spawning costs a model cold-start).
 
-Backend and model default to this chat's; pass them to put the agent
-somewhere else (e.g. a cheap model for a mechanical sweep, or a backend with
+Backend and model default to the caller's (a sub-agent's own children
+inherit its backend and model); pass them to put the agent somewhere else (e.g. a cheap model for a mechanical sweep, or a backend with
 a bigger context window). Returns the agent id immediately.`;
 
 export const agentTools: ToolDefinition[] = [
@@ -61,13 +61,13 @@ export const agentTools: ToolDefinition[] = [
         .string()
         .optional()
         .describe(
-          "Backend id to run on. Unset = this chat's backend (agents inherit their parent's). Must have a background capability.",
+          "Backend id to run on. Unset = inherit: an agent's children run on its own backend and model; a chat's spawns start from the chat's backend (and may be routed to one with more headroom). Must have a background capability and, when the deployment sets agents.allowedBackends, be on that list.",
         ),
       model: z
         .string()
         .optional()
         .describe(
-          "Model id on the chosen backend. Unset = that backend's default model. Call list_models for valid ids.",
+          "Model id on the chosen backend. Unset = the parent agent's model when the backend is inherited from one, else that backend's default model. Call list_models for valid ids.",
         ),
       effort: z
         .enum(["minimal", "low", "medium", "high", "xhigh"])

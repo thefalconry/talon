@@ -643,6 +643,9 @@ const configSchema = z.object({
    *     default) = chat → agent → agent.
    *   - `defaultTimeoutMs` — hard wall-clock cap when a spawn doesn't pass
    *     its own. Per-spawn values are clamped to [30s, 60min].
+   *   - `allowedBackends` — optional allowlist of backend ids sub-agents
+   *     may run on. Unset = any backend with a background capability. A
+   *     spawn that names (or inherits) a backend outside it is refused.
    */
   agents: z
     .object({
@@ -654,6 +657,7 @@ const configSchema = z.object({
         .min(30_000)
         .max(3_600_000)
         .default(15 * 60 * 1000),
+      allowedBackends: z.array(z.string().min(1)).optional(),
     })
     .optional(),
   /**

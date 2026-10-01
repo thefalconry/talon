@@ -252,6 +252,136 @@ describe("spawnAgent routing", () => {
   });
 });
 
+/** A catalog offering two models, defaulting to the first. */
+function twoModels(defaultId: string, other: string): ModelCatalog {
+  return {
+    resolveModelInfo: async (query: string) =>
+      query === defaultId || query === other
+        ? {
+            kind: "exact" as const,
+            storedValue: query,
+            model: { id: query, name: query } as never,
+          }
+        : { kind: "missing" as const },
+    getDefaultModelId: () => defaultId,
+    getRawModelInfo: async () => undefined,
+  };
+}
+
+/** Register a live parent agent on `backendId`/`model`. */
+function liveParent(backendId: string, model: string): AgentParent {
+  const parent = agentRegistry.register(
+    { label: "parent", brief: "b", parent: CHAT, backendId },
+    { maxConcurrent: 10, maxDepth: 2, defaultTimeoutMs: 60_000 },
+  );
+  if (!parent.ok) throw new Error(parent.error);
+  agentRegistry.start(parent.record.id, {
+    model,
+    abort: new AbortController(),
+  });
+  return { kind: "agent", agentId: parent.record.id };
+}
+
+describe("spawnAgent inheritance and allowlist", () => {
+  it("a child of an agent inherits its backend and model without routing", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run, { models: twoModels("sonnet", "haiku") });
+    const parent = liveParent("codex", "haiku");
+
+    const outcome = await spawnAgent({ brief: "b", label: "kid", parent });
+    expect(outcome).toMatchObject({
+      ok: true,
+      backendId: "codex",
+      model: "haiku",
+    });
+    expect(chooseBackend).not.toHaveBeenCalled();
+    if (!outcome.ok) return;
+    await settled(outcome.agentId);
+    const params = run.mock.calls[0]?.[0] as OneShotAgentParams;
+    expect(params.model).toBe("haiku");
+  });
+
+  it("a child that names a model keeps it on the routed path", async () => {
+    await withBackend(
+      vi.fn<OneShot>(async () => {}),
+      {
+        models: twoModels("sonnet", "haiku"),
+      },
+    );
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "pinned",
+      routed: false,
+    });
+    const parent = liveParent("codex", "haiku");
+    const outcome = await spawnAgent({
+      brief: "b",
+      label: "kid",
+      parent,
+      model: "sonnet",
+    });
+    expect(outcome).toMatchObject({ ok: true, model: "sonnet" });
+    expect(chooseBackend).toHaveBeenCalled();
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("refuses a backend outside agents.allowedBackends with a clear error", async () => {
+    initAgents({ execute, caps: { allowedBackends: ["claude"] } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toContain('Backend "codex" is not allowed');
+    expect(outcome.error).toContain("agents.allowedBackends: claude");
+    expect(agentRegistry.list()).toEqual([]);
+  });
+
+  it("refuses an inherited backend outside the allowlist too", async () => {
+    initAgents({ execute, caps: { allowedBackends: ["claude"] } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const parent = liveParent("codex", "sonnet");
+    const outcome = await spawnAgent({ brief: "b", label: "kid", parent });
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("falls back to the inherited backend when routing picks a disallowed one", async () => {
+    initAgents({ execute, caps: { allowedBackends: ["claude"] } });
+    const run = vi.fn<OneShot>(async () => {});
+    for (const id of ["claude", "codex"] as const) {
+      registerBackend(
+        backendFactory(
+          id,
+          composeBackend({
+            id,
+            label: id,
+            background: { runOneShotAgent: run },
+            models: catalog(),
+          }),
+        ),
+      );
+    }
+    await initBackendPool(STUB_CONFIG, STUB_CTX);
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "most headroom",
+      routed: true,
+    });
+    const outcome = await spawn({ backendId: undefined });
+    expect(outcome).toMatchObject({ ok: true, backendId: "claude" });
+    if (!outcome.ok) return;
+    expect(outcome.routing).toBeUndefined();
+    await settled(outcome.agentId);
+  });
+
+  it("allows any backend when the allowlist is empty", async () => {
+    initAgents({ execute, caps: { allowedBackends: [] } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+});
+
 describe("spawnAgent resolution", () => {
   it("runs on the chosen backend's default model with an agent context label", async () => {
     const run = vi.fn<OneShot>(async () => {});

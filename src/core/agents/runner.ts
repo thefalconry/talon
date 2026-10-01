@@ -112,7 +112,10 @@ export function initAgents(
     "agents",
     `Initialized — maxConcurrent=${capsHolder.caps.maxConcurrent} ` +
       `maxDepth=${capsHolder.caps.maxDepth} ` +
-      `timeout=${Math.round(capsHolder.caps.defaultTimeoutMs / 1000)}s`,
+      `timeout=${Math.round(capsHolder.caps.defaultTimeoutMs / 1000)}s` +
+      (capsHolder.caps.allowedBackends?.length
+        ? ` allowedBackends=${capsHolder.caps.allowedBackends.join(",")}`
+        : ""),
   );
 }
 
@@ -137,19 +140,37 @@ function inheritedBackendId(parent: AgentParent): string | null {
   return agentRegistry.get(parent.agentId)?.backendId ?? null;
 }
 
+/** Where a spawn lands: backend, the model it inherits, and why. */
+interface SpawnTarget {
+  readonly backendId: string | null;
+  /** The parent agent's model, inherited by an unpinned child. */
+  readonly inheritedModel?: string;
+  readonly routing?: string;
+}
+
 /**
  * Which backend this agent runs on, and why.
  *
  * An explicit backend (or model — a model id is backend-specific, so naming
- * one pins its backend) is honoured as written. With neither, the run is a
- * routing decision: sub-agents are isolated one-shots with no session to
- * keep warm, so they are the cheapest work to move onto whichever
- * subscription has room.
+ * one pins its backend) is honoured as written. A child of another agent
+ * with neither inherits its parent's backend *and* model: a tree of agents
+ * stays on the backend its root was put on, so a parent that chose (or was
+ * told to use) a backend does not see its children wander off to another
+ * subscription. A top-level spawn with neither is a routing decision:
+ * sub-agents are isolated one-shots with no session to keep warm, so they
+ * are the cheapest work to move onto whichever subscription has room.
  */
-async function resolveSpawnBackend(
-  spec: AgentSpawnSpec,
-): Promise<{ backendId: string | null; routing?: string }> {
+async function resolveSpawnBackend(spec: AgentSpawnSpec): Promise<SpawnTarget> {
   if (spec.backendId) return { backendId: spec.backendId };
+  if (spec.parent.kind === "agent" && !spec.model) {
+    const parent = agentRegistry.get(spec.parent.agentId);
+    if (parent) {
+      return {
+        backendId: parent.backendId,
+        ...(parent.model ? { inheritedModel: parent.model } : {}),
+      };
+    }
+  }
   const inherited = inheritedBackendId(spec.parent);
   if (!inherited) return { backendId: null };
   const taskClass = taskClassForEffort(spec.reasoningEffort);
@@ -166,10 +187,35 @@ async function resolveSpawnBackend(
         }
       : {}),
   });
+  // A routed pick outside the allowlist falls back to the inherited
+  // backend rather than refusing a spawn the caller never pinned.
+  if (
+    decision.routed &&
+    !isBackendAllowed(decision.backendId) &&
+    isBackendAllowed(inherited)
+  ) {
+    return { backendId: inherited };
+  }
   return {
     backendId: decision.backendId,
     ...(decision.routed ? { routing: decision.reason } : {}),
   };
+}
+
+/** Whether `agents.allowedBackends` (when set) lets an agent run here. */
+function isBackendAllowed(backendId: string): boolean {
+  const allowed = capsHolder.caps.allowedBackends;
+  return !allowed || allowed.length === 0 || allowed.includes(backendId);
+}
+
+/** The tool error for a backend outside `agents.allowedBackends`. */
+function disallowedBackendError(backendId: string): string {
+  const allowed = capsHolder.caps.allowedBackends ?? [];
+  return (
+    `Backend "${backendId}" is not allowed for sub-agents ` +
+    `(agents.allowedBackends: ${allowed.join(", ")}). Pass one of those ` +
+    `as backend, or leave it unset to inherit.`
+  );
 }
 
 /** The chat a run's task belongs to, for `talon ps`. */
@@ -262,6 +308,10 @@ export async function spawnAgent(
         "Could not resolve a backend for this agent — pass one explicitly.",
     };
   }
+  if (!isBackendAllowed(backendId)) {
+    return { ok: false, error: disallowedBackendError(backendId) };
+  }
+  const model = spec.model ?? routed.inheritedModel;
 
   // Register first: the slot and the depth are claimed synchronously, so two
   // concurrent spawns can never both slip past maxConcurrent while awaiting
@@ -296,7 +346,7 @@ export async function spawnAgent(
     };
   }
 
-  const resolved = await resolveRun(acquired.backend, backendId, spec.model);
+  const resolved = await resolveRun(acquired.backend, backendId, model);
   if (!resolved.ok) {
     agentRegistry.discard(record.id);
     await acquired.release();
