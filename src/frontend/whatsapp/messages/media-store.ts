@@ -96,7 +96,9 @@ export async function saveInboundMedia(
     writeFileSync(filePath, buffer);
 
     const caption = content?.caption ?? undefined;
-    addMedia({
+    // addMedia may dedupe onto an existing identical file and delete
+    // this download — report the path it resolves to.
+    const savedPath = await addMedia({
       chatId,
       msgId,
       senderName,
@@ -105,7 +107,7 @@ export async function saveInboundMedia(
       timestamp: Date.now(),
       ...(caption ? { caption } : {}),
     });
-    return { filePath, type, ...(caption ? { caption } : {}) };
+    return { filePath: savedPath, type, ...(caption ? { caption } : {}) };
   } catch (err) {
     logWarn(
       "whatsapp",

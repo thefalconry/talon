@@ -43,3 +43,7 @@ ORDER BY timestamp ASC, rowid ASC LIMIT 1
 
 -- name: countByFilePath
 SELECT COUNT(*) AS n FROM media_index WHERE file_path = ?
+
+-- name: byMessage
+SELECT chat_id, msg_id, sender_name, type, file_path, caption, timestamp, content_hash
+FROM media_index WHERE chat_id = ? AND msg_id = ?
