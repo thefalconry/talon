@@ -94,9 +94,16 @@ export interface AgentSpawnSpec {
   readonly brief: string;
   readonly label: string;
   readonly parent: AgentParent;
-  /** Defaults to the parent's backend. */
+  /**
+   * Unset: a child of another agent inherits its parent's backend (and,
+   * with no model either, its model); a top-level spawn starts from the
+   * chat's backend and may be routed.
+   */
   readonly backendId?: string;
-  /** Defaults to the resolved backend's own default model. */
+  /**
+   * Defaults to the parent agent's model when the backend is inherited from
+   * one, else the resolved backend's own default model.
+   */
   readonly model?: string;
   readonly reasoningEffort?: ReasoningEffortLevel;
   /** Hard wall-clock cap. Defaults to `agents.defaultTimeoutMs`. */
@@ -132,4 +139,9 @@ export interface AgentCaps {
   readonly maxDepth: number;
   /** Default hard timeout for one run. */
   readonly defaultTimeoutMs: number;
+  /**
+   * Backends a sub-agent may run on. Unset or empty = any backend with a
+   * background capability. Enforced by `spawnAgent` on the final choice.
+   */
+  readonly allowedBackends?: readonly string[];
 }
