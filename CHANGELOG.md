@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.32.0](https://github.com/thefalconry/talon/compare/v5.31.1...v5.32.0) (2026-10-01)
+
+
+### Features
+
+* **companion:** on-device Kokoro neural voice for Android voice mode ([#1238](https://github.com/thefalconry/talon/issues/1238)) ([8e6ba1e](https://github.com/thefalconry/talon/commit/8e6ba1e92a1f1e0f5463d5214c34cfd1515458c8))
+
 ## [5.31.1](https://github.com/thefalconry/talon/compare/v5.31.0...v5.31.1) (2026-10-01)
 
 
