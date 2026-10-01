@@ -681,11 +681,9 @@ export class AgentRegistry {
   /**
    * An agent's live **peers** — the other agents sharing its parent.
    *
-   * This is the addressing scope for agent-to-agent messaging, and it is
-   * deliberately narrower than "everything under the same chat". A swarm is
-   * a set of siblings spawned for one job, so siblings are the useful unit;
-   * widening to the whole chat tree would let an agent reach a cousin from an
-   * unrelated piece of work it knows nothing about.
+   * The default view of `list_peers`: a swarm is a set of siblings spawned
+   * for one job, so siblings are the useful unit to show first. Messaging
+   * reaches the whole tree (`treeOf`).
    *
    * Live only: a settled agent has no mailbox to deliver into, and offering
    * it as a peer would only produce a delivery failure one call later.
@@ -700,6 +698,46 @@ export class AgentRegistry {
       if (sameParent(record.parent, self.parent)) peers.push(record);
     }
     return peers.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /**
+   * Every other live agent in this agent's tree — the agents whose ancestry
+   * roots in the same chat (parent, children, siblings, cousins), oldest
+   * first. This is the addressing scope of `message_peer`: an agent working
+   * for one chat can reach any live agent working for that chat, and none
+   * working for another.
+   */
+  treeOf(id: string): AgentRecord[] {
+    const self = this.get(id);
+    if (!self) return [];
+    const root = this.rootChat(self);
+    if (root === null) return [];
+    const tree: AgentRecord[] = [];
+    for (const entry of this.live.values()) {
+      const record = snapshot(entry);
+      if (record.id === id) continue;
+      if (this.rootChat(record) === root) tree.push(record);
+    }
+    return tree.sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  /**
+   * Resolve `target` — an agent id, else an exact label — to a live agent
+   * in `id`'s tree. A label two live agents share is ambiguous and resolves
+   * to nothing, with both candidates returned so the caller can say which.
+   */
+  findInTree(
+    id: string,
+    target: string,
+  ):
+    | { readonly ok: true; readonly record: AgentRecord }
+    | { readonly ok: false; readonly candidates: AgentRecord[] } {
+    const tree = this.treeOf(id);
+    const byId = tree.find((record) => record.id === target);
+    if (byId) return { ok: true, record: byId };
+    const byLabel = tree.filter((record) => record.label === target);
+    if (byLabel.length === 1) return { ok: true, record: byLabel[0]! };
+    return { ok: false, candidates: byLabel };
   }
 
   /** Live agents plus the bounded settled ring, oldest first. */

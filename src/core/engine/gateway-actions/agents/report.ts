@@ -25,6 +25,33 @@ import type { ActionResult } from "../../../types.js";
 import type { AgentRecord } from "../../../agents/index.js";
 import type { SharedActionHandlers } from "../types.js";
 
+/** How `other` relates to `self` within their shared tree. */
+function relation(self: AgentRecord, other: AgentRecord): string {
+  if (self.parent.kind === "agent" && self.parent.agentId === other.id) {
+    return "your parent";
+  }
+  if (other.parent.kind === "agent" && other.parent.agentId === self.id) {
+    return "your child";
+  }
+  const sameParent =
+    self.parent.kind === other.parent.kind &&
+    (self.parent.kind === "chat"
+      ? other.parent.kind === "chat" &&
+        other.parent.chatId === self.parent.chatId
+      : other.parent.kind === "agent" &&
+        other.parent.agentId === self.parent.agentId);
+  return sameParent ? "sibling" : `in your tree, depth ${other.depth}`;
+}
+
+/** One agent in a `list_peers` listing. */
+function renderPeer(peer: AgentRecord, rel?: string): string {
+  return (
+    `- ${peer.label} [${peer.state}]${rel ? ` — ${rel}` : ""}\n` +
+    `  ID: ${peer.id}\n` +
+    `  Working on: ${peer.brief.slice(0, 160).replace(/\s+/g, " ")}…`
+  );
+}
+
 function notAnAgent(tool: string): ActionResult {
   return {
     ok: false,
@@ -90,64 +117,91 @@ export const agentReportHandlers: SharedActionHandlers = {
     };
   },
 
-  list_peers: (_body, _chatId, _backend, chatKey) => {
+  list_peers: (body, _chatId, _backend, chatKey) => {
     const record = callingAgent(chatKey);
     if (!record) return notAnAgent("list_peers");
+    const scope = body.scope === undefined ? "siblings" : String(body.scope);
+    if (scope !== "siblings" && scope !== "tree") {
+      return {
+        ok: false,
+        error: `Unknown scope "${scope}". Use "siblings" or "tree".`,
+      };
+    }
+    if (scope === "tree") {
+      const tree = agentRegistry.treeOf(record.id);
+      if (tree.length === 0) {
+        return {
+          ok: true,
+          text: "No other live agents in your tree. Report to your parent as usual.",
+        };
+      }
+      return {
+        ok: true,
+        text:
+          `${tree.length} other live agent(s) in your tree (everything ` +
+          `working for the same chat). Any of them can be reached with ` +
+          `message_peer:\n\n` +
+          tree
+            .map((other) => renderPeer(other, relation(record, other)))
+            .join("\n"),
+      };
+    }
     const peers = agentRegistry.peersOf(record.id);
     if (peers.length === 0) {
       return {
         ok: true,
         text:
           "No peers — you are the only agent your parent has running. " +
-          "Report to your parent as usual.",
+          'Report to your parent as usual (list_peers with scope "tree" ' +
+          "shows the rest of your agent tree).",
       };
     }
-    const rendered = peers
-      .map(
-        (peer) =>
-          `- ${peer.label} [${peer.state}]\n  ID: ${peer.id}\n  Working on: ${peer.brief.slice(0, 160).replace(/\s+/g, " ")}…`,
-      )
-      .join("\n");
     return {
       ok: true,
-      text: `${peers.length} peer(s) running alongside you:\n\n${rendered}`,
+      text:
+        `${peers.length} peer(s) running alongside you:\n\n` +
+        peers.map((peer) => renderPeer(peer)).join("\n"),
     };
   },
 
   message_peer: (body, _chatId, _backend, chatKey) => {
     const record = callingAgent(chatKey);
     if (!record) return notAnAgent("message_peer");
-    const id = String(body.agent_id ?? "").trim();
-    if (!id) return { ok: false, error: "Missing agent_id" };
+    const target = String(body.agent_id ?? body.label ?? "").trim();
+    if (!target) return { ok: false, error: "Missing agent_id (or label)" };
     const text = String(body.text ?? "").trim();
     if (!text) return { ok: false, error: "Missing text" };
-    // Peers only. An agent may address a sibling, never an arbitrary id:
-    // resolving through peersOf is what stops one swarm reaching into
-    // another, and it means a wrong id fails closed rather than delivering.
-    const peer = agentRegistry
-      .peersOf(record.id)
-      .find((candidate) => candidate.id === id);
-    if (!peer) {
+    // Resolved through the caller's own tree: an agent can reach any live
+    // agent working for the same chat, never one working for another — a
+    // wrong or foreign id fails closed rather than delivering.
+    const found = agentRegistry.findInTree(record.id, target);
+    if (!found.ok) {
       return {
         ok: false,
         error:
-          `No peer "${id}". You can only message agents spawned by the same ` +
-          `parent as you — call list_peers to see them.`,
+          found.candidates.length > 1
+            ? `"${target}" is ambiguous — ${found.candidates.length} live ` +
+              `agents in your tree have that label ` +
+              `(${found.candidates.map((c) => c.id).join(", ")}). Use the id.`
+            : `No live agent "${target}" in your tree. You can message any ` +
+              `live agent working for the same chat as you — call ` +
+              `list_peers with scope "tree" to see them.`,
       };
     }
-    if (!deliverToAgent(record.id, id, text)) {
+    const peer = found.record;
+    if (!deliverToAgent(record.id, peer.id, text)) {
       return {
         ok: false,
         error:
-          `Could not deliver to "${peer.label}" (${id}): it has already ` +
+          `Could not deliver to "${peer.label}" (${peer.id}): it has already ` +
           `settled, or its inbox is full.`,
       };
     }
     return {
       ok: true,
       text:
-        `Queued for peer "${peer.label}" (${id}). It reads its inbox at its ` +
-        `own milestones, so this is not an interrupt.`,
+        `Queued for "${peer.label}" (${peer.id}, ${relation(record, peer)}). ` +
+        `It reads its inbox at its own milestones, so this is not an interrupt.`,
     };
   },
 
