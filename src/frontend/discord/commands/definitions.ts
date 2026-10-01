@@ -17,6 +17,26 @@ import type { TalonConfig } from "../../../core/config/index.js";
 import { log, logError, logWarn } from "../../../util/log.js";
 import { getRepoRoot } from "../../../core/update/self-update.js";
 
+/** /secret — one-time paste link for a password (admin, DMs). */
+function secretCommand(): unknown {
+  return new SlashCommandBuilder()
+    .setName("secret")
+    .setDescription("Store a password via a one-time link (admin, DMs)")
+    .addStringOption((o) =>
+      o
+        .setName("name")
+        .setDescription("File name under ~/.talon/secrets")
+        .setRequired(true),
+    )
+    .addStringOption((o) =>
+      o
+        .setName("purpose")
+        .setDescription("What it's for (shown on the form)")
+        .setRequired(false),
+    )
+    .toJSON();
+}
+
 /**
  * /backup — its own builder: the definitions list is one long literal and
  * this is the only entry with two options and seven choices.
@@ -167,6 +187,7 @@ function buildCommandDefinitions(devBuild = false): unknown[] {
         ]
       : []),
     backupCommand(),
+    secretCommand(),
     new SlashCommandBuilder()
       .setName("admin")
       .setDescription("Admin operations (admin only)")

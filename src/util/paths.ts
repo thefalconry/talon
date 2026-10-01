@@ -89,6 +89,12 @@ export const dirs = {
   /** Key material (bridge TLS identity, release keys): ~/.talon/keys/ */
   keys: resolve(TALON_ROOT, "keys"),
   /**
+   * Operator secrets, one file per value (mode 600): ~/.talon/secrets/.
+   * Written by the secret drop (`/secret <name>`, `request_secret`) so a
+   * password never has to travel through a chat message.
+   */
+  secrets: resolve(TALON_ROOT, "secrets"),
+  /**
    * The talon:// namespace on disk: ~/.talon/ns/. Holds one symlink per
    * file-backed mount (home → workspace/, skills/, …); while the daemon
    * runs with FUSE the synthetic mounts (proc/, plugins/) appear here too.

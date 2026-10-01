@@ -2,7 +2,8 @@
 
 Backups are on by default. A snapshot holds everything needed to rebuild
 the agent on another machine: `config.json` (bot tokens, API keys),
-`keys/` (the bridge key and TLS identity), `workspace/secrets`, the
+`keys/` (the bridge key and TLS identity), `secrets/` (what the secret
+drop stores), `workspace/secrets`, the
 database and memory. So a snapshot must be treated like the credentials
 it contains. This page covers what protects it and what you have to do.
 

@@ -371,6 +371,26 @@ export class BridgeLinks {
     };
   }
 
+  /**
+   * The base URL a device should open a bridge-served link at (secret
+   * drop): the same answer the pairing and install links use.
+   */
+  bridgeBaseUrlFor(
+    explicit?: unknown,
+  ): { ok: true; url: string } | { ok: false; text: string } {
+    const info = this.bridgeInfo;
+    if (!info) {
+      return {
+        ok: false,
+        text: "The native bridge isn't running, so there is nothing to serve the link. Enable the native frontend first.",
+      };
+    }
+    const base = this.bridgeBaseUrl(info, explicit);
+    return typeof base === "string"
+      ? { ok: true, url: base }
+      : { ok: false, text: base.error };
+  }
+
   /** GET /node/install — serve a grant's installer script (single-use). */
   /**
    * An auto grant is pinned here first, from the os/arch its one-liner

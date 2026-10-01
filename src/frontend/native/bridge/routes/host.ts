@@ -178,6 +178,16 @@ export type BridgeServerHandlers = {
     | Promise<{ script: string; filename: string } | null>;
   /** Resolve a node-provisioning token to the binary to stream, or null. */
   openNodeBinary(token: string): { path: string; size: number } | null;
+  /** The secret-drop form for a live grant (not spent), or null. */
+  openSecretDrop(token: string): string | null;
+  /** Whether a secret-drop grant is live (checked before reading a body). */
+  isLiveSecretDrop(token: string): boolean;
+  /** Spend a secret-drop grant and store the value; the page to show. */
+  submitSecretDrop(
+    token: string,
+    body: string,
+    contentType: string | undefined,
+  ): Promise<{ status: number; html: string }>;
 };
 
 /**

@@ -73,6 +73,9 @@ const handlers: BridgeServerHandlers = {
   openNodeInstall: () => null,
   openCompanionPair: () => null,
   openNodeBinary: () => null,
+  openSecretDrop: () => null,
+  isLiveSecretDrop: () => false,
+  submitSecretDrop: async () => ({ status: 404, html: "" }),
 };
 
 describe("bridge server security posture", () => {

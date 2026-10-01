@@ -4,6 +4,11 @@
  * anything with logic of its own lives in the module named for it.
  */
 
+import {
+  isLiveSecretDrop,
+  openSecretDropForm,
+  submitSecretDrop,
+} from "../../../core/secrets/index.js";
 import { files } from "../../../util/paths.js";
 import { setChatPulse } from "../../../storage/chat-settings.js";
 import { getPooledBackend } from "../../../core/engine/backend-controller/index.js";
@@ -219,5 +224,9 @@ export function buildBridgeHandlers(
     openCompanionPair: (token, format) => mesh.openCompanionPair(token, format),
     openNodeInstall: (token, os, arch) => mesh.openNodeInstall(token, os, arch),
     openNodeBinary: (token) => mesh.openNodeBinary(token),
+    openSecretDrop: (token) => openSecretDropForm(token),
+    isLiveSecretDrop: (token) => isLiveSecretDrop(token),
+    submitSecretDrop: (token, body, contentType) =>
+      submitSecretDrop(token, body, contentType),
   };
 }

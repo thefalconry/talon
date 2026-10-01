@@ -18,6 +18,7 @@ import type { NativeRuntime } from "../runtime.js";
 import { emitNotice, emitUser } from "../turn/emit.js";
 import { adminCommands } from "./admin.js";
 import { backupCommand } from "./backup.js";
+import { secretCommandReply } from "../../../core/secrets/index.js";
 import { findNativeCommand, type NativeCommandName } from "./definitions.js";
 import { infoCommands } from "./info.js";
 import { sessionCommands } from "./session.js";
@@ -30,6 +31,17 @@ const HANDLERS: Record<NativeCommandName, NativeCommandHandler> = {
   ...sessionCommands,
   ...adminCommands,
   backup: backupCommand,
+  // Native chats are one operator's own surface: never a group.
+  secret: async (ctx) =>
+    ctx.reply(
+      secretCommandReply({
+        arg: ctx.arg,
+        chatKey: ctx.entry.id,
+        frontend: "native",
+        isOperator: ctx.operator,
+        isGroup: false,
+      }),
+    ),
 };
 
 export type ParsedNativeCommand = { name: NativeCommandName; arg: string };

@@ -37,6 +37,11 @@ export const BRIDGE_ROUTE_AUTH = {
   "GET /pair": "public",
   "GET /node/install": "public",
   "GET /node/binary": "public",
+  // Secret drop: a browser with no credential pastes one value, once. GET
+  // shows the form without spending the grant (link previews fetch it);
+  // POST spends it, and its body is read only after the grant checks out.
+  "GET /secret": "public",
+  "POST /secret": "public",
 
   // Credential self-service. Any credential may ask who it is, and trade
   // itself (or the shared legacy token) for a fresh per-device credential

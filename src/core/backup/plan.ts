@@ -75,6 +75,10 @@ export const HOME_INCLUDES: readonly string[] = [
   "prompts",
   "data",
   "keys",
+  // Operator secrets (~/.talon/secrets, the secret drop's folder). Held to
+  // the same rule as keys/ and workspace/secrets: in the snapshot, so
+  // encrypt backups (docs/backup-security.md).
+  "secrets",
   "google",
   "plugins",
   "mesh-devices.json",

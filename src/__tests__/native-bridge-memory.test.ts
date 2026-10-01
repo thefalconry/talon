@@ -84,6 +84,9 @@ const handlers = {
   openNodeInstall: () => null,
   openCompanionPair: () => null,
   openNodeBinary: () => null,
+  openSecretDrop: () => null,
+  isLiveSecretDrop: () => false,
+  submitSecretDrop: async () => ({ status: 404, html: "" }),
 } satisfies BridgeServerHandlers;
 
 let server: BridgeServer;

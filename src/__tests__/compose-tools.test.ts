@@ -131,6 +131,8 @@ const ALL_TOOLS_ORDER = [
   "backup_status",
   // Pre-flight lane (feat/agent-preflight) — appended at the end.
   "run_preflight",
+  // Secret drop (feat/secret-drop) — appended at the end.
+  "request_secret",
 ];
 
 describe("ALL_TOOLS registry", () => {
