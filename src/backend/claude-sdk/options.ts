@@ -37,7 +37,11 @@ import {
   gatewayToken,
 } from "../../core/engine/gateway-auth.js";
 import { getConfig, getBridgePort } from "./state.js";
-import { ALLOWED_TOOLS_CHAT, EFFORT_MAP } from "./constants.js";
+import {
+  ALLOWED_TOOLS_CHAT,
+  CLAUDE_RETENTION_SETTINGS,
+  EFFORT_MAP,
+} from "./constants.js";
 import {
   isGuestTurn,
   isGuestPluginAllowed,
@@ -482,6 +486,8 @@ export function buildSdkOptions(
     ...(config.claudeBinary
       ? { pathToClaudeCodeExecutable: config.claudeBinary }
       : {}),
+    // Keep session transcripts: Talon resumes chats from them.
+    settings: { ...CLAUDE_RETENTION_SETTINGS },
     // Whitelist of SDK built-in tools. Anything not listed (e.g. WebSearch,
     // WebFetch, Monitor, PushNotification, RemoteTrigger, Plan/Worktree/Todo
     // helpers, AskUserQuestion, ScheduleWakeup) is unavailable to the model.
