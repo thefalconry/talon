@@ -83,6 +83,9 @@ const handlers: BridgeServerHandlers = {
   openNodeInstall: () => null,
   openCompanionPair: () => null,
   openNodeBinary: () => null,
+  openSecretDrop: () => null,
+  isLiveSecretDrop: () => false,
+  submitSecretDrop: async () => ({ status: 404, html: "" }),
 };
 
 const TOKEN = "route-table-secret";
@@ -117,7 +120,7 @@ describe("bridge route table", () => {
     server = undefined;
   });
 
-  it("declares exactly the four pre-auth routes as public", () => {
+  it("declares exactly the six pre-auth routes as public", () => {
     const publicRoutes = Object.entries(BRIDGE_ROUTE_AUTH)
       .filter(([, tier]) => tier === "public")
       .map(([key]) => key)
@@ -127,6 +130,8 @@ describe("bridge route table", () => {
       "GET /node/binary",
       "GET /node/install",
       "GET /pair",
+      "GET /secret",
+      "POST /secret",
     ]);
   });
 

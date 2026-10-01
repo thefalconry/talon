@@ -83,12 +83,14 @@ export const GUEST_TOOL_ALLOWLIST: ReadonlySet<string> = new Set([
 
 /**
  * Tools whose output is a live credential (an install command or pairing
- * link embedding a bridge bearer token). Operator-only, and their output is delivered
+ * link embedding a bridge bearer token, or a secret-drop link). Operator-only, and their output is delivered
  * to the operator's private chat, never into a shared one.
  */
 export const OPERATOR_PRIVATE_OUTPUT_TOOLS: ReadonlySet<string> = new Set([
   "make_node_install_link",
   "make_companion_pair_link",
+  // A secret-drop link writes into ~/.talon/secrets for whoever opens it.
+  "request_secret",
 ]);
 
 /** Parameters that name another chat. A guest may only name its own. */

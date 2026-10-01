@@ -863,6 +863,13 @@ export class MeshService {
     return this.links.makeCompanionPairLink(label, bridgeUrl);
   }
 
+  /** The bridge base URL a bridge-served link should use (secret drop). */
+  bridgeBaseUrl(
+    explicit?: unknown,
+  ): ReturnType<BridgeLinks["bridgeBaseUrlFor"]> {
+    return this.links.bridgeBaseUrlFor(explicit);
+  }
+
   /** `make_companion_pair_link`: the pairing link as a tool result. */
   makeCompanionPairLinkText(
     label?: unknown,

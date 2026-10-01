@@ -178,6 +178,9 @@ describe("bridge server over TLS", () => {
     openNodeInstall: () => null,
     openCompanionPair: () => null,
     openNodeBinary: () => null,
+    openSecretDrop: () => null,
+    isLiveSecretDrop: () => false,
+    submitSecretDrop: async () => ({ status: 404, html: "" }),
   };
 
   /** GET over HTTPS trusting exactly the bridge's own certificate. */

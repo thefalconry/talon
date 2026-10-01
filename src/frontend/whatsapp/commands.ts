@@ -1,6 +1,6 @@
 /**
  * Slash commands on WhatsApp — `/model`, `/effort`, `/settings`,
- * `/reset`, `/status`, `/help`.
+ * `/reset`, `/status`, `/secret`, `/help`.
  *
  * WhatsApp has no inline buttons, so everything Telegram does with a
  * picker is done here with typed arguments: `/model` prints a numbered
@@ -26,6 +26,8 @@ import {
   settingsCommandReply,
   statusCommandReply,
 } from "../presentation/text-commands.js";
+import { isOperatorPrivateChat } from "../../core/mcp-hub/guest-scope.js";
+import { secretCommandReply } from "../../core/secrets/index.js";
 import { sendText } from "./actions/send.js";
 import { identityAllowed, type Identity } from "./connection/identity.js";
 import type { WhatsAppChatInfo } from "./registry.js";
@@ -37,6 +39,7 @@ const COMMAND_NAMES = [
   "settings",
   "reset",
   "status",
+  "secret",
   "help",
 ] as const;
 
@@ -96,6 +99,7 @@ const HELP_TEXT = [
   "/settings — this chat's model, backend, effort and pulse",
   "/status — session info, context usage and stats",
   "/reset — start a fresh session (chat log kept)",
+  "/secret <name> — a one-time link to store a password, so it never goes in a chat (operator, DM)",
   "/help — this message",
 ].join("\n");
 
@@ -143,6 +147,17 @@ export async function executeWhatsAppCommand(
       return statusCommandReply(chatId, deps);
     case "reset":
       return runResetCommand(chatId, inbound.senderName, deps);
+    case "secret":
+      return secretCommandReply({
+        arg: cmd.arg,
+        chatKey: chatId,
+        frontend: "whatsapp",
+        // The operator's own DM (guest scope's operator chats), never a
+        // group and never another allowlisted contact.
+        isOperator:
+          !inbound.isGroup && isOperatorPrivateChat("whatsapp", chatId),
+        isGroup: inbound.isGroup,
+      });
     case "help":
       return HELP_TEXT;
   }

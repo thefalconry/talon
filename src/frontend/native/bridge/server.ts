@@ -81,6 +81,25 @@ const SSE_PING_MS = 25_000;
  */
 const SSE_MAX_BACKLOG_BYTES = 16 * 1024 * 1024;
 const MAX_BODY_BYTES = 256 * 1024;
+
+/**
+ * Routes a page served by the bridge itself posts a plain HTML form to
+ * (the secret drop). A browser stamps that POST with the bridge's own
+ * origin, which is no cross-site request — so these, and only these,
+ * accept it without `native.allowedOrigins`. Every other route still
+ * refuses any Origin not configured, same-origin included: a page under
+ * /media is the bridge's origin too.
+ */
+const SAME_ORIGIN_FORM_ROUTES: ReadonlySet<string> = new Set(["POST /secret"]);
+
+/** `host[:port]` of an Origin header, or undefined when it doesn't parse. */
+function originHost(origin: string): string | undefined {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return undefined;
+  }
+}
 const PORT_FALLBACKS = 5;
 
 /**
@@ -90,7 +109,8 @@ const PORT_FALLBACKS = 5;
  * bodies) are unaffected. It does bound request bodies, and every
  * body-reading route sits behind the bearer check (an unauthenticated
  * request is answered 401/429 with `Connection: close` before its body is
- * read), so the budget is sized for the largest authenticated upload
+ * read) — the one pre-auth exception, `POST /secret`, reads a body only
+ * for a live single-use grant and caps it at 200 KB — so the budget is sized for the largest authenticated upload
  * (512 MB) on a slow link, not for an attacker.
  */
 export type BridgeTimeouts = {
@@ -496,7 +516,10 @@ export class BridgeServer {
     // slip the browser is asking for.
     const origin =
       typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-    const refusal = this.originGuard(req);
+    const refusal = this.originGuard(
+      req,
+      SAME_ORIGIN_FORM_ROUTES.has(`${method} ${path}`),
+    );
     if (refusal !== undefined) {
       res.writeHead(403, {
         ...this.corsHeaders(),
@@ -860,10 +883,15 @@ export class BridgeServer {
    *
    * Returns an error string when the request must be refused.
    */
-  private originGuard(req: IncomingMessage): string | undefined {
+  private originGuard(
+    req: IncomingMessage,
+    sameOriginAllowed = false,
+  ): string | undefined {
     const origin = req.headers.origin;
     if (typeof origin === "string" && origin !== "" && origin !== "null") {
-      if (!this.isAllowedOrigin(origin)) {
+      const sameOrigin =
+        sameOriginAllowed && originHost(origin) === req.headers.host;
+      if (!sameOrigin && !this.isAllowedOrigin(origin)) {
         return `Origin ${origin} is not allowed. Add it to native.allowedOrigins to permit browser clients.`;
       }
     }

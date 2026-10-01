@@ -38,6 +38,7 @@ import {
   handleSettings,
 } from "./settings.js";
 import { handleBackup } from "./backup.js";
+import { handleSecret } from "./secret.js";
 import {
   handleRestart,
   handleMetrics,
@@ -163,6 +164,8 @@ async function routeSlashCommand(
       return handleUpdate(interaction, config);
     case "backup":
       return handleBackup(interaction);
+    case "secret":
+      return handleSecret(interaction, chatId);
     case "admin":
       return handleAdmin(interaction, config, gateway);
     default:

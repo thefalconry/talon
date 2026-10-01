@@ -22,6 +22,7 @@
  *   - `mesh`      — companion device mesh (presence + location)
  *   - `cross-send` — explicit-target sends through any enabled frontend
  *   - `backup`    — snapshots and checkpoints (chat-free; no restore)
+ *   - `secrets`   — secret-drop links (core/secrets; needs the chat)
  */
 
 import type { ActionResult } from "../../types.js";
@@ -49,6 +50,7 @@ import {
 } from "./whatsapp-account.js";
 import { nativeActionRefusal, nativeHandlers } from "./native/index.js";
 import { backupChatFreeActions, backupHandlers } from "./backup/index.js";
+import { secretHandlers } from "../../secrets/actions.js";
 
 // Null-prototype so a request `action` of "toString" / "constructor" / etc.
 // can't resolve an inherited Object.prototype method — `handlers[action]` only
@@ -70,6 +72,7 @@ const handlers: SharedActionHandlers = Object.assign(Object.create(null), {
   ...whatsappAccountHandlers,
   ...nativeHandlers,
   ...backupHandlers,
+  ...secretHandlers,
 });
 
 /**

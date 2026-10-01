@@ -96,6 +96,12 @@ export const NATIVE_COMMANDS = [
     args: "[status|now|checkpoint <label>|list|show <id>|pin <id>|unpin <id>|restore <id>]",
     admin: true,
   },
+  {
+    name: "secret",
+    description: "Store a password via a one-time link, not the chat",
+    args: "<name> [what it's for]",
+    admin: true,
+  },
 ] as const satisfies readonly ClientCommand[];
 
 export type NativeCommandName = (typeof NATIVE_COMMANDS)[number]["name"];

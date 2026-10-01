@@ -545,6 +545,9 @@ describe("native mesh bridge routes", () => {
       openNodeInstall: () => null,
       openCompanionPair: () => null,
       openNodeBinary: () => null,
+      openSecretDrop: () => null,
+      isLiveSecretDrop: () => false,
+      submitSecretDrop: async () => ({ status: 404, html: "" }),
     };
     const server = new BridgeServer(
       { host: "127.0.0.1", port: 0, token, startedAt: "now" },

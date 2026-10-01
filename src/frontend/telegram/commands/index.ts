@@ -8,6 +8,7 @@
  *   - `memory`      — /memory (read-only view of the typed memory store)
  *   - `session`     — /reset /status
  *   - `settings`    — /model /effort /pulse /settings
+ *   - `secret`      — /secret (single-use paste link for a password)
  *   - `admin`       — /admin /metrics /doctor /dream /restart /update
  *                     + the unknown-command suggester
  *
@@ -27,6 +28,7 @@ import { registerAdminCommands } from "./admin.js";
 import { registerWhatsAppPairingCommand } from "./whatsapp-pairing.js";
 import { registerAuthCommand } from "./auth.js";
 import { registerBackupCommand } from "./backup.js";
+import { registerSecretCommand } from "./secret.js";
 
 export { telegramCommandMenu } from "./definitions.js";
 export { setAdminUserId } from "./state.js";
@@ -45,6 +47,7 @@ export function registerCommands(
   registerWhatsAppPairingCommand(bot);
   registerAuthCommand(bot);
   registerBackupCommand(bot);
+  registerSecretCommand(bot);
   // admin LAST: it owns the unknown-command catch-all, which must only
   // be reached after every real command has had its chance to match.
   // Registering anything after it makes that command look unknown

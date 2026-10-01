@@ -29,6 +29,7 @@ import { whatsappTools } from "./chat/whatsapp.js";
 import { moderationTools } from "./chat/moderation.js";
 import { nativeTools } from "./ops/native.js";
 import { backupTools } from "./ops/backup.js";
+import { secretTools } from "./ops/secrets.js";
 
 /** All built-in tool definitions. */
 export const ALL_TOOLS: readonly ToolDefinition[] = [
@@ -57,6 +58,7 @@ export const ALL_TOOLS: readonly ToolDefinition[] = [
   ...agentTools,
   ...backupTools,
   ...preflightTools,
+  ...secretTools,
 ];
 
 /**

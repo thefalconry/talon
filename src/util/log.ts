@@ -72,6 +72,7 @@ export type LogComponent =
   | "memory"
   | "stickers"
   | "backup"
+  | "secrets"
   | "router"
   | "backend-controller"
   | "fetch";
