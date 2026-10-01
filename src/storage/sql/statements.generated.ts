@@ -767,6 +767,8 @@ FROM media_index
 WHERE content_hash = ? AND NOT (chat_id = ? AND msg_id = ?)
 ORDER BY timestamp ASC, rowid ASC LIMIT 1`,
   countByFilePath: `SELECT COUNT(*) AS n FROM media_index WHERE file_path = ?`,
+  byMessage: `SELECT chat_id, msg_id, sender_name, type, file_path, caption, timestamp, content_hash
+FROM media_index WHERE chat_id = ? AND msg_id = ?`,
 } as const;
 
 export const memorySql = {

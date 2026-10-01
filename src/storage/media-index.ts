@@ -73,7 +73,19 @@ function importLegacyMediaIndex(): void {
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
-export function addMedia(entry: Omit<MediaEntry, "id">): void {
+/**
+ * Index a downloaded file and dedupe it against identical content.
+ *
+ * Resolves to the path the message's media now lives at — the
+ * canonical copy when the download duplicated one already on disk
+ * (the fresh file is then deleted), otherwise `entry.filePath`.
+ * Callers MUST use the resolved path for anything they show the
+ * model: the original path may no longer exist once this settles.
+ *
+ * The row is written synchronously, so it is queryable before the
+ * hash finishes.
+ */
+export async function addMedia(entry: Omit<MediaEntry, "id">): Promise<string> {
   try {
     repo.upsert(entry);
   } catch (err) {
@@ -85,13 +97,32 @@ export function addMedia(entry: Omit<MediaEntry, "id">): void {
     recordError(
       `Media index write failed: ${err instanceof Error ? err.message : err}`,
     );
-    return;
+    return entry.filePath;
   }
-  // Hash + dedupe off the hot path — the caller is mid-message-handling
-  // and the row is already queryable without the hash.
-  void hashAndDedupe(entry).catch((err) =>
-    logError("media", `Media content hash failed for ${entry.filePath}`, err),
+  // Serialize dedupe: two identical files hashed concurrently (e.g. an
+  // album) could otherwise each pick the other as canonical and both
+  // get unlinked.
+  const run = dedupeChain.then(() => hashAndDedupe(entry));
+  dedupeChain = run.then(
+    () => undefined,
+    () => undefined,
   );
+  try {
+    return await run;
+  } catch (err) {
+    logError("media", `Media content hash failed for ${entry.filePath}`, err);
+    return entry.filePath;
+  }
+}
+
+let dedupeChain: Promise<void> = Promise.resolve();
+
+/** The indexed entry for a message, if any. */
+export function getMediaForMessage(
+  chatId: string,
+  msgId: number,
+): MediaEntry | undefined {
+  return repo.byMessage(chatId, msgId);
 }
 
 /**
@@ -101,15 +132,15 @@ export function addMedia(entry: Omit<MediaEntry, "id">): void {
  * canonical copy and drop the duplicate file, so re-posted media costs
  * one copy on disk no matter how many messages carry it.
  */
-async function hashAndDedupe(entry: Omit<MediaEntry, "id">): Promise<void> {
-  if (!existsSync(entry.filePath)) return; // gone already (expiry, tests)
+async function hashAndDedupe(entry: Omit<MediaEntry, "id">): Promise<string> {
+  if (!existsSync(entry.filePath)) return entry.filePath; // gone already (expiry, tests)
   const hash = await blake3HexFile(entry.filePath);
   repo.setContentHash(entry.chatId, entry.msgId, hash);
 
   const canonical = repo.firstByContentHash(hash, entry.chatId, entry.msgId);
-  if (!canonical) return;
-  if (canonical.filePath === entry.filePath) return; // re-download of the same path
-  if (!existsSync(canonical.filePath)) return; // canonical copy lost — keep ours
+  if (!canonical) return entry.filePath;
+  if (canonical.filePath === entry.filePath) return entry.filePath; // re-download of the same path
+  if (!existsSync(canonical.filePath)) return entry.filePath; // canonical copy lost — keep ours
 
   repo.setFilePath(entry.chatId, entry.msgId, canonical.filePath);
   setMessageFilePath(entry.chatId, entry.msgId, canonical.filePath);
@@ -131,6 +162,7 @@ async function hashAndDedupe(entry: Omit<MediaEntry, "id">): Promise<void> {
       );
     }
   }
+  return canonical.filePath;
 }
 
 /** Get recent media for a chat, newest first. */
