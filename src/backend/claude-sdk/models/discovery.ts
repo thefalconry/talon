@@ -14,6 +14,7 @@ import type { ModelInfo } from "../../../core/models/catalog.js";
 import { log, logError } from "../../../util/log.js";
 import { describeSdkModel, type SdkModelInfo } from "./parsing.js";
 import { convertSdkModels } from "./convert.js";
+import { CLAUDE_RETENTION_SETTINGS } from "../constants.js";
 
 type ProbeOptions = {
   cwd?: string;
@@ -62,6 +63,8 @@ async function probeSupportedModels(
       prompt: neverYield(),
       options: {
         ...probeOptions,
+        // Any spawned CLI may run the daily retention sweep.
+        settings: { ...CLAUDE_RETENTION_SETTINGS },
         model: seedModel,
         abortController: abort,
       } as Parameters<typeof query>[0]["options"],

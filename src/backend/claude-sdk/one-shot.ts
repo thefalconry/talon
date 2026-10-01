@@ -17,7 +17,7 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { OneShotAgentParams, OneShotUsage } from "../../core/types.js";
 import { log, logWarn } from "../../util/log.js";
 import { ALLOWED_TOOLS_BACKGROUND } from "../../core/constants.js";
-import { EFFORT_MAP } from "./constants.js";
+import { CLAUDE_RETENTION_SETTINGS, EFFORT_MAP } from "./constants.js";
 import { buildMcpServers, buildPluginMcpServers } from "./options.js";
 import { isBackgroundToolContext } from "../../core/agents/context.js";
 import { warnIfBelowCacheMinimum } from "../runtime/cache/cache-telemetry.js";
@@ -97,6 +97,8 @@ export async function runOneShotAgent(
     ...(oneShotConfig.claudeBinary
       ? { pathToClaudeCodeExecutable: oneShotConfig.claudeBinary }
       : {}),
+    // Keep session transcripts: interrupted sub-agents resume from them.
+    settings: { ...CLAUDE_RETENTION_SETTINGS },
     mcpServers: assembleMcpServers(contextLabel),
     // Whitelist of SDK built-in tools for background contexts (heartbeat,
     // dream). Same as chat minus `Agent` — nested sub-agent dispatch from

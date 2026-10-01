@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const hoisted = vi.hoisted(() => ({ messages: [] as unknown[] }));
 
@@ -96,6 +97,12 @@ describe("claude-sdk one-shot / onAssistantText", () => {
     expect(seen).toEqual(["First half.\nSecond half."]);
     expect(seen[0]).not.toContain("tool_use");
     expect(seen[0]).not.toContain("Read");
+  });
+
+  it("pins transcript retention on the spawned run", async () => {
+    await runClaude();
+    const call = vi.mocked(query).mock.calls.at(-1)?.[0];
+    expect(call?.options?.settings).toEqual({ cleanupPeriodDays: 100_000 });
   });
 
   it("does not double-report the terminal result message", async () => {

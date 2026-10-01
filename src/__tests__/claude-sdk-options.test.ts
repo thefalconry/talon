@@ -109,6 +109,14 @@ describe("buildSdkOptions", () => {
     expect(options.model).toBe("sonnet[1m]");
   });
 
+  it("pins transcript retention so the CLI's sweep never deletes chats", async () => {
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-retention");
+
+    expect(options.settings).toEqual({ cleanupPeriodDays: 100_000 });
+  });
+
   describe("systemPrompt cache boundary", () => {
     it("falls back to the plain string when config has no parts", async () => {
       const { buildSdkOptions } =
