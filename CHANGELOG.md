@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.31.1](https://github.com/thefalconry/talon/compare/v5.31.0...v5.31.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **companion:** fall back to the newest release that has this platform's build ([#1235](https://github.com/thefalconry/talon/issues/1235)) ([547b67d](https://github.com/thefalconry/talon/commit/547b67df54d95b604d621b8132fa2ede1eb1ff07))
+
 ## [5.31.0](https://github.com/thefalconry/talon/compare/v5.30.0...v5.31.0) (2026-10-01)
 
 
