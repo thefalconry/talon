@@ -91,6 +91,9 @@ export async function runOneShotAgent(
     systemPrompt,
     ...thinkingConfig,
     cwd: workspace,
+    // A sub-agent's private TMPDIR (and any other per-run vars), layered
+    // over the daemon's environment — the SDK replaces, not merges, `env`.
+    ...(params.env ? { env: { ...process.env, ...params.env } } : {}),
     permissionMode: "bypassPermissions" as const,
     allowDangerouslySkipPermissions: true,
     abortController,

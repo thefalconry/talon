@@ -40,8 +40,11 @@ export function buildAgentSystemPrompt(args: {
   parent: AgentParent;
   depth: number;
   maxDepth: number;
+  /** The agent's private TMPDIR, when one was created. */
+  scratchDir?: string;
 }): string {
   return loadSystemTemplate("agent-brief", {
+    scratchDir: args.scratchDir ?? "",
     agentId: args.agentId,
     label: args.label,
     parent: describeParent(args.parent),
