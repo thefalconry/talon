@@ -1,5 +1,22 @@
 # Changelog
 
+## [5.29.0](https://github.com/thefalconry/talon/compare/v5.28.0...v5.29.0) (2026-10-01)
+
+
+### Features
+
+* **agents:** children inherit their parent's backend and model; add agents.allowedBackends ([#1222](https://github.com/thefalconry/talon/issues/1222)) ([a8cf29f](https://github.com/thefalconry/talon/commit/a8cf29fdbeca50fd3f5abe8d28836904f1d139e0))
+
+
+### Bug Fixes
+
+* **telegram:** prompt and download_media use the real file after media dedupe ([#1223](https://github.com/thefalconry/talon/issues/1223)) ([2ad1500](https://github.com/thefalconry/talon/commit/2ad15005cc6db417174955cbad6de3d70af94820))
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump the production-dependencies group with 2 updates ([#1210](https://github.com/thefalconry/talon/issues/1210)) ([3ce3165](https://github.com/thefalconry/talon/commit/3ce3165d1a6a64faf3568a4918674c7ffd6ee6e7))
+
 ## [5.28.0](https://github.com/thefalconry/talon/compare/v5.27.0...v5.28.0) (2026-09-30)
 
 
