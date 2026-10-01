@@ -12,11 +12,15 @@ import 'prefs.dart';
 import 'sandbox.dart';
 import 'update_installer.dart';
 
-/// Where releases come from: Talon's own GitHub releases. `/releases/latest`
-/// deliberately skips drafts and pre-releases, so a tagged release-please
-/// build is the only thing the app will ever offer to install.
+/// Where releases come from: Talon's own GitHub releases. The feed is the
+/// recent-releases list rather than `/releases/latest`: the newest release
+/// is published before its companion builds finish (and a build can fail),
+/// so `latest` alone would read "up to date" while an older release still
+/// carries a newer artifact for this platform. Drafts and pre-releases are
+/// skipped, so a tagged release-please build is the only thing the app will
+/// ever offer to install.
 const String kUpdateFeedUrl =
-    'https://api.github.com/repos/thefalconry/talon/releases/latest';
+    'https://api.github.com/repos/thefalconry/talon/releases?per_page=15';
 
 /// Human-facing releases page, for the "download it yourself" escape hatch
 /// (a managed install the app can't overwrite, or an unsupported platform).
@@ -164,6 +168,28 @@ class UpdateRelease {
       'linux' => 'talon-companion-linux$v.tar.gz',
       _ => null,
     };
+  }
+
+  /// The newest installable release in a feed payload: either a single
+  /// release object (`/releases/latest`) or a list of them (`/releases`).
+  /// Drafts, pre-releases and releases with no artifact for [platform] are
+  /// skipped, so a release whose companion build is still running (or
+  /// failed) falls back to the newest one that has something to install.
+  static UpdateRelease? newestFromFeed(
+    Object? decoded, {
+    required String platform,
+  }) {
+    final items = decoded is List ? decoded : [decoded];
+    UpdateRelease? best;
+    for (final raw in items) {
+      if (raw is! Map) continue;
+      final json = raw.cast<String, dynamic>();
+      if (json['draft'] == true || json['prerelease'] == true) continue;
+      final release = fromFeedJson(json, platform: platform);
+      if (release == null) continue;
+      if (best == null || release.version > best.version) best = release;
+    }
+    return best;
   }
 
   /// Parse a GitHub `releases/latest` payload. Returns null when the payload
@@ -409,12 +435,11 @@ class UpdateService extends ChangeNotifier {
         throw HttpException('release feed returned ${resp.statusCode}');
       }
       final decoded = jsonDecode(resp.body);
-      if (decoded is! Map) throw const FormatException('unexpected feed shape');
+      if (decoded is! Map && decoded is! List) {
+        throw const FormatException('unexpected feed shape');
+      }
       await prefs.setUpdateLastCheckedAt(_now());
-      final latest = UpdateRelease.fromFeedJson(
-        decoded.cast<String, dynamic>(),
-        platform: platform,
-      );
+      final latest = UpdateRelease.newestFromFeed(decoded, platform: platform);
       final current = _current;
       if (latest == null || current == null || latest.version <= current) {
         _release = null;
