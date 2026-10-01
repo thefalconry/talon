@@ -309,8 +309,8 @@ jobs:
       # JVM unit tests for the pure-Kotlin parts of the native voice bridge
       # (sentence splitting, the neural-speech playback pipeline). Runs after
       # the APK build so Flutter has generated the Gradle wrapper and
-      # local.properties, and the release variant's classes are already
-      # compiled.
+      # local.properties. Debug variant: AGP 9 only creates unit-test tasks
+      # for the tested (debug) build type.
       - name: Android unit tests
         if: matrix.platform == 'android'
         shell: bash
@@ -319,7 +319,7 @@ jobs:
           set -euo pipefail
           # Flutter writes the wrapper on first build; plain gradle is a fallback.
           if [ -x ./gradlew ]; then GRADLE=./gradlew; else GRADLE=gradle; fi
-          "$GRADLE" --no-daemon :app:testReleaseUnitTest
+          "$GRADLE" --no-daemon :app:testDebugUnitTest
 
       # Report the APK and its native-library weight per ABI so size changes
       # (e.g. the neural-voice JNI library) are visible on every PR.

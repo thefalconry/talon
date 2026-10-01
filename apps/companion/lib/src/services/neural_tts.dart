@@ -20,7 +20,7 @@ final ModelSpec kokoroModel = ModelSpec(
   packaging: ModelPackaging.tarBz2,
   archiveRoot: 'kokoro-int8-multi-lang-v1_0',
   // Keep in sync with KokoroTts.REQUIRED_FILES on the Kotlin side.
-  requiredFiles: [
+  requiredFiles: const [
     'model.int8.onnx',
     'voices.bin',
     'tokens.txt',

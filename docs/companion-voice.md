@@ -32,8 +32,10 @@ and do not include sherpa-onnx.
 - **Voices.** The 28 English speakers of Kokoro v1.0 (American and British).
   The default is *Heart* (`af_heart`).
 
-Supported devices: arm64-v8a and armeabi-v7a phones on Android 6.0 or later.
-x86/x86_64 emulators always use Android TTS.
+Supported devices: 64-bit ARM (arm64-v8a) phones on Android 6.0 or later.
+32-bit-only phones and x86/x86_64 emulators always use Android TTS — the
+neural-voice library is only shipped for arm64-v8a, which keeps the APK
+about 16 MB smaller.
 
 ## Licensing
 

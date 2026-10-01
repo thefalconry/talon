@@ -1,6 +1,6 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -41,7 +41,7 @@ class _Server {
             if (cut != null && i >= cut) {
               throw http.ClientException('Connection reset by peer');
             }
-            yield slice.sublist(i, (i + chunk).clamp(0, slice.length));
+            yield slice.sublist(i, math.min(i + chunk, slice.length));
           }
         }
 
