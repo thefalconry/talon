@@ -18,7 +18,7 @@ import { dbErrorFields } from "./db.js";
 import { logError } from "../util/log.js";
 
 /** Where a suspended agent's report goes — mirrors `AgentParent`. */
-export type SuspendedAgentParent =
+type SuspendedAgentParent =
   | {
       readonly kind: "chat";
       readonly chatId: string;
