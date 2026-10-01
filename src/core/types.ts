@@ -187,6 +187,13 @@ export type OneShotAgentParams = {
    * `onAssistantText`: a throwing callback must never fail the run.
    */
   onSessionId?: (sessionId: string) => void;
+  /**
+   * Extra environment for the run's own subprocesses (shells, tools),
+   * layered over the daemon's. A sub-agent passes its private scratch dir
+   * as `TMPDIR` here. Honoured by the Claude SDK backend; backends whose
+   * subprocess environment is fixed per process ignore it.
+   */
+  env?: Readonly<Record<string, string>>;
 };
 
 /** How much cache telemetry a backend can surface in /status. */

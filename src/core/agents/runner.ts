@@ -86,6 +86,7 @@ import { startWatchdog, type WatchdogHandle } from "./watchdog.js";
 import * as agentsRepo from "../../storage/agents/repo.js";
 import type { PersistedAgent } from "../../storage/agents/repo.js";
 import { agentRegistry } from "./registry.js";
+import { closeScratch, openScratch, scratchEnv } from "./scratch.js";
 import type {
   AgentCaps,
   AgentParent,
@@ -428,6 +429,7 @@ async function buildRunParams(
   abortController: AbortController,
   capture: { last: string },
   trail: RunTrail,
+  scratchDir: string | undefined,
   resume?: ResumePlan,
 ): Promise<OneShotAgentParams> {
   const writeLog = await openRunLog(
@@ -458,7 +460,9 @@ async function buildRunParams(
       parent: record.parent,
       depth: record.depth,
       maxDepth: capsHolder.caps.maxDepth,
+      ...(scratchDir ? { scratchDir } : {}),
     }),
+    ...(scratchDir ? { env: scratchEnv(scratchDir) } : {}),
     workspace: dirs.workspace,
     model,
     contextLabel: agentContextLabel(record.id),
@@ -623,6 +627,7 @@ async function runAgent(
 
   let settled: AgentRecord | null = null;
   try {
+    const scratchDir = await openScratch(id);
     const params = await buildRunParams(
       record,
       spec,
@@ -630,6 +635,7 @@ async function runAgent(
       abortController,
       capture,
       trail,
+      scratchDir,
       resume,
     );
     if (agentRegistry.isInterrupted(id)) {
@@ -708,6 +714,8 @@ async function runAgent(
     return;
   }
   if (!settled) return;
+  // Removed on success; kept on failure for whoever picks the work up.
+  await closeScratch(id, settled.state);
   log(
     "agents",
     `${id} "${settled.label}" → ${settled.state} ` +
@@ -802,6 +810,7 @@ async function settleRestored(
 ): Promise<void> {
   const settled = agentRegistry.settle(record.id, patch);
   if (!settled) return;
+  await closeScratch(record.id, settled.state);
   log(
     "agents",
     `${record.id} "${record.label}" → ${settled.state} (after restart)`,
