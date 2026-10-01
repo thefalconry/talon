@@ -115,11 +115,20 @@ Agent-side (refused anywhere but an `agent:*` context):
 
 - `report_result({ summary, details? })` — exactly once per run
 - `message_parent({ text })`
+- `list_peers({ scope? })` — `"siblings"` (default): the agents sharing its
+  parent; `"tree"`: every live agent rooted in the same chat (parent agent,
+  children, siblings, cousins), each with how it relates to the caller
+- `message_peer({ agent_id, text })` — a note into any live agent in the
+  caller's tree, addressed by id or by exact label (a label two live agents
+  share is refused as ambiguous)
 - `check_inbox()`
 
 Visibility is scoped the way triggers are scoped to their chat: a chat sees
 the agents rooted in it, an agent sees its own descendants, and an id from
-another chat is simply "not found".
+another chat is simply "not found". **Messaging** reaches further than
+control: an agent can `message_peer` anything in its own tree, but can only
+`kill_agent` / `wait_for_agent` its own descendants, and nothing rooted in
+another chat is ever addressable.
 
 ## Pre-flight lane
 

@@ -310,10 +310,9 @@ describe("peer channel", () => {
     expect(again.text).toContain("Inbox empty");
   });
 
-  // The boundary. Widening addressing to siblings must not widen it further:
-  // a cousin belongs to another parent's job and is none of this agent's
-  // business.
-  it("refuses an agent under a different parent, and one in another chat", async () => {
+  // The boundary: messaging reaches the whole tree rooted in the caller's
+  // chat — and never past it.
+  it("reaches a cousin in the same tree but never an agent in another chat", async () => {
     const mine = live(CHAT, "mine");
     const sibling = live(CHAT, "sibling");
     const cousin = live({ kind: "agent", agentId: sibling.id }, "cousin");
@@ -322,33 +321,80 @@ describe("peer channel", () => {
       "stranger",
     );
 
-    for (const target of [cousin.id, stranger.id]) {
+    const toCousin = await asAgent(mine.id, "message_peer", {
+      agent_id: cousin.id,
+      text: "the schema changed",
+    });
+    expect(toCousin.ok).toBe(true);
+    expect((await asAgent(cousin.id, "check_inbox")).text).toContain(
+      "the schema changed",
+    );
+
+    for (const target of [stranger.id, "stranger"]) {
       const refused = await asAgent(mine.id, "message_peer", {
         agent_id: target,
         text: "hello",
       });
       expect(refused.ok).toBe(false);
-      expect(refused.error).toContain("same parent");
+      expect(refused.error).toContain("in your tree");
     }
-    // and nothing was delivered
-    expect((await asAgent(cousin.id, "check_inbox")).text).toContain(
-      "Inbox empty",
-    );
     expect((await asAgent(stranger.id, "check_inbox")).text).toContain(
       "Inbox empty",
     );
+    // and the stranger cannot see in either
+    const theirs = await asAgent(stranger.id, "list_peers", { scope: "tree" });
+    expect(theirs.text).not.toContain(mine.id);
   });
 
-  it("does not treat its own child as a peer (children go via send_to_agent)", async () => {
+  it("lists the whole tree with relationships, and addresses by label", async () => {
+    const parent = live(CHAT, "lead");
+    const me = live({ kind: "agent", agentId: parent.id }, "me");
+    const child = live({ kind: "agent", agentId: me.id }, "kid");
+    const uncle = live(CHAT, "uncle");
+
+    const tree = await asAgent(me.id, "list_peers", { scope: "tree" });
+    expect(tree.ok).toBe(true);
+    expect(tree.text).toMatch(/lead \[\w+\] — your parent/);
+    expect(tree.text).toMatch(/kid \[\w+\] — your child/);
+    expect(tree.text).toContain(uncle.id);
+    expect(tree.text).not.toContain(`ID: ${me.id}`);
+
+    const up = await asAgent(me.id, "message_peer", {
+      agent_id: "lead",
+      text: "found it",
+    });
+    expect(up.ok).toBe(true);
+    expect((await asAgent(parent.id, "check_inbox")).text).toContain(
+      "found it",
+    );
+    const down = await asAgent(me.id, "message_peer", {
+      agent_id: child.id,
+      text: "stop",
+    });
+    expect(down.ok).toBe(true);
+  });
+
+  it("refuses an ambiguous label and an unknown scope", async () => {
+    const me = live(CHAT, "me");
+    const a = live(CHAT, "worker");
+    const b = live(CHAT, "worker");
+    const result = await asAgent(me.id, "message_peer", {
+      agent_id: "worker",
+      text: "x",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("ambiguous");
+    expect(result.error).toContain(a.id);
+    expect(result.error).toContain(b.id);
+    const bad = await asAgent(me.id, "list_peers", { scope: "galaxy" });
+    expect(bad.ok).toBe(false);
+  });
+
+  it("keeps list_peers' default view to siblings (a child is not a peer there)", async () => {
     const parent = live(CHAT, "parent");
-    const child = live({ kind: "agent", agentId: parent.id }, "child");
+    live({ kind: "agent", agentId: parent.id }, "child");
     const peers = await asAgent(parent.id, "list_peers");
     expect(peers.text).toContain("No peers");
-    const refused = await asAgent(parent.id, "message_peer", {
-      agent_id: child.id,
-      text: "hi",
-    });
-    expect(refused.ok).toBe(false);
   });
 
   it("refuses a chat caller", async () => {

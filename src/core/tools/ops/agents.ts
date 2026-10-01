@@ -193,8 +193,15 @@ export const agentTools: ToolDefinition[] = [
   {
     name: "list_peers",
     description:
-      "Sub-agents only. List the other agents your parent spawned alongside you — id, label and what each is working on. These are the only agents you may message directly with message_peer. Call it before assuming you are working alone.",
-    schema: {},
+      'Sub-agents only. List the other live agents you can message with message_peer — id, label, how they relate to you and what each is working on. Default scope "siblings": the agents your parent spawned alongside you. Scope "tree": every live agent working for the same chat — your parent, children, siblings and cousins. Call it before assuming you are working alone.',
+    schema: {
+      scope: z
+        .enum(["siblings", "tree"])
+        .optional()
+        .describe(
+          'Which agents to list: "siblings" (default) or the whole "tree" under your chat.',
+        ),
+    },
     execute: (params, bridge) => bridge("list_peers", params),
     tag: "agents",
   },
@@ -202,10 +209,14 @@ export const agentTools: ToolDefinition[] = [
   {
     name: "message_peer",
     description:
-      "Sub-agents only. Send a note straight to a peer — an agent spawned by the same parent as you — without routing it through your parent. Use it when you find something that changes another agent's work: a shared fact, a dead end worth not repeating, a correction to something you sent earlier. The peer sees it at its next check_inbox, so it is not an interrupt. You can only address peers (see list_peers); any other id is refused. This does not end your run and does not replace report_result.",
+      "Sub-agents only. Send a note straight to any live agent in your tree — a sibling, your parent agent, a child, or a cousin working for the same chat — by id or label, without routing it through anyone. Use it when you find something that changes another agent's work: a shared fact, a dead end worth not repeating, a correction to something you sent earlier. It sees the note at its next check_inbox, so it is not an interrupt. Agents working for another chat are never reachable. This does not end your run and does not replace report_result.",
     schema: {
-      agent_id: z.string().describe("Peer agent id, from list_peers"),
-      text: z.string().min(1).describe("What the peer needs to know"),
+      agent_id: z
+        .string()
+        .describe(
+          "Target agent id (or its exact label, when no other live agent in your tree shares it), from list_peers",
+        ),
+      text: z.string().min(1).describe("What the agent needs to know"),
     },
     execute: (params, bridge) => bridge("message_peer", params),
     tag: "agents",
