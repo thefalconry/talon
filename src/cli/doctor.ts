@@ -24,12 +24,11 @@ export async function runDoctor(): Promise<void> {
   // Doctor composes each backend's own checks off the registry, and the
   // CLI runs standalone — nothing else has registered them yet.
   const { loadBuiltinBackends } = await import("../backend/builtins.js");
-  await loadBuiltinBackends();
   const hasConfigFile = existsSync(CONFIG_FILE);
-  const report = await collectDoctorReport({
-    config: hasConfigFile ? loadConfig() : undefined,
-    hasConfigFile,
-  });
+  const config = hasConfigFile ? loadConfig() : undefined;
+  // Extra Claude accounts are backends too, registered from the config.
+  await loadBuiltinBackends(config);
+  const report = await collectDoctorReport({ config, hasConfigFile });
   const print = (check: (typeof report.checks)[number]): void => {
     const detail = check.detail ? ` ${pc.dim(`(${check.detail})`)}` : "";
     console.log(`  ${DOCTOR_ICONS[check.status]} ${check.label}${detail}`);

@@ -10,21 +10,53 @@
  * only reveals a dead refresh token by failing — so "expired" for Codex
  * means the file is missing, unparsable, or was reported dead by the
  * backend (see {@link markProviderExpired}).
+ *
+ * Every extra Claude account (`claudeAccounts`) is a provider of its own
+ * here, keyed by its backend id: its own credentials file, its own status
+ * line, its own expiry mark.
  */
 
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { logWarn } from "../../util/log.js";
 import { userHome } from "../../util/fs-path.js";
+import {
+  claudeConfigDirFor,
+  defaultClaudeConfigDir,
+  getClaudeAccount,
+  isClaudeAccountId,
+  listClaudeAccounts,
+  type ClaudeAccountId,
+} from "../config/claude-accounts.js";
 
-export type AuthProvider = "claude" | "codex";
+/** A CLI login Talon tracks: the two built-ins plus each extra Claude account. */
+export type AuthProvider = "claude" | "codex" | ClaudeAccountId;
 
-export const AUTH_PROVIDERS: readonly AuthProvider[] = ["claude", "codex"];
-
-export const PROVIDER_LABELS: Record<AuthProvider, string> = {
+const PROVIDER_LABELS: Record<"claude" | "codex", string> = {
   claude: "Claude",
   codex: "Codex",
 };
+
+/** Every provider to show: Claude, each configured Claude account, Codex. */
+export function listAuthProviders(): AuthProvider[] {
+  return ["claude", ...listClaudeAccounts().map((a) => a.id), "codex"];
+}
+
+export function isKnownAuthProvider(value: string): value is AuthProvider {
+  return (listAuthProviders() as string[]).includes(value);
+}
+
+/** Display name: "Claude", "Codex", or the account's configured label. */
+export function providerLabel(provider: AuthProvider): string {
+  if (provider === "claude" || provider === "codex")
+    return PROVIDER_LABELS[provider];
+  return getClaudeAccount(provider)?.label ?? provider;
+}
+
+/** Whether this provider signs in through the `claude` CLI. */
+function isClaudeProvider(provider: AuthProvider): boolean {
+  return provider === "claude" || isClaudeAccountId(provider);
+}
 
 export interface ProviderAuthStatus {
   provider: AuthProvider;
@@ -39,14 +71,16 @@ export interface ProviderAuthStatus {
   expired: boolean;
 }
 
-export function claudeCredentialsPath(
+/**
+ * A Claude login's credentials file: the default account's
+ * (`$CLAUDE_CONFIG_DIR` or `~/.claude`) unless `configDir` names an
+ * extra account's directory.
+ */
+function claudeCredentialsPath(
   env: NodeJS.ProcessEnv = process.env,
+  configDir?: string,
 ): string {
-  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
-  return join(
-    configDir ? configDir : join(userHome(), ".claude"),
-    ".credentials.json",
-  );
+  return join(configDir ?? defaultClaudeConfigDir(env), ".credentials.json");
 }
 
 export function codexAuthPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -78,9 +112,12 @@ function warnUnparseable(provider: AuthProvider): void {
   );
 }
 
-export function parseClaudeCredentials(raw: string): ProviderAuthStatus {
+export function parseClaudeCredentials(
+  raw: string,
+  provider: AuthProvider = "claude",
+): ProviderAuthStatus {
   const base: ProviderAuthStatus = {
-    provider: "claude",
+    provider,
     loggedIn: false,
     expired: true,
   };
@@ -95,7 +132,7 @@ export function parseClaudeCredentials(raw: string): ProviderAuthStatus {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    warnUnparseable("claude");
+    warnUnparseable(provider);
     return base;
   }
   const oauth = parsed.claudeAiOauth;
@@ -105,7 +142,7 @@ export function parseClaudeCredentials(raw: string): ProviderAuthStatus {
       ? oauth.refreshTokenExpiresAt
       : undefined;
   return {
-    provider: "claude",
+    provider,
     loggedIn: true,
     account: oauth.subscriptionType
       ? `${oauth.subscriptionType} plan`
@@ -177,23 +214,38 @@ export async function readProviderStatus(
   provider: AuthProvider,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ProviderAuthStatus> {
-  const path =
-    provider === "claude" ? claudeCredentialsPath(env) : codexAuthPath(env);
-  const raw = await readOrEmpty(provider, path);
+  const path = credentialsPathFor(provider, env);
+  const raw =
+    path === undefined ? undefined : await readOrEmpty(provider, path);
   const status =
     raw === undefined
       ? { provider, loggedIn: false, expired: true }
-      : provider === "claude"
-        ? parseClaudeCredentials(raw)
+      : isClaudeProvider(provider)
+        ? parseClaudeCredentials(raw, provider)
         : parseCodexAuth(raw);
   if (reportedExpired.has(provider)) return { ...status, expired: true };
   return status;
 }
 
+/**
+ * The credentials file a provider's CLI reads. Undefined for a Claude
+ * account id that isn't configured — it has no file to read.
+ */
+export function credentialsPathFor(
+  provider: AuthProvider,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (provider === "codex") return codexAuthPath(env);
+  const dir = claudeConfigDirFor(provider, env);
+  return dir === undefined ? undefined : claudeCredentialsPath(env, dir);
+}
+
 export async function readAllProviderStatus(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ProviderAuthStatus[]> {
-  return Promise.all(AUTH_PROVIDERS.map((p) => readProviderStatus(p, env)));
+  return Promise.all(
+    listAuthProviders().map((p) => readProviderStatus(p, env)),
+  );
 }
 
 /** Whole days until `at`; negative when already past. */

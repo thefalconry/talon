@@ -21,6 +21,7 @@ type ProbeOptions = {
   permissionMode?: string;
   allowDangerouslySkipPermissions?: boolean;
   pathToClaudeCodeExecutable?: string;
+  env?: Record<string, string | undefined>;
 };
 
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -147,6 +148,8 @@ export async function registerClaudeModels(sdkOptions: {
   permissionMode?: string;
   allowDangerouslySkipPermissions?: boolean;
   pathToClaudeCodeExecutable?: string;
+  /** The account's spawn environment (extra Claude accounts only). */
+  env?: Record<string, string | undefined>;
 }): Promise<void> {
   const { model: configuredModel, ...probeOptions } = sdkOptions;
 

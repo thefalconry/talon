@@ -12,8 +12,15 @@ import { log, logWarn } from "../../util/log.js";
 import { getConfig } from "./state.js";
 import { buildSdkOptions } from "./options.js";
 import { prepareSystemPrompt } from "../runtime/index.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
 
-export async function warmSession(chatId: string): Promise<void> {
+export async function warmSession(
+  chatId: string,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
+): Promise<void> {
   // Guard against being called before initAgent()
   try {
     getConfig();
@@ -34,7 +41,13 @@ export async function warmSession(chatId: string): Promise<void> {
       chatId,
       sessionEpoch: session.createdAt,
     });
-    const { options } = buildSdkOptions(chatId, undefined, undefined, prepared);
+    const { options } = buildSdkOptions(
+      chatId,
+      undefined,
+      undefined,
+      prepared,
+      account,
+    );
 
     // Streaming input mode: pass an async iterable that never yields a user message
     const neverYield = async function* (): AsyncGenerator<never> {

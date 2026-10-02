@@ -1,6 +1,7 @@
 /**
  * /auth panel — sign the daemon's Claude and Codex CLIs back in from
- * Telegram, admin only.
+ * Telegram, admin only. Each extra Claude account (`claudeAccounts`) gets
+ * its own row and its own sign-in button.
  *
  * The panel lists each provider's login state with a sign-in button. A
  * tap starts the core login flow and rewrites the same message into the
@@ -20,9 +21,9 @@ import {
   type LoginPrompt,
 } from "../../core/auth/login-flow.js";
 import {
-  AUTH_PROVIDERS,
+  isKnownAuthProvider,
   describeProviderStatus,
-  PROVIDER_LABELS,
+  providerLabel,
   readAllProviderStatus,
   type AuthProvider,
   type ProviderAuthStatus,
@@ -37,8 +38,9 @@ export interface AuthPanel {
   keyboard: AuthKeyboard;
 }
 
+/** A provider the panel can act on: Claude, each Claude account, Codex. */
 export function isAuthProvider(value: string): value is AuthProvider {
-  return (AUTH_PROVIDERS as readonly string[]).includes(value);
+  return isKnownAuthProvider(value);
 }
 
 function statusIcon(s: ProviderAuthStatus): string {
@@ -56,7 +58,7 @@ export function renderAuthPanel(statuses: ProviderAuthStatus[]): AuthPanel {
   const lines = ["<b>🔑 Backend logins</b>", ""];
   const keyboard: AuthKeyboard = [];
   for (const s of statuses) {
-    const label = PROVIDER_LABELS[s.provider];
+    const label = providerLabel(s.provider);
     lines.push(
       `${statusIcon(s)} <b>${label}</b> — ${escapeHtml(describeProviderStatus(s))}`,
     );
@@ -82,7 +84,7 @@ export function renderLoginPrompt(
   provider: AuthProvider,
   prompt: LoginPrompt,
 ): AuthPanel {
-  const label = PROVIDER_LABELS[provider];
+  const label = providerLabel(provider);
   const lines = [
     `<b>🔑 Sign in to ${label}</b>`,
     "",
@@ -163,7 +165,7 @@ export async function driveLogin(
     const detail = err instanceof Error ? err.message : String(err);
     const panel = await currentAuthPanel();
     await editPanel(ctx, chatId, messageId, {
-      text: `${panel.text}\n\n❌ Couldn't start ${PROVIDER_LABELS[provider]} sign-in: ${escapeHtml(detail)}`,
+      text: `${panel.text}\n\n❌ Couldn't start ${providerLabel(provider)} sign-in: ${escapeHtml(detail)}`,
       keyboard: panel.keyboard,
     });
     return;
@@ -176,7 +178,7 @@ export async function driveLogin(
     if (awaitingCode.get(String(chatId))?.messageId === messageId)
       awaitingCode.delete(String(chatId));
     const panel = await currentAuthPanel();
-    const label = PROVIDER_LABELS[provider];
+    const label = providerLabel(provider);
     const note = outcome.ok
       ? `✅ ${label} signed in.`
       : outcome.reason === "cancelled"

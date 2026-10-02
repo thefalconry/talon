@@ -113,6 +113,47 @@ describe("config", () => {
       expect(config.model).toBe("default");
     });
 
+    it("accepts a declared Claude account anywhere a backend id goes", async () => {
+      mockFs({
+        frontend: "terminal",
+        backend: "claude-2",
+        heartbeatBackend: "claude",
+        enabledBackends: ["claude", "claude-2", "codex"],
+        claudeAccounts: [
+          { id: "claude-2", configDir: "/srv/talon-test/accounts/claude-2" },
+        ],
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      const { listClaudeAccounts } =
+        await import("../core/config/claude-accounts.js");
+      const config = loadConfig();
+      expect(config.backend).toBe("claude-2");
+      expect(listClaudeAccounts()).toEqual([
+        {
+          id: "claude-2",
+          label: "Claude (claude-2)",
+          configDir: "/srv/talon-test/accounts/claude-2",
+        },
+      ]);
+    });
+
+    it("refuses a backend field naming an undeclared Claude account", async () => {
+      mockFs({ frontend: "terminal", dreamBackend: "claude-9" });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(
+        /dreamBackend: "claude-9" is not a declared Claude account/,
+      );
+    });
+
+    it("refuses a malformed Claude account id", async () => {
+      mockFs({
+        frontend: "terminal",
+        claudeAccounts: [{ id: "Claude_Two", configDir: "/srv/x" }],
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(/claudeAccounts\.0\.id/);
+    });
+
     it("normalizes deprecated desktop frontend aliases to native", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       mockFs({

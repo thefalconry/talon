@@ -9,6 +9,49 @@ import { printBanner, loadConfig, maskToken, type Config } from "./config.js";
 import { CONFIG_FILE } from "./context.js";
 import { runSetup } from "./setup.js";
 
+function printProviderConfigs(config: Config): void {
+  const backendLabel: Record<string, string> = {
+    claude: "Anthropic Claude SDK",
+    kilo: "Kilo (@kilocode/sdk)",
+    opencode: "OpenCode (@opencode-ai/sdk)",
+    codex: "OpenAI Codex CLI",
+    agy: "Google Antigravity CLI",
+    "openai-agents": "OpenAI Agents (@openai/agents)",
+  };
+  const label =
+    backendLabel[config.backend ?? "claude"] ??
+    `Anthropic Claude SDK (${config.backend})`;
+  console.log(`  ${pc.dim("Backend")}          ${pc.green(label)}`);
+  for (const account of config.claudeAccounts ?? [])
+    console.log(
+      `  ${pc.dim("Claude account")}   ${pc.green(account.id)} ${pc.dim(account.configDir)}`,
+    );
+  if (config.claudeBinary)
+    console.log(
+      `  ${pc.dim("Claude binary")}    ${pc.green(config.claudeBinary)}`,
+    );
+  if (config.agyBinary)
+    console.log(
+      `  ${pc.dim("Antigravity bin")}  ${pc.green(config.agyBinary)}`,
+    );
+  if (config.codexApiKey)
+    console.log(
+      `  ${pc.dim("Codex API key")}    ${maskToken(config.codexApiKey)}`,
+    );
+  if (config.openaiApiKey)
+    console.log(
+      `  ${pc.dim("OpenAI API key")}   ${maskToken(config.openaiApiKey)}`,
+    );
+  if (config.openaiBaseUrl)
+    console.log(`  ${pc.dim("OpenAI base URL")}  ${config.openaiBaseUrl}`);
+  if (config.openaiApiMode)
+    console.log(`  ${pc.dim("OpenAI API mode")}  ${config.openaiApiMode}`);
+  if (config.discord?.botToken)
+    console.log(
+      `  ${pc.dim("Discord bot")}      ${maskToken(config.discord.botToken)} (app ${config.discord.applicationId.slice(0, 6)}…)`,
+    );
+}
+
 export async function viewConfig(): Promise<void> {
   printBanner();
   if (!existsSync(CONFIG_FILE)) {
@@ -49,41 +92,7 @@ export async function viewConfig(): Promise<void> {
       `  ${pc.dim("Teams bot name")}   ${config.teamsBotDisplayName || pc.dim("not set")}`,
     );
   }
-  const backendLabel: Record<NonNullable<Config["backend"]>, string> = {
-    claude: "Anthropic Claude SDK",
-    kilo: "Kilo (@kilocode/sdk)",
-    opencode: "OpenCode (@opencode-ai/sdk)",
-    codex: "OpenAI Codex CLI",
-    agy: "Google Antigravity CLI",
-    "openai-agents": "OpenAI Agents (@openai/agents)",
-  };
-  console.log(
-    `  ${pc.dim("Backend")}          ${pc.green(backendLabel[config.backend ?? "claude"])}`,
-  );
-  if (config.claudeBinary)
-    console.log(
-      `  ${pc.dim("Claude binary")}    ${pc.green(config.claudeBinary)}`,
-    );
-  if (config.agyBinary)
-    console.log(
-      `  ${pc.dim("Antigravity bin")}  ${pc.green(config.agyBinary)}`,
-    );
-  if (config.codexApiKey)
-    console.log(
-      `  ${pc.dim("Codex API key")}    ${maskToken(config.codexApiKey)}`,
-    );
-  if (config.openaiApiKey)
-    console.log(
-      `  ${pc.dim("OpenAI API key")}   ${maskToken(config.openaiApiKey)}`,
-    );
-  if (config.openaiBaseUrl)
-    console.log(`  ${pc.dim("OpenAI base URL")}  ${config.openaiBaseUrl}`);
-  if (config.openaiApiMode)
-    console.log(`  ${pc.dim("OpenAI API mode")}  ${config.openaiApiMode}`);
-  if (config.discord?.botToken)
-    console.log(
-      `  ${pc.dim("Discord bot")}      ${maskToken(config.discord.botToken)} (app ${config.discord.applicationId.slice(0, 6)}…)`,
-    );
+  printProviderConfigs(config);
   console.log(`  ${pc.dim("Model")}            ${config.model}`);
   console.log(`  ${pc.dim("Concurrency")}      ${config.concurrency}`);
   console.log(

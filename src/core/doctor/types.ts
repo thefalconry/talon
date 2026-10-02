@@ -59,6 +59,9 @@ export interface DoctorConfigSlice {
   model?: string;
   heartbeatModel?: string;
   heartbeatBackend?: string;
+  dreamBackend?: string;
+  /** Extra Claude accounts (`claudeAccounts`), as written in config. */
+  claudeAccounts?: { id: string; label?: string; configDir: string }[];
   botToken?: string;
   teamsWebhookUrl?: string;
   discord?: { botToken?: string };

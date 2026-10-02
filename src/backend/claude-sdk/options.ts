@@ -47,6 +47,11 @@ import {
   isGuestPluginAllowed,
 } from "../../core/mcp-hub/guest-scope.js";
 import { VALID_TOOL_FRONTENDS } from "../../core/mcp-hub/talon-server.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  sdkEnvFor,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
 
 /** `telegram-tools`, `whatsapp-tools`, ... — the hub's own frontend servers. */
 function isFrontendToolServerName(name: string): boolean {
@@ -399,8 +404,12 @@ export function buildSdkOptions(
   abortController?: AbortController,
   modelOverride?: string,
   preparedPrompt?: PreparedSystemPrompt,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
 ): BuildSdkOptionsResult {
   const config = getConfig();
+  // The account's login: CLAUDE_CONFIG_DIR for an extra account, nothing
+  // (inherit the daemon's env) for the default one.
+  const env = sdkEnvFor(account);
   const chatSettings = getChatSettings(chatId);
   const activeModel = modelOverride ?? chatSettings.model ?? config.model;
   const activeEffort = chatSettings.effort ?? "adaptive";
@@ -486,6 +495,7 @@ export function buildSdkOptions(
     ...(config.claudeBinary
       ? { pathToClaudeCodeExecutable: config.claudeBinary }
       : {}),
+    ...(env ? { env } : {}),
     // Keep session transcripts: Talon resumes chats from them.
     settings: { ...CLAUDE_RETENTION_SETTINGS },
     // Whitelist of SDK built-in tools. Anything not listed (e.g. WebSearch,

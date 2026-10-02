@@ -6,7 +6,13 @@
  */
 
 import type { TalonConfig } from "../../core/config/index.js";
+import { getModels } from "../../core/models/catalog.js";
 import { registerClaudeModels } from "./models/index.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  sdkEnvFor,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
 
 // ── State ────────────────────────────────────────────────────────────────────
 
@@ -15,9 +21,15 @@ let bridgePortFn: () => number = () => 19876;
 
 // ── Public API (re-exported from barrel) ────────────────────────────────────
 
+/**
+ * Initialise the Claude SDK driver. Every Claude account's backend calls
+ * this with the same config; the module state it sets is account-neutral
+ * (the account itself travels with each run — see accounts/account.ts).
+ */
 export async function initAgent(
   cfg: TalonConfig,
   getBridgePort?: () => number,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
 ): Promise<void> {
   config = cfg;
   if (getBridgePort) bridgePortFn = getBridgePort;
@@ -28,7 +40,13 @@ export async function initAgent(
   // gets swallowed — causing an infinite hang on Windows.
   delete process.env.CLAUDECODE;
 
+  // The model catalog is the same for every account: an extra account
+  // booting after another Claude backend reuses what that one discovered
+  // rather than spawning its own probes.
+  if (account.configDir && getModels("anthropic").length > 0) return;
+
   // Discover available models from the SDK — fatal if this fails
+  const env = sdkEnvFor(account);
   await registerClaudeModels({
     model: cfg.model,
     cwd: cfg.workspace,
@@ -37,6 +55,7 @@ export async function initAgent(
     ...(cfg.claudeBinary
       ? { pathToClaudeCodeExecutable: cfg.claudeBinary }
       : {}),
+    ...(env ? { env } : {}),
   });
 }
 
