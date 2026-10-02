@@ -18,6 +18,11 @@ import type { OneShotAgentParams, OneShotUsage } from "../../core/types.js";
 import { log, logWarn } from "../../util/log.js";
 import { ALLOWED_TOOLS_BACKGROUND } from "../../core/constants.js";
 import { CLAUDE_RETENTION_SETTINGS, EFFORT_MAP } from "./constants.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  sdkEnvFor,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
 import { buildMcpServers, buildPluginMcpServers } from "./options.js";
 import { isBackgroundToolContext } from "../../core/agents/context.js";
 import { warnIfBelowCacheMinimum } from "../runtime/cache/cache-telemetry.js";
@@ -61,6 +66,7 @@ export function initClaudeOneShot(cfg: OneShotConfig): void {
 
 export async function runOneShotAgent(
   params: OneShotAgentParams,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
 ): Promise<OneShotUsage | void> {
   const {
     prompt,
@@ -85,15 +91,17 @@ export async function runOneShotAgent(
   const thinkingConfig = reasoningEffort
     ? EFFORT_MAP[reasoningEffort]
     : undefined;
+  // A sub-agent's private TMPDIR (and any other per-run vars) layered over
+  // the daemon's environment — the SDK replaces, not merges, `env` — with
+  // the account's CLAUDE_CONFIG_DIR on top.
+  const env = sdkEnvFor(account, params.env);
 
   const options = {
     model,
     systemPrompt,
     ...thinkingConfig,
     cwd: workspace,
-    // A sub-agent's private TMPDIR (and any other per-run vars), layered
-    // over the daemon's environment — the SDK replaces, not merges, `env`.
-    ...(params.env ? { env: { ...process.env, ...params.env } } : {}),
+    ...(env ? { env } : {}),
     permissionMode: "bypassPermissions" as const,
     allowDangerouslySkipPermissions: true,
     abortController,

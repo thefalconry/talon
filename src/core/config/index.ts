@@ -4,7 +4,14 @@ import { z } from "zod";
 import { dirs, files as pathFiles } from "../../util/paths.js";
 import { hardenTalonPermissions } from "./harden.js";
 import { setTimezone } from "../../util/time.js";
-import { BACKEND_IDS } from "../agent-runtime/model-ref.js";
+import { BACKEND_IDS, type BackendId } from "../agent-runtime/model-ref.js";
+import {
+  claudeAccountConfigIssues,
+  claudeAccountSchema,
+  isClaudeAccountId,
+  resolveClaudeAccounts,
+  setClaudeAccounts,
+} from "./claude-accounts.js";
 import { REASONING_LEVEL_ORDER } from "../models/reasoning-levels.js";
 import { DEFAULT_BACKUP_SETTINGS } from "../backup/plan.js";
 import {
@@ -29,6 +36,19 @@ const BACKEND_ID_ENUM = [...BACKEND_IDS] as [
   (typeof BACKEND_IDS)[number],
   ...(typeof BACKEND_IDS)[number][],
 ];
+
+/**
+ * A backend id field: a built-in id, or an extra Claude account
+ * (`claude-<name>`). The shape check is here; whether the account is
+ * declared in `claudeAccounts` is checked after parsing
+ * (`claudeAccountConfigIssues`), since one field can't see another.
+ */
+const backendIdSchema = z.union([
+  z.enum(BACKEND_ID_ENUM),
+  z.custom<BackendId>(isClaudeAccountId, {
+    message: `expected one of ${BACKEND_IDS.join(", ")}, or a "claude-<name>" account from claudeAccounts`,
+  }),
+]);
 
 /**
  * Reasoning-effort literal source for the background-agent knobs
@@ -453,7 +473,7 @@ const mem0SettingsSchema = z.object({
 const configSchema = z.object({
   frontend: z.union([frontendEnum, z.array(frontendEnum)]).default("telegram"),
   botToken: z.string().optional(),
-  backend: z.enum(BACKEND_ID_ENUM).default("claude"),
+  backend: backendIdSchema.default("claude"),
   /**
    * Backend used by the heartbeat agent. Falls back to `backend` when
    * unset. Pair with `heartbeatModel` — the heartbeat agent reads the
@@ -461,12 +481,12 @@ const configSchema = z.object({
    * keeping heartbeats on Claude Sonnet for quality while chat runs
    * on a cheaper / free backend.
    */
-  heartbeatBackend: z.enum(BACKEND_ID_ENUM).optional(),
+  heartbeatBackend: backendIdSchema.optional(),
   /**
    * Backend used by the dream / memory-consolidation agent. Falls
    * back to `backend` when unset. Pair with `dreamModel`.
    */
-  dreamBackend: z.enum(BACKEND_ID_ENUM).optional(),
+  dreamBackend: backendIdSchema.optional(),
   /**
    * Whitelist of backends surfaced in the `/model` picker's backend
    * submenu. Unset → every registered backend is offered. Set →
@@ -478,7 +498,21 @@ const configSchema = z.object({
    * enabled, Talon clears that chat's backend/model override and starts a
    * fresh default session.
    */
-  enabledBackends: z.array(z.enum(BACKEND_ID_ENUM)).optional(),
+  enabledBackends: z.array(backendIdSchema).optional(),
+  /**
+   * Extra Claude subscriptions, each its own backend. The `claude` backend
+   * stays the default account (`$CLAUDE_CONFIG_DIR` or `~/.claude`); every
+   * entry here registers a backend with its `id` that runs the same Claude
+   * SDK driver with `CLAUDE_CONFIG_DIR=<configDir>`. Use the id anywhere a
+   * backend id goes. Talon never moves work between accounts on its own —
+   * see docs/claude-accounts.md.
+   *
+   *   "claudeAccounts": [
+   *     { "id": "claude-2", "label": "Claude (account 2)",
+   *       "configDir": "~/.talon/accounts/claude-2" }
+   *   ]
+   */
+  claudeAccounts: z.array(claudeAccountSchema).max(16).optional(),
   claudeBinary: z.string().optional(),
   /**
    * Override the path to the `codex` executable the Codex backend spawns
@@ -1221,6 +1255,18 @@ export function loadConfig(): TalonConfig {
     );
   }
   const parsed = result.data;
+
+  const accountIssues = claudeAccountConfigIssues(parsed, BACKEND_IDS);
+  if (accountIssues.length > 0) {
+    throw new ConfigFileError(
+      `Invalid config in ${CONFIG_FILE}:\n` +
+        accountIssues.map((line) => `  - ${line}`).join("\n") +
+        `\nThe file was left untouched — fix it and start Talon again.`,
+      CONFIG_FILE,
+      accountIssues,
+    );
+  }
+  setClaudeAccounts(resolveClaudeAccounts(parsed.claudeAccounts));
 
   // The soul kernel is gone (#953). Its config block still parses so an
   // existing config.json keeps loading, but it no longer does anything —

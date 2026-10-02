@@ -20,6 +20,10 @@
  */
 
 import type { ReasoningEffortLevel } from "../types.js";
+import {
+  isClaudeAccountId,
+  type ClaudeAccountId,
+} from "../config/claude-accounts.js";
 
 /**
  * Canonical backend identifiers — single source of truth for the
@@ -36,17 +40,26 @@ export const BACKEND_IDS = [
   "opencode",
 ] as const;
 
-export type BackendId = (typeof BACKEND_IDS)[number];
+/** A backend that ships with Talon. */
+type BuiltinBackendId = (typeof BACKEND_IDS)[number];
+
+/**
+ * Any backend id: a built-in, or an extra Claude account declared in
+ * `claudeAccounts` (`claude-<name>`, see core/config/claude-accounts.ts).
+ */
+export type BackendId = BuiltinBackendId | ClaudeAccountId;
 
 /**
  * Type guard that narrows arbitrary strings to `BackendId`. Use at
  * config parse boundaries and when reading values from external
- * sources (chat settings JSON, env vars).
+ * sources (chat settings JSON, env vars). An account id passes on shape
+ * alone; whether that account is configured is the registry's question.
  */
 export function isBackendId(value: unknown): value is BackendId {
   return (
     typeof value === "string" &&
-    (BACKEND_IDS as readonly string[]).includes(value)
+    ((BACKEND_IDS as readonly string[]).includes(value) ||
+      isClaudeAccountId(value))
   );
 }
 

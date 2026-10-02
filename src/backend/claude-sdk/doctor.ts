@@ -10,6 +10,11 @@ import type {
 } from "../../core/doctor/types.js";
 import { getModels } from "../../core/models/catalog.js";
 import { binaryOnPath } from "../../util/binary-on-path.js";
+import { BACKEND_IDS } from "../../core/agent-runtime/model-ref.js";
+import {
+  claudeAccountConfigIssues,
+  isClaudeAccountId,
+} from "../../core/config/claude-accounts.js";
 import { resolveModel } from "./model-provider.js";
 import { registerClaudeModelsStatic } from "./models/discovery.js";
 import { CLAUDE_MODELS_STATIC } from "./models/static.js";
@@ -40,10 +45,28 @@ export async function claudeDoctorChecks(
         : { label: "Claude Code not found", status: "fail" },
     );
   }
+  checks.push(...accountConfigChecks(config));
   // Model resolution spawns a probe — worth it for the backend actually
   // serving chats, wasteful for one nobody is using.
   if (isActive) checks.push(...(await checkConfiguredModels(config)));
   return checks;
+}
+
+/**
+ * `claudeAccounts` problems the CLI's raw config read doesn't catch on its
+ * own (duplicate ids or dirs, backend fields naming an undeclared account).
+ * The daemon refuses to start on these; doctor says why first.
+ */
+function accountConfigChecks(
+  config: DoctorConfigSlice | undefined,
+): DoctorCheck[] {
+  if (!config) return [];
+  return claudeAccountConfigIssues(config, BACKEND_IDS).map((issue) => ({
+    label: "Claude accounts config",
+    status: "fail",
+    detail: issue,
+    issue: true,
+  }));
 }
 
 /**
@@ -78,7 +101,8 @@ async function checkConfiguredModels(
     }
     for (const { key, model, backendId } of targets) {
       if (!model || model === "default") continue;
-      if ((backendId ?? "claude") !== "claude") continue;
+      const id = backendId ?? "claude";
+      if (id !== "claude" && !isClaudeAccountId(id)) continue;
       const res = await resolveModel(model);
       if (res.kind === "exact") {
         checks.push({

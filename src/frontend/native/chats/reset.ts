@@ -6,6 +6,7 @@
  */
 
 import { resetSession } from "../../../storage/sessions.js";
+import { sharesSessionStore } from "../../../core/agent-runtime/backend-registry.js";
 import { markContextCleared } from "../../../storage/history.js";
 import { resetPulseCheckpoint } from "../../../core/background/pulse/pulse.js";
 import { getBackendForChat } from "../../../core/engine/backend-controller/index.js";
@@ -18,8 +19,9 @@ function dropSessionState(
   runtime: NativeRuntime,
   chatId: string,
   reason: string,
+  keepSession = false,
 ): void {
-  resetSession(chatId, reason);
+  if (!keepSession) resetSession(chatId, reason);
   runtime.contextByChat.delete(chatId);
   runtime.queuedByChat.delete(chatId);
   resetPulseCheckpoint(chatId);
@@ -27,15 +29,20 @@ function dropSessionState(
 
 /**
  * A backend switch: session ids aren't portable across backends, so the
- * session goes (its id is archived by resetSession). History, turn meta
- * and the transcript stay — a switch changes who answers, not what was
- * said.
+ * session goes (its id is archived by resetSession) — unless `from` and
+ * `to` share a transcript store (two Claude accounts), where it stays
+ * valid. History, turn meta and the transcript stay either way — a
+ * switch changes who answers, not what was said. Returns whether the
+ * session was kept.
  */
 export function handOffChatBackend(
   runtime: NativeRuntime,
   chatId: string,
-): void {
-  dropSessionState(runtime, chatId, "backend-switch");
+  move?: { from: string; to: string },
+): boolean {
+  const kept = move ? sharesSessionStore(move.from, move.to) : false;
+  dropSessionState(runtime, chatId, "backend-switch", kept);
+  return kept;
 }
 
 /**

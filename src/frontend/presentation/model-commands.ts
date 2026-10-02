@@ -32,6 +32,7 @@ import {
   resolveChatBackend,
 } from "../../core/engine/backend-controller/index.js";
 import { resetSession } from "../../storage/sessions.js";
+import { sharesSessionStore } from "../../core/agent-runtime/backend-registry.js";
 import { resetPulseCheckpoint } from "../../core/background/pulse/pulse.js";
 import { logWarn } from "../../util/log.js";
 import {
@@ -249,19 +250,23 @@ function handOffChatSession(
   chatId: string,
   previous: Backend | null,
   deps: ModelCommandDeps,
-): void {
-  resetSession(chatId, "backend-switch");
+  move: { from: string; to: string },
+): boolean {
+  // Claude accounts share one transcript store: the session id stays valid.
+  const kept = sharesSessionStore(move.from, move.to);
+  if (!kept) resetSession(chatId, "backend-switch");
   resetPulseCheckpoint(chatId);
   previous?.sessions?.resetChat?.(chatId);
   const next = resolveChatBackend(chatId, deps.gateway?.backend ?? null);
   // Warming can take seconds on OpenCode/Kilo; the reply must not wait.
-  if (!next || next === previous) return;
+  if (!next || next === previous) return kept;
   void Promise.resolve(next.sessions?.warmSession?.(chatId)).catch((err) =>
     logWarn(
       "settings",
       `[${chatId}] warm after backend switch failed: ${err instanceof Error ? err.message : String(err)}`,
     ),
   );
+  return kept;
 }
 
 /** Model line for the post-switch confirmation. */
@@ -309,10 +314,13 @@ export async function switchChatBackend(
     };
   }
   setChatBackend(chatId, target.id);
-  handOffChatSession(chatId, previous, deps);
+  const kept = handOffChatSession(chatId, previous, deps, {
+    from: previousId,
+    to: target.id,
+  });
   return {
     ok: true,
-    text: `Backend: ${target.label} (${await describeModelAfterSwitch(chatId, target.id, deps)}). Session started fresh.`,
+    text: `Backend: ${target.label} (${await describeModelAfterSwitch(chatId, target.id, deps)}). ${kept ? "Session kept." : "Session started fresh."}`,
   };
 }
 
@@ -321,11 +329,17 @@ export async function resetChatBackend(
   chatId: string,
   deps: ModelCommandDeps,
 ): Promise<CommandOutcome> {
-  const { backend: previous } = resolveChatBackendPair(chatId, deps);
+  const { backend: previous, backendId: previousId } = resolveChatBackendPair(
+    chatId,
+    deps,
+  );
   await releaseChat(chatId);
   setChatBackend(chatId, undefined);
-  handOffChatSession(chatId, previous, deps);
   const { backendId } = resolveChatBackendPair(chatId, deps);
+  handOffChatSession(chatId, previous, deps, {
+    from: previousId,
+    to: backendId,
+  });
   return {
     ok: true,
     text: `Backend reset to default (${backendId}; ${await describeModelAfterSwitch(chatId, backendId, deps)}).`,

@@ -406,7 +406,7 @@ export async function initBackendAndDispatcher(
   // additive: drop a `factory.ts` under the new backend dir and list it in
   // backend/builtins.ts. No conditionals here change.
   const { loadBuiltinBackends } = await import("./backend/builtins.js");
-  await loadBuiltinBackends();
+  await loadBuiltinBackends(config);
 
   const {
     initBackendPool,
