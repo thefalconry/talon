@@ -13,11 +13,12 @@ import { pushMessage } from "../../storage/history.js";
 import type { HistoryMessage } from "../../storage/repositories/history-repo.js";
 import { allowChat, revokeChat } from "./userbot.js";
 import { registerChat } from "../../core/background/pulse/pulse.js";
-import { log } from "../../util/log.js";
+import { log, logWarn } from "../../util/log.js";
 import { getSenderName } from "./handlers/index.js";
 import { noteUpdateId } from "./polling/update-offset.js";
 import { noteInboundThread } from "./topics.js";
 import { recordJoinRequest } from "./join-requests.js";
+import { applyInboundRedaction } from "../../core/secrets/redact.js";
 import {
   handleTextMessage,
   handlePhotoMessage,
@@ -102,6 +103,45 @@ function historyEntryFor(message: Message): HistoryEntry | undefined {
     return { text: `(shared contact: ${name})` };
   }
   return undefined;
+}
+
+// ── Credential redaction (before history, handlers and the model) ───────
+// Rewrites the message's text/caption in place, so every later reader —
+// history, interaction logs, traces, the prompt — sees only the
+// `[REDACTED:<kind>]` form. See core/secrets/redact.ts.
+export function makeRedactCredentials(config: TalonConfig) {
+  return async (
+    ctx: Filter<Context, "message">,
+    next: NextFunction,
+  ): Promise<void> => {
+    const message = ctx.message as { text?: string; caption?: string };
+    const field = message.text !== undefined ? "text" : "caption";
+    const original = message[field];
+    if (original) {
+      const r = applyInboundRedaction(original, {
+        chatKey: String(ctx.chat.id),
+        isDm: ctx.chat.type === "private",
+        config: config.redaction,
+      });
+      if (r.redacted) {
+        message[field] = r.text;
+        log(
+          "bot",
+          `[${ctx.chat.id}] Redacted a credential from an inbound message`,
+        );
+        if (r.deleteOriginal) {
+          await ctx.deleteMessage().catch((err: unknown) => {
+            logWarn(
+              "bot",
+              `Could not delete a redacted message: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        }
+        if (r.notice) await ctx.reply(r.notice).catch(() => {});
+      }
+    }
+    return next();
+  };
 }
 
 // ── History capture (runs for ALL messages, before handlers) ─────────────
@@ -194,6 +234,7 @@ function registerMessageHandlers(bot: Bot, config: TalonConfig): void {
 
 export function registerMiddleware(bot: Bot, config: TalonConfig): void {
   bot.use(trackUpdateOffset);
+  bot.on("message", makeRedactCredentials(config));
   bot.on("message", captureHistory);
   bot.on("chat_join_request", cacheJoinRequest);
   bot.on("my_chat_member", revokeOnRemoval);

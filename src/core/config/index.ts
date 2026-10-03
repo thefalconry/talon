@@ -803,6 +803,21 @@ const configSchema = z.object({
     .strict()
     .optional(),
   /**
+   * Inbound credential redaction (docs/secret-drop.md). Before a user's
+   * message is saved or shown to the model, passwords, API keys, tokens and
+   * any value already in ~/.talon/secrets become `[REDACTED:<kind>]`, and
+   * the chat is told once to use /secret. `deleteOriginal` also deletes the
+   * platform message where the bot can: in DMs (default), everywhere, or
+   * never.
+   */
+  redaction: z
+    .object({
+      enabled: z.boolean().default(true),
+      deleteOriginal: z.enum(["dm", "always", "never"]).default("dm"),
+    })
+    .strict()
+    .optional(),
+  /**
    * The fetch ladder behind `fetch_url` (docs/fetch-ladder.md): when a page
    * answers with a bot wall it retries through browser-TLS impersonation,
    * SOCKS exits, a plain fetch, an anti-detect browser and — only if set —
