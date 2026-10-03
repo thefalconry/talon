@@ -26,7 +26,7 @@ import { dirs } from "../../util/paths.js";
  * The github-mcp-server image tag Talon runs. Bump deliberately, with
  * the canary workflow green — see .github/workflows/native-provision.yml.
  */
-export const GITHUB_MCP_PINNED_TAG = "v1.12.2";
+export const GITHUB_MCP_PINNED_TAG = "v1.14.0";
 
 const GITHUB_MCP_IMAGE = "ghcr.io/github/github-mcp-server";
 
