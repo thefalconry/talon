@@ -11,6 +11,8 @@ import { handleSlashCommand } from "./commands.js";
 import type { ChatMessage } from "./graph.js";
 import type { TeamsRuntime } from "./runtime.js";
 import { runTurn } from "./turn.js";
+import { postToTeams } from "./actions.js";
+import { applyInboundRedaction } from "../../core/secrets/redact.js";
 
 /**
  * Messages arrive newest first; everything before `lastSeenId` is new. IDs
@@ -44,6 +46,18 @@ async function handleMessage(
 ): Promise<void> {
   const talonChatId = `teams_chat_${msg.chatId}`;
   if (await handleSlashCommand(runtime, msg, talonChatId)) return;
+  // Credentials out before logging, history and the model (core/secrets).
+  const redaction = applyInboundRedaction(msg.text, {
+    chatKey: talonChatId,
+    isDm: false,
+    config: { ...runtime.config.redaction, deleteOriginal: "never" },
+  });
+  if (redaction.redacted) {
+    msg = { ...msg, text: redaction.text };
+    if (redaction.notice) {
+      postToTeams(runtime.webhookUrl, redaction.notice).catch(() => {});
+    }
+  }
 
   log(
     "teams",

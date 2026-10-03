@@ -47,6 +47,8 @@ import type { ClientAttachment } from "../protocol.js";
 import { configSnapshot, applyConfigUpdate } from "./settings.js";
 import { bridgeStatus, broadcastStatus } from "./status.js";
 import { logWarn } from "../../../util/log.js";
+import { applyInboundRedaction } from "../../../core/secrets/redact.js";
+import { emitAssistant } from "../turn/emit.js";
 import {
   interruptTurn,
   isBusy,
@@ -98,6 +100,31 @@ function resolveAttachments(
   return resolved;
 }
 
+/**
+ * Credentials out of a native message before it's emitted, persisted or
+ * sent to the model (core/secrets/redact.ts). The once-per-chat nudge is
+ * emitted after the caller has emitted the user's own message.
+ */
+function redactNativeText(
+  runtime: NativeRuntime,
+  chatId: string,
+  text: string,
+): string {
+  const r = applyInboundRedaction(text, {
+    chatKey: chatId,
+    isDm: true,
+    config: { ...runtime.config.redaction, deleteOriginal: "never" },
+  });
+  const notice = r.notice;
+  if (notice) {
+    queueMicrotask(() => {
+      const entry = runtime.chats.get(chatId);
+      if (entry) emitAssistant(runtime, entry, notice);
+    });
+  }
+  return r.text;
+}
+
 export function buildBridgeHandlers(
   runtime: NativeRuntime,
 ): BridgeServerHandlers {
@@ -114,7 +141,8 @@ export function buildBridgeHandlers(
     // straight delegations to the read-only half of the store.
     listMemory,
     memoryWhy,
-    send: (id, text, opts, caller) => {
+    send: (id, rawText, opts, caller) => {
+      const text = redactNativeText(runtime, id, rawText);
       const entry = chats.get(id) ?? chats.ensure(id);
       // Resolve the client's references into the records this daemon minted
       // at upload time — dropping anything it can't account for.
@@ -153,7 +181,8 @@ export function buildBridgeHandlers(
       }
       startTurn(runtime, entry, text, { attachments });
     },
-    queueMessage: (id, text) => {
+    queueMessage: (id, rawText) => {
+      const text = redactNativeText(runtime, id, rawText);
       // Edit/replace the queued follow-up's text, keeping whatever files were
       // queued with it. Empty text cancels the whole follow-up, attachments
       // included — the client's queue editor offers no other way to drop it.
