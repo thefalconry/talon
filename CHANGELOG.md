@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.33.1](https://github.com/thefalconry/talon/compare/v5.33.0...v5.33.1) (2026-10-04)
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump the production-dependencies group across 1 directory with 3 updates ([#1246](https://github.com/thefalconry/talon/issues/1246)) ([97c43dc](https://github.com/thefalconry/talon/commit/97c43dcb02602ceaea40085642e99017a1f8e8c3))
+
 ## [5.33.0](https://github.com/thefalconry/talon/compare/v5.32.1...v5.33.0) (2026-10-04)
 
 
