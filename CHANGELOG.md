@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.33.0](https://github.com/thefalconry/talon/compare/v5.32.1...v5.33.0) (2026-10-04)
+
+
+### Features
+
+* redact secrets in inbound messages ([#1232](https://github.com/thefalconry/talon/issues/1232)) ([a7166c3](https://github.com/thefalconry/talon/commit/a7166c341bb1f50599082607fb9fd8e094e6932a))
+
+
+### Tests
+
+* skip POSIX-only tests on Windows, fix preflight path separator ([#1248](https://github.com/thefalconry/talon/issues/1248)) ([44e36fa](https://github.com/thefalconry/talon/commit/44e36fada52d98a841e75d625c28ad2f4a425ac5))
+
 ## [5.32.1](https://github.com/thefalconry/talon/compare/v5.32.0...v5.32.1) (2026-10-04)
 
 
