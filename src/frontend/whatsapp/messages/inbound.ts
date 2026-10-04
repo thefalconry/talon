@@ -20,6 +20,7 @@ import {
 import { isAddressedToSelf, isGroupAllowed } from "../access.js";
 import { handleWhatsAppCommand, parseWhatsAppCommand } from "../commands.js";
 import { sendText } from "../actions/send.js";
+import { applyInboundRedaction } from "../../../core/secrets/redact.js";
 import {
   bareId,
   canonicalId,
@@ -65,6 +66,65 @@ function extractText(msg: WAMessage): string {
     m.documentWithCaptionMessage?.message?.documentMessage?.caption ??
     ""
   );
+}
+
+/** The text-bearing fields of an inbound message, as [holder, key] pairs. */
+function textFields(msg: WAMessage): Array<[Record<string, unknown>, string]> {
+  const m = msg.message as Record<string, unknown> | null | undefined;
+  if (!m) return [];
+  const fields: Array<[Record<string, unknown>, string]> = [];
+  const add = (holder: unknown, key: string): void => {
+    if (
+      holder &&
+      typeof (holder as Record<string, unknown>)[key] === "string"
+    ) {
+      fields.push([holder as Record<string, unknown>, key]);
+    }
+  };
+  add(m, "conversation");
+  add(m.extendedTextMessage, "text");
+  add(m.imageMessage, "caption");
+  add(m.videoMessage, "caption");
+  add(m.documentMessage, "caption");
+  const wrapped = (
+    m.documentWithCaptionMessage as
+      { message?: Record<string, unknown> } | undefined
+  )?.message;
+  add(wrapped?.documentMessage, "caption");
+  return fields;
+}
+
+/**
+ * Rewrite credentials out of the raw message in place (core/secrets/redact.ts),
+ * so the message store, history and the prompt only ever hold the redacted
+ * form; nudge toward /secret once. WhatsApp offers a bot no way to delete a
+ * user's message for both sides, so `deleteOriginal` doesn't apply here.
+ */
+function redactCredentials(
+  runtime: WhatsAppRuntime,
+  msg: WAMessage,
+  chat: WhatsAppChatInfo,
+  isGroup: boolean,
+): void {
+  let notice: string | undefined;
+  for (const [holder, key] of textFields(msg)) {
+    const r = applyInboundRedaction(holder[key] as string, {
+      chatKey: chat.chatId,
+      isDm: !isGroup,
+      config: { ...runtime.config.redaction, deleteOriginal: "never" },
+    });
+    if (!r.redacted) continue;
+    holder[key] = r.text;
+    notice ??= r.notice;
+    log(
+      "whatsapp",
+      `[${chat.chatId}] Redacted a credential from an inbound message`,
+    );
+  }
+  const sock = runtime.sock;
+  if (notice && sock) {
+    sendText({ sock, gateway: runtime.gateway }, chat, notice).catch(() => {});
+  }
 }
 
 async function admitInbound(
@@ -131,7 +191,6 @@ async function recordInbound(
   admitted: AdmittedMessage,
 ): Promise<RecordedMessage | null> {
   const { jid, isGroup, identity } = admitted;
-  const text = extractText(msg).trim();
   // Group chats key on the group JID; DMs key on the person, so the
   // thread survives WhatsApp switching addressing form.
   const chat = registerWhatsAppChat(
@@ -139,6 +198,9 @@ async function recordInbound(
     undefined,
     isGroup ? undefined : canonicalId(identity),
   );
+  // Before the raw message is stored or its text read anywhere else.
+  redactCredentials(runtime, msg, chat, isGroup);
+  const text = extractText(msg).trim();
   const senderName = msg.pushName || canonicalId(identity) || "user";
   const msgId = rememberMessage({
     key: msg.key,
