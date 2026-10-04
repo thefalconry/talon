@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.32.1](https://github.com/thefalconry/talon/compare/v5.32.0...v5.32.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **deps:** bump mem0ai 3.2.0 -&gt; 3.3.1 in lockfile to clear braces advisory ([#1244](https://github.com/thefalconry/talon/issues/1244)) ([e1ae8a1](https://github.com/thefalconry/talon/commit/e1ae8a113ae653daf69cddfc84a81c4e483ab9f6))
+
 ## [5.32.0](https://github.com/thefalconry/talon/compare/v5.31.1...v5.32.0) (2026-10-01)
 
 
