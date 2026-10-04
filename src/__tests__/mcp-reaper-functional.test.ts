@@ -17,6 +17,9 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+// POSIX-only: Windows has no signals/mountinfo semantics these tests rely on.
+const isWin = process.platform === "win32";
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const GUARD_MODULE = pathToFileURL(
   resolve(REPO_ROOT, "src/core/mcp-hub/child-guard.ts"),
@@ -235,7 +238,7 @@ describe("MCP child guard (reaper)", () => {
     TIMEOUT_MS,
   );
 
-  it(
+  it.skipIf(isWin)(
     "escalates to SIGKILL for a child that ignores SIGTERM",
     async () => {
       const proc = startHarness({ count: 2, ignoreSigterm: true });
@@ -249,7 +252,7 @@ describe("MCP child guard (reaper)", () => {
     TIMEOUT_MS,
   );
 
-  it(
+  it.skipIf(isWin)(
     "never signals a released pid (pid-reuse safety)",
     async () => {
       const proc = startHarness({ count: 2, release: true });

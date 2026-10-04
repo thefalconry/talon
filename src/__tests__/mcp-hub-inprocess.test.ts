@@ -45,6 +45,9 @@ import {
 } from "../core/mcp-hub/launcher.js";
 import { spawn } from "node:child_process";
 
+// POSIX-only: Windows has no signals/mountinfo semantics these tests rely on.
+const isWin = process.platform === "win32";
+
 /**
  * Minimal stdio MCP server that — like tailscale-mcp, ccusage and
  * polymarket in the wild — prints non-protocol lines on STDOUT, both at
@@ -272,13 +275,16 @@ describe("reaper protocol", () => {
     expect(parseGuardLine("")).toBeNull();
   });
 
-  it("killPids tolerates pids that are already gone", async () => {
-    const c = spawn(process.execPath, ["-e", "setInterval(()=>{},1e9)"]);
-    const gone = new Promise((r) => c.once("exit", r));
-    await killPids([c.pid!, 2 ** 22 + 12345], 500);
-    await gone;
-    expect(c.signalCode).toBe("SIGTERM");
-  });
+  it.skipIf(isWin)(
+    "killPids tolerates pids that are already gone",
+    async () => {
+      const c = spawn(process.execPath, ["-e", "setInterval(()=>{},1e9)"]);
+      const gone = new Promise((r) => c.once("exit", r));
+      await killPids([c.pid!, 2 ** 22 + 12345], 500);
+      await gone;
+      expect(c.signalCode).toBe("SIGTERM");
+    },
+  );
 });
 
 describe("startBridgeWatchdog (shared by supervisor and reaper)", () => {
