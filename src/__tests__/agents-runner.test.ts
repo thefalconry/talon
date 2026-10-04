@@ -46,6 +46,14 @@ import {
 } from "../core/agents/index.js";
 import { taskTable } from "../core/tasks/index.js";
 import { getTrail } from "../core/agents/trail.js";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  agentScratchDir,
+  setScratchRootForTest,
+} from "../core/agents/scratch.js";
 import { bus } from "../core/bus/index.js";
 
 // The plan-aware router, stubbed. These tests assert what the runner ASKS
@@ -751,5 +759,58 @@ describe("timeouts, the watchdog and the trail", () => {
       expect(report).toContain("schema migrated");
       expect(report).toContain("/tmp/work.ts");
     });
+  });
+});
+
+describe("private scratch dir", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "talon-scratch-test-"));
+    setScratchRootForTest(root);
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("exports its own TMPDIR to the run, names it in the brief, and removes it on success", async () => {
+    let seen: { env?: Record<string, string>; existed: boolean } = {
+      existed: false,
+    };
+    const run = vi.fn<OneShot>(async (params) => {
+      const dir = params.env?.TMPDIR;
+      seen = {
+        ...(params.env ? { env: { ...params.env } } : {}),
+        existed: dir ? existsSync(dir) : false,
+      };
+      if (dir) writeFileSync(join(dir, "scratch.txt"), "x");
+      params.onAssistantText?.("done");
+    });
+    await withBackend(run);
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    await settled(outcome.agentId);
+
+    const dir = agentScratchDir(outcome.agentId);
+    expect(dir.startsWith(root)).toBe(true);
+    expect(seen.env).toEqual({ TMPDIR: dir, TMP: dir, TEMP: dir });
+    expect(seen.existed).toBe(true);
+    const params = run.mock.calls[0]?.[0] as OneShotAgentParams;
+    expect(params.systemPrompt).toContain(dir);
+    await vi.waitFor(() => expect(existsSync(dir)).toBe(false));
+  });
+
+  it("keeps the scratch dir when the run fails", async () => {
+    await withBackend(async (params) => {
+      writeFileSync(join(params.env!.TMPDIR!, "evidence.log"), "boom");
+      throw new Error("backend exploded");
+    });
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("failed");
+    const dir = agentScratchDir(outcome.agentId);
+    // give the post-settle cleanup its chance to (wrongly) run
+    await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(join(dir, "evidence.log"))).toBe(true);
   });
 });

@@ -1351,9 +1351,17 @@ jobs:
   # All required jobs MUST pass for `CI Status` to be green. Branch
   # protection (`.github/branch-protection.json`) gates merges on this
   # single check, so adding a new required job means adding it here too.
+  #
+  # On a pull_request run that was itself cancelled (superseded in the
+  # concurrency group — e.g. release-please opening and labelling a PR in
+  # the same second, which starts two runs for one commit) the gate is
+  # skipped instead of reporting a failure: the surviving run on the same
+  # commit reports the real verdict. Push, merge_group, schedule and
+  # dispatch runs are never concurrency-cancelled, so there a cancellation
+  # still reports as failed and can't let anything through.
   ci-ok:
     name: CI Status
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || !cancelled()) }}
     needs:
       - changes
       - pr-title

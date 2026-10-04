@@ -25,6 +25,12 @@ other agent work started. It has:
   move it to one with more headroom) and that backend's default model. An
   optional `agents.allowedBackends` allowlist bounds both;
 - a **mailbox** its parent can put instructions in;
+- a private **scratch dir**, `$TMPDIR/talon-agents/<id>/` (`/tmp/talon-agents/<id>/`
+  on Linux), created when the run starts and exported as `TMPDIR` / `TMP` /
+  `TEMP` to its shells and tools (backends that take a per-run environment
+  — the Claude SDK today; others see it named in the agent's brief). It
+  survives a daemon restart, is removed when the agent settles `done`, and
+  is kept on any other outcome so the work it left can be inspected;
 - an optional hard **timeout** (none by default), a **no-progress
   watchdog**, a **task-table** entry, and a per-run markdown log at
   `~/.talon/workspace/logs/agents/<id>.md`.

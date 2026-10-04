@@ -1,5 +1,49 @@
 # Changelog
 
+## [5.32.1](https://github.com/thefalconry/talon/compare/v5.32.0...v5.32.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **deps:** bump mem0ai 3.2.0 -&gt; 3.3.1 in lockfile to clear braces advisory ([#1244](https://github.com/thefalconry/talon/issues/1244)) ([e1ae8a1](https://github.com/thefalconry/talon/commit/e1ae8a113ae653daf69cddfc84a81c4e483ab9f6))
+
+## [5.32.0](https://github.com/thefalconry/talon/compare/v5.31.1...v5.32.0) (2026-10-01)
+
+
+### Features
+
+* **companion:** on-device Kokoro neural voice for Android voice mode ([#1238](https://github.com/thefalconry/talon/issues/1238)) ([8e6ba1e](https://github.com/thefalconry/talon/commit/8e6ba1e92a1f1e0f5463d5214c34cfd1515458c8))
+
+## [5.31.1](https://github.com/thefalconry/talon/compare/v5.31.0...v5.31.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **companion:** fall back to the newest release that has this platform's build ([#1235](https://github.com/thefalconry/talon/issues/1235)) ([547b67d](https://github.com/thefalconry/talon/commit/547b67df54d95b604d621b8132fa2ede1eb1ff07))
+
+## [5.31.0](https://github.com/thefalconry/talon/compare/v5.30.0...v5.31.0) (2026-10-01)
+
+
+### Features
+
+* **agents:** give each sub-agent a private scratch dir as its TMPDIR ([#1231](https://github.com/thefalconry/talon/issues/1231)) ([34a30d0](https://github.com/thefalconry/talon/commit/34a30d0d9f9036ffc1665c2c6e64f80e6a145ffb))
+
+## [5.30.0](https://github.com/thefalconry/talon/compare/v5.29.0...v5.30.0) (2026-10-01)
+
+
+### Features
+
+* **agents:** message any live agent in the same tree, by id or label ([#1230](https://github.com/thefalconry/talon/issues/1230)) ([a162fda](https://github.com/thefalconry/talon/commit/a162fdac92a70e774a6986896abcd7ca0ec89d9a))
+* **agents:** no mandatory hard timeout, a no-progress watchdog, and work that survives a kill ([#1229](https://github.com/thefalconry/talon/issues/1229)) ([ae36dcc](https://github.com/thefalconry/talon/commit/ae36dccf81131b9b49fc2cbef61e332cd4b8a76e))
+* **dev:** hardlinked node_modules for worktrees ([#1227](https://github.com/thefalconry/talon/issues/1227)) ([4d5c4a2](https://github.com/thefalconry/talon/commit/4d5c4a20bc188f79d26cd3f8b6042f2c40edc06d))
+* **secrets:** secret drop — /secret and request_secret paste links ([#1228](https://github.com/thefalconry/talon/issues/1228)) ([58a9d8e](https://github.com/thefalconry/talon/commit/58a9d8e4e9dd3a71b07cd61660e485c2e27fc888))
+
+
+### Bug Fixes
+
+* **claude-sdk:** keep session transcripts past the CLI's 30-day sweep ([#1226](https://github.com/thefalconry/talon/issues/1226)) ([32fad87](https://github.com/thefalconry/talon/commit/32fad878d07c3b59585399ae484ae0c9f1a43ab3))
+* **companion:** play voice replies on the media path with the best TTS voice ([#1225](https://github.com/thefalconry/talon/issues/1225)) ([9d116c3](https://github.com/thefalconry/talon/commit/9d116c3e84c8bec8f6e288e0357ea089610b1170))
+
 ## [5.29.0](https://github.com/thefalconry/talon/compare/v5.28.0...v5.29.0) (2026-10-01)
 
 

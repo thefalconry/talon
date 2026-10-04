@@ -16,3 +16,9 @@
 -dontwarn rikka.shizuku.**
 -dontwarn moe.shizuku.**
 -dontwarn dev.rikka.**
+
+# sherpa-onnx (on-device neural voice). Its JNI layer reads the config data
+# classes' fields and constructs GeneratedAudio by name, so R8 must keep the
+# whole package's names and members intact.
+-keep class com.k2fsa.sherpa.onnx.** { *; }
+-dontwarn com.k2fsa.sherpa.onnx.**

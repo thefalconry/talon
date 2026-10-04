@@ -200,6 +200,38 @@ void main() {
     });
   });
 
+  group('UpdateRelease.newestFromFeed', () {
+    test('falls back past a newest release whose build has not landed', () {
+      final pending = _feed(tag: 'v5.31.0', apkBytes: apk)..['assets'] = [];
+      final older = _feed(tag: 'v5.30.0', apkBytes: apk);
+      final oldest = _feed(tag: 'v5.29.0', apkBytes: apk);
+      final rel = UpdateRelease.newestFromFeed(
+        [pending, oldest, older],
+        platform: 'android',
+      );
+      expect(rel?.version.toString(), '5.30.0');
+    });
+
+    test('skips drafts and pre-releases', () {
+      final draft = _feed(tag: 'v6.0.0', apkBytes: apk)..['draft'] = true;
+      final pre = _feed(tag: 'v5.32.0', apkBytes: apk)..['prerelease'] = true;
+      final stable = _feed(tag: 'v5.30.0', apkBytes: apk);
+      final rel = UpdateRelease.newestFromFeed(
+        [draft, pre, stable],
+        platform: 'android',
+      );
+      expect(rel?.version.toString(), '5.30.0');
+    });
+
+    test('still accepts a single release object', () {
+      final rel = UpdateRelease.newestFromFeed(
+        _feed(tag: 'v4.2.0', apkBytes: apk),
+        platform: 'android',
+      );
+      expect(rel?.version.toString(), '4.2.0');
+    });
+  });
+
   group('UpdateService.check', () {
     late Directory tmp;
     setUp(() async {

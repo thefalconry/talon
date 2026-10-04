@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/services.dart';
 
 import 'log.dart';
+import 'neural_tts.dart';
 
 /// A transcript event tied to one native recognition generation.
 class SttTextEvent {
@@ -124,6 +125,9 @@ abstract class VoiceEngine {
   Future<void> stopListening(String sessionId);
   Future<void> cancelListening(String sessionId);
 
+  /// Queue [text] as utterance [id]. With a [neuralSpeaker] the on-device
+  /// neural voice speaks it (when one is loaded — native falls back to
+  /// Android TTS otherwise); without one, Android TTS with [voiceName].
   Future<bool> speak(
     String text, {
     required String id,
@@ -131,12 +135,13 @@ abstract class VoiceEngine {
     double pitch = 1.0,
     String? voiceName,
     bool flush = true,
+    int? neuralSpeaker,
   });
   Future<void> stopSpeaking();
 }
 
 /// Dart half of the `talon/voice` Android platform channel.
-class VoiceService implements VoiceEngine {
+class VoiceService implements VoiceEngine, NeuralTtsBackend {
   VoiceService._() {
     if (supported) _channel.setMethodCallHandler(_onCall);
   }
@@ -161,6 +166,7 @@ class VoiceService implements VoiceEngine {
   final _ttsError = StreamController<TtsEvent>.broadcast();
   final _ttsStopped = StreamController<TtsEvent>.broadcast();
   final _assist = StreamController<void>.broadcast();
+  final _neuralFailed = StreamController<String>.broadcast();
 
   @override
   Stream<SttTextEvent> get onPartial => _partial.stream;
@@ -184,6 +190,9 @@ class VoiceService implements VoiceEngine {
   Stream<TtsEvent> get onTtsStopped => _ttsStopped.stream;
 
   Stream<void> get onAssistLaunch => _assist.stream;
+
+  @override
+  Stream<String> get onNeuralTtsFailed => _neuralFailed.stream;
 
   Future<dynamic> _onCall(MethodCall call) async {
     final args = call.arguments;
@@ -241,6 +250,8 @@ class VoiceService implements VoiceEngine {
             interrupted: args is Map && args['interrupted'] == true,
           ),
         );
+      case 'tts.neuralFailed':
+        _neuralFailed.add(argString('message'));
       case 'assist.launch':
         _assist.add(null);
     }
@@ -293,6 +304,7 @@ class VoiceService implements VoiceEngine {
     double pitch = 1.0,
     String? voiceName,
     bool flush = true,
+    int? neuralSpeaker,
   }) =>
       _invoke('speak', false, {
         'text': text,
@@ -301,7 +313,20 @@ class VoiceService implements VoiceEngine {
         'pitch': pitch,
         'voice': voiceName,
         'flush': flush,
+        if (neuralSpeaker != null) 'neuralSpeaker': neuralSpeaker,
       });
+
+  @override
+  Future<bool> isNeuralTtsSupported() => _invoke('neuralSupported', false);
+
+  @override
+  Future<bool> loadNeuralTts(String modelDir, {int threads = 0}) =>
+      _invoke('neuralLoad', false, {'modelDir': modelDir, 'threads': threads});
+
+  @override
+  Future<void> unloadNeuralTts() async {
+    await _invoke<bool>('neuralUnload', false);
+  }
 
   @override
   Future<void> stopSpeaking() async {

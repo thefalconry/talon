@@ -5,7 +5,7 @@ description: >
   launches/attaches a local Talon daemon; on mobile it connects to a remote
   bridge over the network.
 publish_to: "none"
-version: 5.29.0 # x-release-please-version
+version: 5.32.1 # x-release-please-version
 
 environment:
   # Uses the Color.withValues / WidgetStateProperty APIs (Flutter 3.27+).
@@ -27,6 +27,12 @@ dependencies:
   # directory can be restricted to the current user on Linux (see
   # PrivateStore).
   path_provider: ^2.1.5
+  # Joins/normalizes paths for on-device model storage (model_manager.dart).
+  path: ^1.9.0
+  # Unpacks downloaded .tar.bz2 model archives (the on-device Kokoro voice)
+  # in pure Dart on a background isolate — no native code, so it adds nothing
+  # to any platform's build toolchain.
+  archive: ^4.0.9
   # Markdown rendering for assistant replies (code blocks, tables, lists).
   flutter_markdown: ^0.7.4
   # AST access for the custom fenced-code-block builder (copy button +

@@ -312,6 +312,8 @@ class Prefs {
   static const _kVoiceRate = 'voice.rate.v1';
   static const _kVoiceName = 'voice.name.v1';
   static const _kVoicePitch = 'voice.pitch.v1';
+  static const _kNeuralVoice = 'voice.neural.enabled.v1';
+  static const _kNeuralVoiceName = 'voice.neural.name.v1';
 
   /// Show live captions in voice mode. Default on.
   bool get voiceCaptions => _sp.getBool(_kVoiceCaptions) ?? true;
@@ -338,6 +340,16 @@ class Prefs {
   Future<void> setVoiceName(String? name) => name == null
       ? _sp.remove(_kVoiceName).then((_) {})
       : _sp.setString(_kVoiceName, name);
+
+  /// Speak voice-mode replies with the on-device neural voice (Kokoro) once
+  /// its model is downloaded. Off by default: it is a ~130 MB download.
+  bool get neuralVoiceEnabled => _sp.getBool(_kNeuralVoice) ?? false;
+  Future<void> setNeuralVoiceEnabled(bool v) => _sp.setBool(_kNeuralVoice, v);
+
+  /// Kokoro speaker name (e.g. `af_heart`), or null for the default.
+  String? get neuralVoiceName => _sp.getString(_kNeuralVoiceName);
+  Future<void> setNeuralVoiceName(String name) =>
+      _sp.setString(_kNeuralVoiceName, name);
 
   // ── Device mesh ──────────────────────────────────────────────────────────
 
