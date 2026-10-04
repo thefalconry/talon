@@ -138,7 +138,7 @@ describe("run_preflight", () => {
   it("refuses a checkout without the lane, and a missing directory", async () => {
     const bare = await run(repo);
     expect(bare.ok).toBe(false);
-    expect(bare.error).toContain("scripts/preflight.sh");
+    expect(bare.error).toContain(join("scripts", "preflight.sh"));
 
     const missing = await run(join(repo, "nope"));
     expect(missing.ok).toBe(false);

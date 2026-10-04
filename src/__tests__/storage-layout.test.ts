@@ -48,6 +48,9 @@ import {
 } from "../core/layout/index.js";
 import { claudeProjectSlug } from "../core/backup/sources/sessions.js";
 
+// POSIX-only: Windows has no signals/mountinfo semantics these tests rely on.
+const isWin = process.platform === "win32";
+
 // Paths under a root that does not exist, so resolveExisting never
 // follows a real directory on the test host.
 const R = "/nonexistent-talon-layout-test";
@@ -133,7 +136,7 @@ describe("persistenceOf", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("follows a symlink onto a volume", () => {
+  it.skipIf(isWin)("follows a symlink onto a volume", () => {
     mkdirSync(join(dir, "vol", ".claude"), { recursive: true });
     mkdirSync(join(dir, "home"));
     symlinkSync(join(dir, "vol", ".claude"), join(dir, "home", ".claude"));
@@ -152,7 +155,7 @@ describe("persistenceOf", () => {
 describe("findEphemeralStores", () => {
   const config = { backend: "claude", enabledBackends: ["codex"] };
 
-  it("is clean when HOME is the single data volume", () => {
+  it.skipIf(isWin)("is clean when HOME is the single data volume", () => {
     const mounts = parseMountInfo(
       mountinfo([ROOT_OVERLAY, [`${R}/data`, "/mnt/tank/talon", "zfs"]]),
     );
@@ -167,50 +170,56 @@ describe("findEphemeralStores", () => {
     ).toEqual([]);
   });
 
-  it("lists every unmapped store of the old layout, and only enabled backends", () => {
-    // Old compose: ~/.talon and ~/.claude mapped, nothing else.
-    const mounts = parseMountInfo(
-      mountinfo([
-        ROOT_OVERLAY,
-        [`${R}/home/bun/.talon`, "/host/.talon", "ext4"],
-        [`${R}/home/bun/.claude`, "/host/.claude", "ext4"],
-      ]),
-    );
-    const findings = findEphemeralStores({
-      talonHome: `${R}/home/bun/.talon`,
-      userHome: `${R}/home/bun`,
-      env: {},
-      config,
-      mounts,
-    });
-    expect(findings.map((f) => f.path)).toEqual([
-      `${R}/home/bun/.codex`,
-      `${R}/home/bun/.claude.json`,
-    ]);
-    expect(findings.every((f) => f.persistence === "ephemeral")).toBe(true);
-  });
+  it.skipIf(isWin)(
+    "lists every unmapped store of the old layout, and only enabled backends",
+    () => {
+      // Old compose: ~/.talon and ~/.claude mapped, nothing else.
+      const mounts = parseMountInfo(
+        mountinfo([
+          ROOT_OVERLAY,
+          [`${R}/home/bun/.talon`, "/host/.talon", "ext4"],
+          [`${R}/home/bun/.claude`, "/host/.claude", "ext4"],
+        ]),
+      );
+      const findings = findEphemeralStores({
+        talonHome: `${R}/home/bun/.talon`,
+        userHome: `${R}/home/bun`,
+        env: {},
+        config,
+        mounts,
+      });
+      expect(findings.map((f) => f.path)).toEqual([
+        `${R}/home/bun/.codex`,
+        `${R}/home/bun/.claude.json`,
+      ]);
+      expect(findings.every((f) => f.persistence === "ephemeral")).toBe(true);
+    },
+  );
 
-  it("flags a Talon-home-only mapping: the NAS custom-app case", () => {
-    const mounts = parseMountInfo(
-      mountinfo([ROOT_OVERLAY, [`${R}/data/.talon`, "/mnt/talon", "zfs"]]),
-    );
-    const findings = findEphemeralStores({
-      talonHome: `${R}/data/.talon`,
-      userHome: `${R}/data`,
-      env: {},
-      config: { backend: "opencode" },
-      mounts,
-    });
-    expect(findings.map((f) => f.path)).toEqual([
-      `${R}/data/.claude`,
-      `${R}/data/.local/share/opencode`,
-      `${R}/data/.claude.json`,
-    ]);
-    const text = describeFindings(findings, { TALON_LAYOUT: "legacy" });
-    expect(text).toContain(`${R}/data/.claude: Claude Code transcripts`);
-    expect(text).toContain("HOME=/data");
-    expect(text).toContain("old /home/bun layout");
-  });
+  it.skipIf(isWin)(
+    "flags a Talon-home-only mapping: the NAS custom-app case",
+    () => {
+      const mounts = parseMountInfo(
+        mountinfo([ROOT_OVERLAY, [`${R}/data/.talon`, "/mnt/talon", "zfs"]]),
+      );
+      const findings = findEphemeralStores({
+        talonHome: `${R}/data/.talon`,
+        userHome: `${R}/data`,
+        env: {},
+        config: { backend: "opencode" },
+        mounts,
+      });
+      expect(findings.map((f) => f.path)).toEqual([
+        `${R}/data/.claude`,
+        `${R}/data/.local/share/opencode`,
+        `${R}/data/.claude.json`,
+      ]);
+      const text = describeFindings(findings, { TALON_LAYOUT: "legacy" });
+      expect(text).toContain(`${R}/data/.claude: Claude Code transcripts`);
+      expect(text).toContain("HOME=/data");
+      expect(text).toContain("old /home/bun layout");
+    },
+  );
 
   it("claims nothing without a mount table", () => {
     expect(
@@ -243,7 +252,7 @@ describe("inContainer / checkContainerStorage", () => {
     expect(inContainer({}, () => false)).toBe(false);
   });
 
-  it("raises one error alert naming each path", () => {
+  it.skipIf(isWin)("raises one error alert naming each path", () => {
     const raise = vi.fn();
     const findings = checkContainerStorage({
       ...base,
@@ -262,23 +271,26 @@ describe("inContainer / checkContainerStorage", () => {
     expect(opts).toEqual({ severity: "error" });
   });
 
-  it("only warns when Claude's account file is all that's at risk", () => {
-    const raise = vi.fn();
-    checkContainerStorage({
-      ...base,
-      mounts: parseMountInfo(
-        mountinfo([
-          ROOT_OVERLAY,
-          [`${R}/home/bun/.talon`, "/h/.talon", "ext4"],
-          [`${R}/home/bun/.claude`, "/h/.claude", "ext4"],
-        ]),
-      ),
-      env: {},
-      container: true,
-      raise,
-    });
-    expect(raise.mock.calls[0][2]).toEqual({ severity: "warn" });
-  });
+  it.skipIf(isWin)(
+    "only warns when Claude's account file is all that's at risk",
+    () => {
+      const raise = vi.fn();
+      checkContainerStorage({
+        ...base,
+        mounts: parseMountInfo(
+          mountinfo([
+            ROOT_OVERLAY,
+            [`${R}/home/bun/.talon`, "/h/.talon", "ext4"],
+            [`${R}/home/bun/.claude`, "/h/.claude", "ext4"],
+          ]),
+        ),
+        env: {},
+        container: true,
+        raise,
+      });
+      expect(raise.mock.calls[0][2]).toEqual({ severity: "warn" });
+    },
+  );
 
   it("does nothing outside a container or when switched off", () => {
     const raise = vi.fn();
