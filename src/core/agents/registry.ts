@@ -654,6 +654,11 @@ export class AgentRegistry {
     return this.mailboxLimit;
   }
 
+  /** Messages waiting in a live agent's mailbox. */
+  inboxDepth(id: string): number {
+    return this.live.get(id)?.mailbox.length ?? 0;
+  }
+
   // ── Reads ─────────────────────────────────────────────────────────────────
 
   /** One agent, live or in the settled ring. */

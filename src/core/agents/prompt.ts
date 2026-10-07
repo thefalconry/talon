@@ -287,3 +287,8 @@ export function buildMessagePrompt(record: AgentRecord, text: string): string {
     `nothing.]\n\n${text}`
   );
 }
+
+/** Short reminder attached to a sub-agent's tool results while unread mail is waiting. */
+export function buildInboxNotice(unreadCount: number): string {
+  return `[inbox: ${unreadCount} unread message(s) — call check_inbox now]`;
+}

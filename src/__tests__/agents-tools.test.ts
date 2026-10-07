@@ -21,6 +21,7 @@ import {
 import {
   agentContextLabel,
   agentRegistry,
+  deliverToAgent,
   initAgentDelivery,
   type AgentParent,
   type AgentRecord,
@@ -418,5 +419,79 @@ describe("peer channel", () => {
     const killed = await asAgent(a.id, "kill_agent", { agent_id: b.id });
     expect(killed.ok).toBe(false);
     expect(agentRegistry.isLive(b.id)).toBe(true);
+  });
+});
+
+describe("inbox unread notice on tool results", () => {
+  it("appears on tool results while the calling agent has unread messages", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "important: check the config first");
+
+    const result = await asAgent(record.id, "list_peers");
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain("No peers");
+    expect(result.text).toContain(
+      "[inbox: 1 unread message(s) — call check_inbox now]",
+    );
+  });
+
+  it("disappears immediately after check_inbox drains the inbox", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "step 1 instructions");
+
+    // Before drain: tool result carries notice
+    const before = await asAgent(record.id, "list_peers");
+    expect(before.text).toContain(
+      "[inbox: 1 unread message(s) — call check_inbox now]",
+    );
+
+    // check_inbox drains the mail and its own result does not carry the notice
+    const drained = await asAgent(record.id, "check_inbox");
+    expect(drained.ok).toBe(true);
+    expect(drained.text).toContain("step 1 instructions");
+    expect(drained.text).not.toContain("[inbox:");
+
+    // Subsequent tool call has no unread messages, so no notice appears
+    const after = await asAgent(record.id, "list_peers");
+    expect(after.text).toContain("No peers");
+    expect(after.text).not.toContain("[inbox:");
+  });
+
+  it("reflects the correct unread message count", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "note 1");
+    deliverToAgent("peer-1", record.id, "note 2");
+    deliverToAgent("peer-2", record.id, "note 3");
+
+    const result = await asAgent(record.id, "list_peers");
+    expect(result.text).toContain(
+      "[inbox: 3 unread message(s) — call check_inbox now]",
+    );
+  });
+
+  it("never appears for chat (non-agent) callers even when agents have unread messages", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "unread mail waiting");
+
+    // Chat caller inspecting agents
+    const listRes = await asChat("list_agents");
+    expect(listRes.text).toContain(record.id);
+    expect(listRes.text).not.toContain("[inbox:");
+
+    const statusRes = await asChat("agent_status", { agent_id: record.id });
+    expect(statusRes.text).toContain(record.id);
+    expect(statusRes.text).not.toContain("[inbox:");
+  });
+
+  it("attaches to error results when an agent call fails with pending inbox messages", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "waiting mail");
+
+    const failRes = await asAgent(record.id, "report_result", { summary: "" });
+    expect(failRes.ok).toBe(false);
+    expect(failRes.error).toContain("Missing summary");
+    expect(failRes.error).toContain(
+      "[inbox: 1 unread message(s) — call check_inbox now]",
+    );
   });
 });
