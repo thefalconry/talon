@@ -22,6 +22,7 @@ import { join } from "node:path";
 import {
   checkpointOnVersionChange,
   readLastBootVersion,
+  recordBootVersion,
   bootVersionMarkerPath,
   UPGRADE_CHECKPOINT_ALERT,
 } from "../core/backup/boot/version-checkpoint.js";
@@ -112,9 +113,28 @@ describe("checkpointOnVersionChange", () => {
         label: "pre-upgrade 5.25.0→5.26.0",
         pinned: true,
         home,
+        // Transcripts would hold the boot for minutes; only state + db go in.
+        settings: expect.objectContaining({ includeSessions: false }),
       }),
     );
     expect(await readLastBootVersion(home)).toBe("5.26.0");
+  });
+
+  it("skips the boot checkpoint once /update has recorded the version", async () => {
+    const home = tempHome();
+    const databaseFile = oldDatabase(home);
+    writeMarker(home, "5.25.0");
+    await recordBootVersion("5.26.0", home);
+    const build = vi.fn();
+    const result = await checkpointOnVersionChange({
+      settings: SETTINGS,
+      version: "5.26.0",
+      home,
+      databaseFile,
+      build,
+    });
+    expect(result).toEqual({ status: "unchanged", version: "5.26.0" });
+    expect(build).not.toHaveBeenCalled();
   });
 
   it("does nothing when the same version boots again", async () => {
