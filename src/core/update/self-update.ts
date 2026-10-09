@@ -315,12 +315,7 @@ export async function runSelfUpdate(
   }
 
   const error = await installAndVerify(record, opts, before, after);
-  // The checkpoint above already covers the new version's first boot;
-  // without this the successor takes a second one while the daemon is down.
-  if (!error && checkpoint?.status === "taken") {
-    const version = readPackageVersion(repoRoot);
-    if (version) await (opts.recordBootVersion ?? recordBootVersion)(version);
-  }
+  if (!error) await markCheckpointedVersion(repoRoot, checkpoint, opts);
   return {
     ok: !error,
     repoRoot,
@@ -331,6 +326,21 @@ export async function runSelfUpdate(
     checkpoint,
     ...(error ? { error } : {}),
   };
+}
+
+/**
+ * The pre-update checkpoint already covers the new version's first boot;
+ * record that version so the successor takes no second checkpoint while
+ * the daemon is down.
+ */
+async function markCheckpointedVersion(
+  repoRoot: string,
+  checkpoint: UpdateCheckpoint | undefined,
+  opts: UpdateOptions,
+): Promise<void> {
+  if (checkpoint?.status !== "taken") return;
+  const version = readPackageVersion(repoRoot);
+  if (version) await (opts.recordBootVersion ?? recordBootVersion)(version);
 }
 
 /** The `version` in the checkout's package.json, or null when unreadable. */
