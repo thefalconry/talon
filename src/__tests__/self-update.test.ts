@@ -273,6 +273,44 @@ describe("runSelfUpdate — the pre-update checkpoint", () => {
     expect(checkpoint).not.toHaveBeenCalled();
   });
 
+  it("marks the new version as checkpointed so its first boot skips another", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "talon-repo-"));
+    try {
+      writeFileSync(join(repoRoot, "package.json"), '{"version":"9.9.9"}');
+      const recordBootVersion = vi.fn(async () => {});
+      const res = await runSelfUpdate({
+        repoRoot,
+        entry: ENTRY,
+        checkpoint: taken,
+        recordBootVersion,
+        runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"] }),
+      });
+      expect(res.ok).toBe(true);
+      expect(recordBootVersion).toHaveBeenCalledWith("9.9.9");
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves the boot checkpoint in place when no checkpoint was taken", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "talon-repo-"));
+    try {
+      writeFileSync(join(repoRoot, "package.json"), '{"version":"9.9.9"}');
+      const recordBootVersion = vi.fn(async () => {});
+      await runSelfUpdate({
+        repoRoot,
+        entry: ENTRY,
+        force: true,
+        checkpoint: async () => ({ status: "failed", error: "disk full" }),
+        recordBootVersion,
+        runner: makeRunner({ headSeq: ["aaa111aaa111", "bbb222bbb222"] }),
+      });
+      expect(recordBootVersion).not.toHaveBeenCalled();
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("refuses by default when this process has no backup subsystem", async () => {
     _resetBackupScheduler();
     const calls: string[][] = [];

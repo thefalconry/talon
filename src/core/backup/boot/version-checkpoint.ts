@@ -89,6 +89,19 @@ export async function readLastBootVersion(
   }
 }
 
+/**
+ * Record `version` as already checkpointed, so its first boot takes no
+ * checkpoint of its own. `/update` calls this once its pre-update
+ * checkpoint is on disk: the successor would otherwise take a second,
+ * redundant one while the daemon is down.
+ */
+export async function recordBootVersion(
+  version: string,
+  home: string = dirs.root,
+): Promise<void> {
+  await writeLastBootVersion(home, version, new Date());
+}
+
 async function writeLastBootVersion(
   home: string,
   version: string,
@@ -166,7 +179,11 @@ export async function checkpointOnVersionChange(
       kind: "checkpoint",
       label: `pre-upgrade ${from}→${to}`,
       pinned: true,
-      settings: options.settings,
+      // The daemon is down until this returns, so only what a migration
+      // can touch goes in: state and the database. Backend transcripts run
+      // to gigabytes and would hold the boot for minutes; the scheduled
+      // backups cover them.
+      settings: { ...options.settings, includeSessions: false },
       ...(options.home === undefined ? {} : { home, userHome: null }),
       // Read-only: the copy is the database exactly as the previous
       // version left it, before this boot opens it and sets up its schema.

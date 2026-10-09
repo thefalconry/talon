@@ -38,9 +38,10 @@
 import { execFile } from "node:child_process";
 import {
   checkpointBeforeUpdate,
+  recordBootVersion,
   type UpdateCheckpoint,
 } from "../backup/index.js";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -76,6 +77,8 @@ export interface UpdateOptions {
   force?: boolean;
   /** Injectable pre-update checkpoint (tests). */
   checkpoint?: (from: string, to: string) => Promise<UpdateCheckpoint>;
+  /** Injectable boot-version marker write (tests). */
+  recordBootVersion?: (version: string) => Promise<void>;
 }
 
 /** One executed step in an update run. */
@@ -312,6 +315,7 @@ export async function runSelfUpdate(
   }
 
   const error = await installAndVerify(record, opts, before, after);
+  if (!error) await markCheckpointedVersion(repoRoot, checkpoint, opts);
   return {
     ok: !error,
     repoRoot,
@@ -322,6 +326,33 @@ export async function runSelfUpdate(
     checkpoint,
     ...(error ? { error } : {}),
   };
+}
+
+/**
+ * The pre-update checkpoint already covers the new version's first boot;
+ * record that version so the successor takes no second checkpoint while
+ * the daemon is down.
+ */
+async function markCheckpointedVersion(
+  repoRoot: string,
+  checkpoint: UpdateCheckpoint | undefined,
+  opts: UpdateOptions,
+): Promise<void> {
+  if (checkpoint?.status !== "taken") return;
+  const version = readPackageVersion(repoRoot);
+  if (version) await (opts.recordBootVersion ?? recordBootVersion)(version);
+}
+
+/** The `version` in the checkout's package.json, or null when unreadable. */
+function readPackageVersion(repoRoot: string): string | null {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(join(repoRoot, "package.json"), "utf8"),
+    ) as { version?: unknown };
+    return typeof pkg.version === "string" && pkg.version ? pkg.version : null;
+  } catch {
+    return null;
+  }
 }
 
 type Recorder = (
