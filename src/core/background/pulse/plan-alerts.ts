@@ -14,6 +14,7 @@
 import { getPooledBackend } from "../../engine/backend-controller/index.js";
 import { log, logWarn } from "../../../util/log.js";
 import { formatSmartTimestamp } from "../../../util/time.js";
+import { listClaudeAccounts } from "../../config/claude-accounts.js";
 
 const CHECK_INTERVAL_MS = 5 * 60_000;
 
@@ -78,25 +79,41 @@ export async function checkPlanAlerts(): Promise<void> {
   const d = deps;
   if (!d?.enabled || !d.chatId) return;
 
-  const usage = await getPooledBackend("claude")
-    ?.usage?.getPlanUsage?.()
-    .catch(() => undefined);
-  if (!usage) return;
+  // The default Claude account, then each extra one (only those running —
+  // an alert never boots a backend). Each account's windows are its own.
+  const ids = ["claude", ...listClaudeAccounts().map((a) => a.id)];
+  for (const id of ids) {
+    const usage = await getPooledBackend(id)
+      ?.usage?.getPlanUsage?.()
+      .catch(() => undefined);
+    if (usage) await alertWindows(d, id, usage.windows);
+  }
+}
 
-  for (const window of usage.windows) {
+async function alertWindows(
+  d: PlanAlertDeps,
+  backendId: string,
+  windows: readonly { label: string; percent: number; resetsAt?: string }[],
+): Promise<void> {
+  for (const window of windows) {
+    // The default account keeps its historical keys and wording.
+    const key =
+      backendId === "claude" ? window.label : `${backendId}:${window.label}`;
+    const label =
+      backendId === "claude" ? window.label : `${backendId} ${window.label}`;
     // An unwarned window that is back under the threshold re-arms.
     if (window.percent < d.threshold) {
-      warned.delete(window.label);
+      warned.delete(key);
       continue;
     }
     const cycle = window.resetsAt ?? "";
-    if (warned.get(window.label) === cycle) continue;
-    warned.set(window.label, cycle);
+    if (warned.get(key) === cycle) continue;
+    warned.set(key, cycle);
 
-    const text = warningText(window.label, window.percent, window.resetsAt);
+    const text = warningText(label, window.percent, window.resetsAt);
     try {
       await d.sendMessage(Number(d.chatId), text, d.chatId);
-      log("bot", `Plan alert sent: ${window.label} at ${window.percent}%`);
+      log("bot", `Plan alert sent: ${label} at ${window.percent}%`);
     } catch (err) {
       // Keep it marked as warned — a frontend that can't deliver now won't
       // deliver on the next tick either, and retrying would spam on recovery.

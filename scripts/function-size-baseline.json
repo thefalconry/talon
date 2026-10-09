@@ -2,7 +2,7 @@
   {
     "file": "src/backend/claude-sdk/handler.ts",
     "name": "runChatTurn",
-    "lines": 163,
+    "lines": 156,
     "cx": 12
   },
   {
@@ -50,7 +50,7 @@
   {
     "file": "src/bootstrap.ts",
     "name": "initBackendAndDispatcher",
-    "lines": 283,
+    "lines": 282,
     "cx": 13
   },
   {
@@ -98,8 +98,8 @@
   {
     "file": "src/frontend/telegram/commands/info.ts",
     "name": "registerInfoCommands",
-    "lines": 182,
-    "cx": 16
+    "lines": 161,
+    "cx": 13
   },
   {
     "file": "src/frontend/telegram/middleware.ts",

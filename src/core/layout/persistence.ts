@@ -13,6 +13,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { backendStoreDirs } from "../backup/sources/sessions.js";
+import { isClaudeAccountId } from "../config/claude-accounts.js";
 import { persistenceOf, type MountEntry, type Persistence } from "./mounts.js";
 
 export type StorageFinding = {
@@ -64,7 +65,11 @@ function storagePaths(input: {
   )) {
     paths.push({
       path: store.path,
-      label: LABELS[store.backend] ?? `${store.backend} sessions`,
+      label:
+        LABELS[store.backend] ??
+        (isClaudeAccountId(store.backend)
+          ? `Claude account "${store.backend}" sign-in`
+          : `${store.backend} sessions`),
     });
   }
   // Claude Code keeps its account/onboarding state next to ~/.claude,

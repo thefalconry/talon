@@ -10,6 +10,10 @@ import { existsSync, readFileSync, mkdirSync } from "node:fs";
 import writeFileAtomic from "write-file-atomic";
 import { dirs } from "../util/paths.js";
 import { CONFIG_FILE } from "./context.js";
+import type {
+  ClaudeAccountConfig,
+  ClaudeAccountId,
+} from "../core/config/claude-accounts.js";
 
 export function printBanner(): void {
   console.log();
@@ -28,7 +32,16 @@ export function printBanner(): void {
 export type Config = {
   frontend: string | string[];
   /** Active backend (`claude` / `kilo` / `opencode` / `codex` / `agy` / `openai-agents`). */
-  backend?: "claude" | "kilo" | "opencode" | "codex" | "agy" | "openai-agents";
+  backend?:
+    | "claude"
+    | "kilo"
+    | "opencode"
+    | "codex"
+    | "agy"
+    | "openai-agents"
+    | ClaudeAccountId;
+  /** Extra Claude accounts, one backend each (docs/claude-accounts.md). */
+  claudeAccounts?: ClaudeAccountConfig[];
   botToken?: string;
   claudeBinary?: string;
   /** Path to the Antigravity `agy` executable. */

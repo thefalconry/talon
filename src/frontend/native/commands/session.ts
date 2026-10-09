@@ -20,6 +20,7 @@ import {
   setChatPulseInterval,
 } from "../../../storage/chat-settings.js";
 import { resetChatBackend } from "../../presentation/model-commands.js";
+import { getBackendIdForChat } from "../../../core/engine/backend-controller/index.js";
 import { formatDuration, parseInterval } from "../../presentation/format.js";
 import {
   effortCommandReply,
@@ -47,8 +48,12 @@ async function model(ctx: NativeCommandContext): Promise<void> {
         : `Could not switch to ${target.label}: ${result.error ?? "rebind failed"}`;
     },
     resetBackend: async () => {
+      const from = getBackendIdForChat(entry.id);
       const outcome = await resetChatBackend(entry.id, deps);
-      handOffChatBackend(runtime, entry.id);
+      handOffChatBackend(runtime, entry.id, {
+        from,
+        to: getBackendIdForChat(entry.id),
+      });
       broadcastStatus(runtime);
       return outcome.text;
     },

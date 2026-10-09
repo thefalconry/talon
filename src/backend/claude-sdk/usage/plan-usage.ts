@@ -10,6 +10,11 @@
  * Everything degrades to `undefined`: no credentials, an API-key session
  * (plan limits don't apply), or any transport failure. /status hides the
  * section rather than rendering zeroes.
+ *
+ * Per account: every function takes the account's Claude config dir
+ * (absent = the default account, `$CLAUDE_CONFIG_DIR` or `~/.claude`), reads
+ * that account's credentials and keeps that account's cache, so two
+ * subscriptions never report each other's windows.
  */
 
 import { readFile } from "node:fs/promises";
@@ -19,7 +24,7 @@ import type {
   PlanUsage,
   PlanWindow,
 } from "../../../core/agent-runtime/capabilities.js";
-import { userHome } from "../../../util/fs-path.js";
+import { defaultClaudeConfigDir } from "../../../core/config/claude-accounts.js";
 
 // `cedar_ember=1` asks the endpoint to include banked limit resets (the
 // claude.ai "Reset for free" grants); `skip_spend=1` drops the spend block we
@@ -32,15 +37,17 @@ export const CLI_USER_AGENT = "claude-cli/2.1.280 (external, cli)";
 const REQUEST_TIMEOUT_MS = 5_000;
 const CACHE_TTL_MS = 60_000;
 
-let cache: { value: PlanUsage; fetchedAt: number } | undefined;
-let inFlight: Promise<PlanUsage | undefined> | undefined;
+/** Config dir → last good reading. */
+const cache = new Map<string, { value: PlanUsage; fetchedAt: number }>();
+const inFlight = new Map<string, Promise<PlanUsage | undefined>>();
 
-function credentialsPath(): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join(
-    configDir && configDir.length > 0 ? configDir : join(userHome(), ".claude"),
-    ".credentials.json",
-  );
+/** The account's config dir; the default account's when absent. */
+function accountDir(configDir?: string): string {
+  return configDir ?? defaultClaudeConfigDir();
+}
+
+function credentialsPath(configDir?: string): string {
+  return join(accountDir(configDir), ".credentials.json");
 }
 
 interface OAuthCredentials {
@@ -48,9 +55,12 @@ interface OAuthCredentials {
   subscriptionType?: string;
 }
 
-export async function readCredentials(): Promise<OAuthCredentials | undefined> {
+export async function readCredentials(
+  configDir?: string,
+): Promise<OAuthCredentials | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(credentialsPath(), "utf8")) as {
+    const path = credentialsPath(configDir);
+    const parsed = JSON.parse(await readFile(path, "utf8")) as {
       claudeAiOauth?: OAuthCredentials;
     };
     const oauth = parsed.claudeAiOauth;
@@ -166,8 +176,8 @@ export function parsePlanUsage(
   };
 }
 
-async function load(): Promise<PlanUsage | undefined> {
-  const creds = await readCredentials();
+async function load(configDir?: string): Promise<PlanUsage | undefined> {
+  const creds = await readCredentials(configDir);
   if (!creds?.accessToken) return undefined;
 
   try {
@@ -198,25 +208,39 @@ async function load(): Promise<PlanUsage | undefined> {
  * makes one request. A failed refresh falls back to the last known values
  * — `fetchedAt` lets the caller age them.
  */
-export async function getPlanUsage(): Promise<PlanUsage | undefined> {
+export async function getPlanUsage(
+  configDir?: string,
+): Promise<PlanUsage | undefined> {
   // An API-key session bills against the key, not the subscription, so the
   // stored OAuth credentials would describe limits that don't apply here.
   if (process.env.ANTHROPIC_API_KEY) return undefined;
 
-  if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) return cache.value;
+  const key = accountDir(configDir);
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS)
+    return cached.value;
 
-  inFlight ??= load().finally(() => {
-    inFlight = undefined;
-  });
-  const loaded = await inFlight;
-  if (loaded) cache = { value: loaded, fetchedAt: loaded.fetchedAt };
-  return loaded ?? cache?.value;
+  let pending = inFlight.get(key);
+  if (!pending) {
+    pending = load(configDir).finally(() => inFlight.delete(key));
+    inFlight.set(key, pending);
+  }
+  const loaded = await pending;
+  if (loaded) cache.set(key, { value: loaded, fetchedAt: loaded.fetchedAt });
+  return loaded ?? cache.get(key)?.value;
 }
 
 /**
- * Expire the cache after the SDK reports a rate-limit change, so the next
- * /status re-reads instead of showing figures from before the turn.
+ * Expire an account's cache after the SDK reports a rate-limit change, so
+ * the next /status re-reads instead of showing figures from before the turn.
  */
-export function invalidatePlanUsage(): void {
-  if (cache) cache.fetchedAt = 0;
+export function invalidatePlanUsage(configDir?: string): void {
+  const cached = cache.get(accountDir(configDir));
+  if (cached) cached.fetchedAt = 0;
+}
+
+/** Test-only: forget every account's cached reading. */
+export function resetPlanUsageCacheForTest(): void {
+  cache.clear();
+  inFlight.clear();
 }
