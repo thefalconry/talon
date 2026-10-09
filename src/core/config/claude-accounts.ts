@@ -30,6 +30,9 @@ import { userHome } from "../../util/fs-path.js";
 const CLAUDE_ACCOUNT_ID_PATTERN =
   /^claude-[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/;
 
+/** How many extra accounts `claudeAccounts` may list. */
+export const MAX_CLAUDE_ACCOUNTS = 16;
+
 /** A configured extra Claude account's backend id. */
 export type ClaudeAccountId = `claude-${string}`;
 

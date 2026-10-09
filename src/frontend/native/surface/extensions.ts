@@ -30,9 +30,9 @@ import {
   rebuildSystemPrompt,
   type TalonConfig,
 } from "../../../core/config/index.js";
+import { persistConfigPatch } from "../../../core/config/persist.js";
 import { log } from "../../../util/log.js";
 import type { PluginItem, SkillItem, ToggleResult } from "../protocol.js";
-import { persistConfigPatch } from "./settings.js";
 
 export function pluginItems(config: TalonConfig): PluginItem[] {
   return listPluginItems(config);

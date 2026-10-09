@@ -222,6 +222,20 @@ describe("account backends", () => {
     expect(registry.isRoutingAlternate("claude-2", "claude")).toBe(false);
     expect(registry.isRoutingAlternate("claude-2", "codex")).toBe(false);
     expect(registry.isRoutingAlternate("claude", "codex")).toBe(true);
+
+    // The driver installs the seam core uses to add an account live.
+    expect(
+      registry.makeClaudeAccountFactory({
+        id: "claude-live",
+        label: "Claude (live)",
+        configDir: join(root, "acct-live"),
+      }),
+    ).toMatchObject({
+      id: "claude-live",
+      accountGroup: "claude",
+      sessionStore: "claude",
+      explicitOnly: true,
+    });
   });
 
   it("runs background work with the account's config dir and links its projects", async () => {

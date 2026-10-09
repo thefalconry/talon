@@ -41,6 +41,7 @@ import { runHistoryCommand } from "./commands/history.js";
 import { mainMenu } from "./menu.js";
 import { runBackupCommand } from "./commands/backup.js";
 import { runMeshCommand } from "./commands/mesh.js";
+import { runAccountsCommand } from "./commands/accounts.js";
 
 export * from "./context.js";
 export * from "./config.js";
@@ -66,6 +67,7 @@ const CLI_COMMANDS = [
   "history",
   "backup",
   "mesh",
+  "accounts",
 ];
 
 /** `talon events [-f] [--history [N]]` → the tail options. */
@@ -119,6 +121,9 @@ function printHelp(): void {
   );
   console.log(
     `    ${pc.cyan("mesh")}       Device credentials + command audit (list/revoke/rotate/scopes/audit)`,
+  );
+  console.log(
+    `    ${pc.cyan("accounts")}   Claude accounts (list/add/remove/login)`,
   );
   console.log(`    ${pc.cyan("config")}     View/edit configuration`);
   console.log(
@@ -182,6 +187,7 @@ const COMMANDS: Record<string, CommandHandler> = {
   events: (args) => showEvents(eventsOptions(args)),
   backup: (args) => runBackupCommand(args),
   mesh: (args) => runMeshCommand(args),
+  accounts: (args) => runAccountsCommand(args),
   plugin: (args) => runPluginCommand(args),
   skill: (args) => runSkillCommand(args),
   memory: (args) => runMemoryCommand(args),

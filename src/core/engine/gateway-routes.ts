@@ -16,6 +16,11 @@ import {
   credentialOverview,
   type CredentialAdminContext,
 } from "../mesh/credentials/index.js";
+import {
+  addClaudeAccount,
+  listClaudeAccountsWithStatus,
+  removeClaudeAccount,
+} from "../auth/claude-accounts-admin.js";
 import { log, logError } from "../../util/log.js";
 import { checkGatewayTransport, hasValidGatewayToken } from "./gateway-auth.js";
 
@@ -71,6 +76,26 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+}
+
+/** The JSON object body, or null after answering 400. */
+async function readObjectBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await readJsonBody(req);
+    if (body && typeof body === "object" && !Array.isArray(body))
+      return body as Record<string, unknown>;
+  } catch {
+    // Answered below.
+  }
+  sendJson(res, 400, { ok: false, error: "Invalid JSON" });
+  return null;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 const ROUTES: readonly GatewayRoute[] = [
@@ -218,6 +243,52 @@ const ROUTES: readonly GatewayRoute[] = [
         ...(device ? { device } : {}),
       });
       sendJson(res, 200, { ok: true, entries });
+    },
+  },
+  {
+    // Claude accounts — the transport for `talon accounts`, so an add or
+    // remove applies to the running daemon without a restart.
+    method: "GET",
+    path: "/claude-accounts",
+    handle: async ({ res }) =>
+      sendJson(res, 200, {
+        ok: true,
+        accounts: await listClaudeAccountsWithStatus(),
+      }),
+  },
+  {
+    method: "POST",
+    path: "/claude-accounts/add",
+    handle: async ({ req, res }) => {
+      const body = await readObjectBody(req, res);
+      if (!body) return;
+      sendJson(
+        res,
+        200,
+        await addClaudeAccount({
+          name: optionalString(body.name),
+          label: optionalString(body.label),
+        }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/claude-accounts/remove",
+    handle: async ({ req, res }) => {
+      const body = await readObjectBody(req, res);
+      if (!body) return;
+      if (typeof body.id !== "string") {
+        sendJson(res, 400, { ok: false, error: "id must be a string" });
+        return;
+      }
+      sendJson(
+        res,
+        200,
+        await removeClaudeAccount(body.id, {
+          deleteCredentials: body.deleteCredentials !== false,
+        }),
+      );
     },
   },
   {

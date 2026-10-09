@@ -29,7 +29,7 @@ vi.mock("../storage/skills.js", () => ({
   setSkillEnabled: vi.fn(),
 }));
 vi.mock("../core/config/index.js", () => ({ rebuildSystemPrompt: vi.fn() }));
-vi.mock("../frontend/native/surface/settings.js", () => ({
+vi.mock("../core/config/persist.js", () => ({
   persistConfigPatch: vi.fn(),
 }));
 
@@ -40,8 +40,7 @@ const { performPluginReload } =
 const { setPluginEnabled } = await import("../core/plugin/manage.js");
 const { setSkillEnabled } = await import("../storage/skills.js");
 const { rebuildSystemPrompt } = await import("../core/config/index.js");
-const { persistConfigPatch } =
-  await import("../frontend/native/surface/settings.js");
+const { persistConfigPatch } = await import("../core/config/persist.js");
 const { notifyPromptInputsChanged } =
   await import("../core/prompt/invalidation.js");
 import type { TalonConfig } from "../core/config/index.js";

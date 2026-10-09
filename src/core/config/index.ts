@@ -9,6 +9,7 @@ import {
   claudeAccountConfigIssues,
   claudeAccountSchema,
   isClaudeAccountId,
+  MAX_CLAUDE_ACCOUNTS,
   resolveClaudeAccounts,
   setClaudeAccounts,
 } from "./claude-accounts.js";
@@ -512,7 +513,10 @@ const configSchema = z.object({
    *       "configDir": "~/.talon/accounts/claude-2" }
    *   ]
    */
-  claudeAccounts: z.array(claudeAccountSchema).max(16).optional(),
+  claudeAccounts: z
+    .array(claudeAccountSchema)
+    .max(MAX_CLAUDE_ACCOUNTS)
+    .optional(),
   claudeBinary: z.string().optional(),
   /**
    * Override the path to the `codex` executable the Codex backend spawns
