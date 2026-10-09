@@ -117,6 +117,15 @@ export type BuildOptions = {
   userHome?: string | null;
   /** Environment for store discovery (CODEX_HOME, …); same default rule. */
   env?: Readonly<Record<string, string | undefined>>;
+  /**
+   * The OS user's home to record as this snapshot's origin when `userHome`
+   * is not in play. Recording where a snapshot came from is independent of
+   * archiving anything outside the Talon home: the daemon's scheduler
+   * passes `home` explicitly (so it discovers no outside stores) but its
+   * snapshots still carry absolute plugin paths, and a clone can only
+   * relocate those if it knows the home they were recorded under.
+   */
+  originUserHome?: string;
 };
 
 // ── Archive writing ─────────────────────────────────────────────────────────
@@ -775,7 +784,14 @@ export async function buildSnapshot(options: BuildOptions): Promise<Manifest> {
       excludes: [...EXCLUDE_RULES],
       ...(state.extras.length > 0 ? { extras: state.extras } : {}),
       ...(external.length > 0 ? { external } : {}),
-      ...(ctx.userHome ? { origin: { userHome: ctx.userHome, home } } : {}),
+      ...(ctx.userHome || options.originUserHome
+        ? {
+            origin: {
+              userHome: (ctx.userHome || options.originUserHome) as string,
+              home,
+            },
+          }
+        : {}),
       ...(palaceHash ? { palaceHash } : {}),
       sizeBytes: parts.reduce((sum, part) => sum + part.bytes, 0),
       remote: {},

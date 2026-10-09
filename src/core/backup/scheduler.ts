@@ -30,6 +30,7 @@ import { raiseAlert, resolveAlert } from "../frontend-runtime/alerts.js";
 import { faultText } from "../engine/fault-text.js";
 import { bus } from "../bus/index.js";
 import { log, logError } from "../../util/log.js";
+import { userHome } from "../../util/fs-path.js";
 import { dirs } from "../../util/paths.js";
 import { passphraseProblem } from "./passphrase.js";
 import { buildSnapshot } from "./snapshot.js";
@@ -155,6 +156,10 @@ async function executeRun(request: RunRequest): Promise<Manifest> {
       pinned: request.pinned,
       settings,
       home: state.home,
+      // `home` is always set here, which tells the builder not to look
+      // outside it — but the manifest must still say which machine it
+      // came from, or `restore --clone` cannot relocate its plugin paths.
+      originUserHome: userHome(),
     });
     state.lastRunAt = Date.now();
     state.lastSnapshotId = manifest.id;
