@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.33.3](https://github.com/thefalconry/talon/compare/v5.33.2...v5.33.3) (2026-10-09)
+
+
+### Bug Fixes
+
+* **update:** don't take a second blocking checkpoint after /update ([#1258](https://github.com/thefalconry/talon/issues/1258)) ([b548dea](https://github.com/thefalconry/talon/commit/b548dea8d930600ff49d0f24d6776f87a3d4048f))
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 7 updates ([#1259](https://github.com/thefalconry/talon/issues/1259)) ([ab28401](https://github.com/thefalconry/talon/commit/ab2840114cf0f7e7d2d57f380b7551306cf95f45))
+
 ## [5.33.2](https://github.com/thefalconry/talon/compare/v5.33.1...v5.33.2) (2026-10-09)
 
 
