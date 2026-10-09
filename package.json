@@ -160,6 +160,9 @@
   },
   "overrides": {
     "@anthropic-ai/sdk": "^0.104.1",
+    "@brave/brave-search-mcp-server": {
+      "@modelcontextprotocol/sdk": "^1.32.1"
+    },
     "ip-address": "^10.1.1",
     "fast-uri": "^3.1.2",
     "link-preview-js": "^5.0.0"
