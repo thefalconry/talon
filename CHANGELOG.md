@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.33.2](https://github.com/thefalconry/talon/compare/v5.33.1...v5.33.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **agents:** nudge sub-agents on tool results when inbox has unread messages ([#1255](https://github.com/thefalconry/talon/issues/1255)) ([be19d43](https://github.com/thefalconry/talon/commit/be19d43f05a76f79917072ad6382a9c1b0b77dd4))
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump the production-dependencies group across 1 directory with 7 updates ([#1260](https://github.com/thefalconry/talon/issues/1260)) ([477a1c6](https://github.com/thefalconry/talon/commit/477a1c6756613877d30976d00fe8811df43b4619))
+
 ## [5.33.1](https://github.com/thefalconry/talon/compare/v5.33.0...v5.33.1) (2026-10-04)
 
 
