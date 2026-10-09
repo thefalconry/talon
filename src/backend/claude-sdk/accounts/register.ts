@@ -17,7 +17,10 @@ import {
   type ClaudeAccountConfig,
 } from "../../../core/config/claude-accounts.js";
 import { logWarn } from "../../../util/log.js";
-import { CLAUDE_ACCOUNT_GROUP, createClaudeSdkFactory } from "../factory.js";
+import {
+  CLAUDE_ACCOUNT_GROUP,
+  createClaudeAccountFactory,
+} from "../factory.js";
 
 /** Returns the ids registered (or already registered) as Claude accounts. */
 export function registerClaudeAccountBackends(config?: {
@@ -37,13 +40,7 @@ export function registerClaudeAccountBackends(config?: {
         );
       continue;
     }
-    registerBackend(
-      createClaudeSdkFactory({
-        backendId: account.id,
-        label: account.label,
-        configDir: account.configDir,
-      }),
-    );
+    registerBackend(createClaudeAccountFactory(account));
     ids.push(account.id);
   }
   return ids;

@@ -1,12 +1,14 @@
 /**
- * /auth — backend login panel (admin only). Also captures the code an
- * admin replies with during a Claude sign-in, before the message reaches
- * the agent.
+ * /auth — backend login panel (admin only). `/auth add [name]` adds a
+ * Claude account (`claude-<name>`, else the next `claude-N`) and starts
+ * its sign-in. Also captures the code an admin replies with during a
+ * Claude sign-in, before the message reaches the agent.
  */
 
 import type { Bot } from "grammy";
 import type { LoginBinaries } from "../../../core/auth/login-flow.js";
 import {
+  addAccountAndSignIn,
   currentAuthPanel,
   pendingCodePrompt,
   submitPendingCode,
@@ -22,13 +24,25 @@ export function loginBinariesFrom(
   };
 }
 
-export function registerAuthCommand(bot: Bot): void {
+export function registerAuthCommand(bot: Bot, { config }: RegisterDeps): void {
   bot.command("auth", async (ctx) => {
     if (!isAuthorizedAdmin(ctx)) {
       await ctx.reply("Not authorized.");
       return;
     }
-    const panel = await currentAuthPanel();
+    const add = /^add(?:\s+(.+))?$/i.exec(ctx.match.trim());
+    if (add) {
+      const sent = await ctx.reply("➕ Adding a Claude account…");
+      await addAccountAndSignIn(
+        ctx,
+        ctx.chat.id,
+        sent.message_id,
+        { name: add[1]?.trim() },
+        loginBinariesFrom(config),
+      );
+      return;
+    }
+    const panel = await currentAuthPanel(ctx.chat.id);
     await ctx.reply(panel.text, {
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: panel.keyboard },

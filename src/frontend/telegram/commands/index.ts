@@ -45,7 +45,7 @@ export function registerCommands(
   registerSessionCommands(bot, deps);
   registerSettingsCommands(bot, deps);
   registerWhatsAppPairingCommand(bot);
-  registerAuthCommand(bot);
+  registerAuthCommand(bot, deps);
   registerBackupCommand(bot);
   registerSecretCommand(bot);
   // admin LAST: it owns the unknown-command catch-all, which must only

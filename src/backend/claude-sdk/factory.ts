@@ -15,12 +15,18 @@
  * share this driver and differ only in the account their spawns run as.
  */
 
-import { registerBackend } from "../../core/agent-runtime/backend-registry.js";
+import {
+  registerBackend,
+  setClaudeAccountFactoryMaker,
+} from "../../core/agent-runtime/backend-registry.js";
 import type { BackendFactory } from "../../core/agent-runtime/backend-registry.js";
 import type { BackendId } from "../../core/agent-runtime/model-ref.js";
 import { log } from "../../util/log.js";
 import { ensureSharedProjects } from "../../core/auth/claude-projects.js";
-import { defaultClaudeConfigDir } from "../../core/config/claude-accounts.js";
+import {
+  defaultClaudeConfigDir,
+  type ClaudeAccount,
+} from "../../core/config/claude-accounts.js";
 import {
   composeBackend,
   type ChatBackend,
@@ -79,6 +85,17 @@ export function createClaudeSdkFactory(
         ],
     init: (config, ctx) => initClaudeBackend(account, config, ctx),
   };
+}
+
+/** The backend for one `claudeAccounts` entry. */
+export function createClaudeAccountFactory(
+  account: ClaudeAccount,
+): BackendFactory {
+  return createClaudeSdkFactory({
+    backendId: account.id,
+    label: account.label,
+    configDir: account.configDir,
+  });
 }
 
 async function initClaudeBackend(
@@ -189,3 +206,6 @@ async function initClaudeBackend(
 // talon.json files predating the registry. Matching the id here means no
 // migration is needed.
 registerBackend(createClaudeSdkFactory());
+// Accounts added at runtime (/auth, `talon accounts add`) register through
+// core, which can't import this driver.
+setClaudeAccountFactoryMaker(createClaudeAccountFactory);

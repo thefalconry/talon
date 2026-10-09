@@ -32,6 +32,7 @@
 import type { Backend } from "./capabilities.js";
 import type { DoctorCheck, DoctorConfigSlice } from "../doctor/types.js";
 import type { TalonConfig } from "../config/index.js";
+import type { ClaudeAccount } from "../config/claude-accounts.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -160,6 +161,15 @@ export function listBackends(): BackendFactory[] {
 }
 
 /**
+ * Remove a backend from the registry — a Claude account deleted at
+ * runtime. Whatever the pool still holds of it is the caller's to
+ * release. Returns whether the id was registered.
+ */
+export function unregisterBackend(id: string): boolean {
+  return backends.delete(id);
+}
+
+/**
  * Clear the registry. Test-only utility — production code should never
  * call this.
  */
@@ -211,4 +221,31 @@ export function sharesSessionStore(a: string, b: string): boolean {
 /** Whether a backend with this id is currently registered. */
 export function hasBackend(id: string): boolean {
   return backends.has(id);
+}
+
+// ── Claude account factory seam ─────────────────────────────────────────────
+
+/**
+ * Builds the backend for one `claudeAccounts` entry. Core adds accounts at
+ * runtime (core/auth/claude-accounts-admin.ts) but may not import the
+ * Claude SDK driver that implements them, so the driver installs its
+ * maker here when its factory module loads. Unset (a CLI process that
+ * never loaded the driver) means an added account is only registered at
+ * the next start.
+ */
+type ClaudeAccountFactoryMaker = (account: ClaudeAccount) => BackendFactory;
+
+let claudeAccountFactoryMaker: ClaudeAccountFactoryMaker | undefined;
+
+export function setClaudeAccountFactoryMaker(
+  make: ClaudeAccountFactoryMaker | undefined,
+): void {
+  claudeAccountFactoryMaker = make;
+}
+
+/** The backend for an account, or undefined when no driver is loaded. */
+export function makeClaudeAccountFactory(
+  account: ClaudeAccount,
+): BackendFactory | undefined {
+  return claudeAccountFactoryMaker?.(account);
 }
