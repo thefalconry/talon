@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.35.1](https://github.com/thefalconry/talon/compare/v5.35.0...v5.35.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **backup:** record snapshot origin from the scheduler; refuse an origin-less clone up front ([#1271](https://github.com/thefalconry/talon/issues/1271)) ([f16ce72](https://github.com/thefalconry/talon/commit/f16ce72263784a9958a13dd1f125faf87fb0ecb9))
+
 ## [5.35.0](https://github.com/thefalconry/talon/compare/v5.34.0...v5.35.0) (2026-10-09)
 
 
