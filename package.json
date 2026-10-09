@@ -112,7 +112,7 @@
     "@kilocode/sdk": "^7.2.22",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/agents": "^0.18.0",
-    "@openai/codex-sdk": "^0.157.1",
+    "@openai/codex-sdk": "^0.159.3",
     "@opencode-ai/sdk": "^1.17.4",
     "@playwright/mcp": "0.0.56",
     "@types/cross-spawn": "^6.0.6",
@@ -160,6 +160,9 @@
   },
   "overrides": {
     "@anthropic-ai/sdk": "^0.104.1",
+    "@brave/brave-search-mcp-server": {
+      "@modelcontextprotocol/sdk": "^1.32.1"
+    },
     "ip-address": "^10.1.1",
     "fast-uri": "^3.1.2",
     "link-preview-js": "^5.0.0"
