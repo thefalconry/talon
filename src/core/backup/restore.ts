@@ -71,7 +71,12 @@ import {
   snapshotDir,
 } from "./store.js";
 import type { BackupTarget } from "./targets.js";
-import type { BackupSettings, Manifest, SnapshotPart } from "./types.js";
+import type {
+  BackupSettings,
+  Manifest,
+  SnapshotOrigin,
+  SnapshotPart,
+} from "./types.js";
 import { userHome } from "../../util/fs-path.js";
 
 /** A staged request older than this is stale and ignored. */
@@ -524,6 +529,13 @@ export type RestoreOptions = {
   clone?: boolean;
   /** This machine's user home; defaults to `os.homedir()`. */
   userHome?: string;
+  /**
+   * The user home the snapshot was taken under, for a clone of a manifest
+   * that carries no `origin` (scheduler snapshots before the origin record
+   * was decoupled from outside-store discovery). The Talon home is taken
+   * to be `<originUserHome>/.talon`.
+   */
+  originUserHome?: string;
   /** Environment for locating stores (CLAUDE_CONFIG_DIR, …). */
   env?: Readonly<Record<string, string | undefined>>;
 };
@@ -536,8 +548,20 @@ function externalDestinations(
   manifest: Manifest,
   clone: boolean,
   target: CloneTarget,
+  origin: SnapshotOrigin | undefined,
 ): ExternalDestination[] {
-  const origin = manifest.origin;
+  if (clone && !origin && (manifest.external ?? []).length > 0) {
+    // Without an origin the roots would be written back to the paths of
+    // the machine they came from — on another OS that fails halfway
+    // through the apply, after the Talon home has already been replaced.
+    throw new TalonError(
+      `Snapshot ${manifest.id} does not record the home it was taken under, so ` +
+        `--clone cannot relocate its ${(manifest.external ?? []).length} outside root(s). ` +
+        `Re-run with --origin-user-home <the user's home on the source machine>, ` +
+        `e.g. --origin-user-home /home/alice.`,
+      { reason: "bad_request" },
+    );
+  }
   const foreign =
     origin !== undefined &&
     (origin.userHome !== target.userHome || origin.home !== target.home);
@@ -587,10 +611,19 @@ export async function restoreSnapshot(
   });
   // Decided before anything is fetched or replaced: a refused clone must
   // leave this machine exactly as it was.
+  const origin: SnapshotOrigin | undefined =
+    manifest.origin ??
+    (options.clone && options.originUserHome
+      ? {
+          userHome: options.originUserHome,
+          home: join(options.originUserHome, ".talon"),
+        }
+      : undefined);
   const external = externalDestinations(
     manifest,
     options.clone ?? false,
     cloneTarget,
+    origin,
   );
   const parts = await ensureParts(manifest, home, missing, options.target);
   await verifyParts(manifest, home, options.settings, parts);
@@ -621,11 +654,8 @@ export async function restoreSnapshot(
     passphraseFilePath(options.settings),
   );
   report.checkpointId = checkpointId;
-  if (options.clone && manifest.origin) {
-    report.configRewritten = await rewriteConfigForClone(
-      manifest.origin,
-      cloneTarget,
-    );
+  if (options.clone && origin) {
+    report.configRewritten = await rewriteConfigForClone(origin, cloneTarget);
   }
   await rm(staging, { recursive: true, force: true });
   log(

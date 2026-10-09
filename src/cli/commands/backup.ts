@@ -64,6 +64,7 @@ const USAGE = `
     ${pc.cyan("restore")} <id> [--from <target>] [--yes] [--allow-unauthenticated]
                                        restore (daemon must be stopped)
           [--clone]                            …onto a new machine: relocate sessions + plugin paths
+          [--origin-user-home <path>]          …for a --clone of a snapshot with no recorded origin
     ${pc.cyan("prune")}                                apply the local retention policy
     ${pc.cyan("targets")}                              remote targets and their readiness
     ${pc.cyan("status")}                               schedule, sizes, targets
@@ -342,12 +343,14 @@ async function backupRestore(id: string, flags: Flags): Promise<void> {
     return;
   }
   const clone = flags.flags.get("clone") === true;
+  const originUserHome = flags.flags.get("origin-user-home");
   const report = await restoreSnapshot({
     id,
     settings,
     target,
     allowUnauthenticated: flags.flags.get("allow-unauthenticated") === true,
     clone,
+    ...(typeof originUserHome === "string" ? { originUserHome } : {}),
   });
   const written = Object.entries(report.written)
     .map(([root, count]) => `${root} (${count})`)

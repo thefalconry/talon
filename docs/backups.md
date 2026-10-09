@@ -183,6 +183,14 @@ touched. The reply says why.
    workspace path finds its transcripts. It also rewrites the absolute paths
    in `config.json`, such as plugin paths and the passphrase file.
 
+   Relocation needs to know the home the snapshot was taken under. Snapshots
+   record it, but ones taken by the scheduler of Talon 5.35.0 and earlier do
+   not. For those, `--clone` stops before changing anything and asks for it:
+
+   ```sh
+   talon backup restore <id> --clone --origin-user-home /home/alice
+   ```
+
 5. Reinstall plugins from `~/.talon/plugins-manifest.json`:
    - `local` entries: run `npm ci` (or `uv sync`) in each restored checkout.
    - `~/.talon/plugins/`: `npm ci --prefix ~/.talon/plugins`.

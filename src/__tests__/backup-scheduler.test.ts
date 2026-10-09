@@ -350,6 +350,12 @@ describe("checkpointBeforeUpdate", () => {
         label: "pre-update aaa→bbb",
       }),
     );
+    // The scheduler names the Talon home, which stops the builder looking
+    // outside it; the origin must be passed separately or a clone of this
+    // snapshot cannot relocate its plugin paths.
+    expect(build).toHaveBeenCalledWith(
+      expect.objectContaining({ home, originUserHome: expect.any(String) }),
+    );
   });
 
   it("reports the error instead of swallowing it", async () => {
