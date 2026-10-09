@@ -1,5 +1,26 @@
 # Changelog
 
+## [5.34.0](https://github.com/thefalconry/talon/compare/v5.33.2...v5.34.0) (2026-10-09)
+
+
+### Features
+
+* **claude:** support multiple Claude accounts as distinct backends ([#1242](https://github.com/thefalconry/talon/issues/1242)) ([ac9c5a9](https://github.com/thefalconry/talon/commit/ac9c5a98a1ce6f299fc22d2605bc5321515950b0))
+
+
+### Bug Fixes
+
+* **update:** don't take a second blocking checkpoint after /update ([#1258](https://github.com/thefalconry/talon/issues/1258)) ([b548dea](https://github.com/thefalconry/talon/commit/b548dea8d930600ff49d0f24d6776f87a3d4048f))
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump smol-toml from 1.8.0 to 1.9.0 ([#1261](https://github.com/thefalconry/talon/issues/1261)) ([14defb6](https://github.com/thefalconry/talon/commit/14defb62652d68b8195181cfffc856dea121674f))
+* **deps-dev:** Bump source-map-js from 1.2.1 to 1.2.2 ([#1263](https://github.com/thefalconry/talon/issues/1263)) ([e14e28c](https://github.com/thefalconry/talon/commit/e14e28ca8601887c1843af8b3dab672bc4e25d23))
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 7 updates ([#1259](https://github.com/thefalconry/talon/issues/1259)) ([ab28401](https://github.com/thefalconry/talon/commit/ab2840114cf0f7e7d2d57f380b7551306cf95f45))
+* **deps:** Bump fast-copy from 4.0.3 to 4.1.2 ([#1264](https://github.com/thefalconry/talon/issues/1264)) ([5e85ce0](https://github.com/thefalconry/talon/commit/5e85ce07c10ef8da57033a5c38c6d5efc54f14c6))
+* **deps:** Bump music-metadata from 11.15.0 to 11.16.1 ([#1262](https://github.com/thefalconry/talon/issues/1262)) ([6192f2f](https://github.com/thefalconry/talon/commit/6192f2f8838566c9d66552dab7e6e50edc65d301))
+
 ## [5.33.2](https://github.com/thefalconry/talon/compare/v5.33.1...v5.33.2) (2026-10-09)
 
 
