@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.35.0](https://github.com/thefalconry/talon/compare/v5.34.0...v5.35.0) (2026-10-09)
+
+
+### Features
+
+* **claude:** add, remove and pin Claude accounts live from /auth and the CLI ([#1268](https://github.com/thefalconry/talon/issues/1268)) ([353e0eb](https://github.com/thefalconry/talon/commit/353e0eba5d0b7a4a39707f461165fc079545a39d))
+
 ## [5.34.0](https://github.com/thefalconry/talon/compare/v5.33.2...v5.34.0) (2026-10-09)
 
 
