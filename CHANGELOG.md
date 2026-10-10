@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.36.4](https://github.com/thefalconry/talon/compare/v5.36.3...v5.36.4) (2026-10-10)
+
+
+### Bug Fixes
+
+* **bridge:** raise the request body limit so computer screenshots fit ([#1284](https://github.com/thefalconry/talon/issues/1284)) ([951edb8](https://github.com/thefalconry/talon/commit/951edb827e46b3bd9535123ea53204741f41d209))
+
 ## [5.36.3](https://github.com/thefalconry/talon/compare/v5.36.2...v5.36.3) (2026-10-10)
 
 
