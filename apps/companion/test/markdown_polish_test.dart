@@ -92,6 +92,7 @@ void main() {
       (tester) async {
     await tester.pumpWidget(_host(const InlineMarkdownText(
       data: 'He said &quot;hello world&quot; and "direct quote"',
+      style: TextStyle(),
     )));
     await tester.pump();
     expect(find.textContaining('&quot;'), findsNothing);

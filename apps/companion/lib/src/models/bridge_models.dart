@@ -5,6 +5,8 @@
 /// and the `hello` event so a mismatch can be detected.
 library;
 
+import 'html_entities.dart';
+
 const int kBridgeProtocolVersion = 1;
 
 enum Role { user, assistant, system }
@@ -22,32 +24,6 @@ Role _roleFrom(String? s) {
 
 String _string(Object? value, [String fallback = '']) =>
     value is String ? value : value?.toString() ?? fallback;
-
-String _unescapeHtml(String text) {
-  if (!text.contains('&')) return text;
-  return text
-      .replaceAll('&quot;', '"')
-      .replaceAll('&#34;', '"')
-      .replaceAll('&apos;', "'")
-      .replaceAll('&#39;', "'")
-      .replaceAll('&lt;', '<')
-      .replaceAll('&#60;', '<')
-      .replaceAll('&gt;', '>')
-      .replaceAll('&#62;', '>')
-      .replaceAll('&nbsp;', ' ')
-      .replaceAll('&#160;', ' ')
-      .replaceAllMapped(RegExp(r'&#(?:x([0-9a-fA-F]+)|(\d+));'), (m) {
-        final code = m[1] != null
-            ? int.tryParse(m[1]!, radix: 16)
-            : int.tryParse(m[2]!);
-        if (code != null && code > 0 && code <= 0x10FFFF) {
-          return String.fromCharCode(code);
-        }
-        return m[0]!;
-      })
-      .replaceAll('&amp;', '&')
-      .replaceAll('&#38;', '&');
-}
 
 int _int(Object? value, [int fallback = 0]) {
   if (value is int) return value;
@@ -445,10 +421,10 @@ class ClientChat {
 
   factory ClientChat.fromJson(Map<String, dynamic> j) => ClientChat(
         id: _string(j['id']),
-        title: _unescapeHtml(_string(j['title'], 'New chat')),
+        title: unescapeHtml(_string(j['title'], 'New chat')),
         createdAt: _int(j['createdAt']),
         lastActive: _int(j['lastActive']),
-        preview: _unescapeHtml(_string(j['preview'])),
+        preview: unescapeHtml(_string(j['preview'])),
         model: j['model'] is String ? j['model'] as String : null,
         backend: j['backend'] is String ? j['backend'] as String : null,
         effort: j['effort'] is String ? j['effort'] as String : null,
@@ -732,7 +708,7 @@ class SearchHit {
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
         chatId: _string(j['chatId']),
-        chatTitle: _unescapeHtml(_string(j['chatTitle'])),
+        chatTitle: unescapeHtml(_string(j['chatTitle'])),
         message: ClientMessage.fromJson(_map(j['message'])),
       );
 }

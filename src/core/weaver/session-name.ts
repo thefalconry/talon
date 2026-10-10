@@ -10,6 +10,8 @@
  * code lived in three handlers and drifted independently.
  */
 
+import { unescapeHtml } from "../../util/html-entities.js";
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_NAME_LENGTH = 30;
@@ -28,26 +30,6 @@ const MAX_NAME_LENGTH = 30;
  * Returns `undefined` when the cleaned text is empty (e.g. the user
  * sent only a sticker or an attachment with no caption).
  */
-function unescapeHtml(text: string): string {
-  if (!text.includes("&")) return text;
-  return text
-    .replace(/&quot;/g, '"')
-    .replace(/&#34;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&#60;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#62;/g, ">")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#160;/g, " ")
-    .replace(/&#(?:x([0-9a-fA-F]+)|(\d+));/g, (_, hex, dec) => {
-      const code = hex ? parseInt(hex, 16) : parseInt(dec, 10);
-      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : _;
-    })
-    .replace(/&amp;/g, "&")
-    .replace(/&#38;/g, "&");
-}
 
 export function extractSessionName(rawText: string): string | undefined {
   if (!rawText) return undefined;
