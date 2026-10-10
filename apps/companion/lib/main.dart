@@ -276,10 +276,7 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       widget.state.persistSnapshot();
-      if (!kIsWeb &&
-          defaultTargetPlatform == TargetPlatform.android &&
-          MeshForegroundController.isSupported &&
-          widget.state.prefs.meshSharing) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
         widget.state.pauseUiStream();
       }
     }

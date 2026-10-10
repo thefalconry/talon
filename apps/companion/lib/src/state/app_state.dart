@@ -414,7 +414,12 @@ class AppState extends ChangeNotifier {
       unawaited(start());
       return;
     }
-    if (conn != ConnState.connected) return;
+    if (conn != ConnState.connected) {
+      AppLog.info('app_state', 'resumed while disconnected ($conn); reconnecting now');
+      _backoffMs = 800;
+      unawaited(start());
+      return;
+    }
     final rx = _client?.lastRx;
     if (rx == null) return;
     final quiet = (now ?? DateTime.now()).difference(rx);
@@ -912,6 +917,31 @@ class AppState extends ChangeNotifier {
     await _command(chatId, 'Delete', client.deleteChat(chatId));
   }
 
+  Future<bool> _waitForConnection({Duration timeout = const Duration(seconds: 6)}) async {
+    if (conn == ConnState.connected && _client != null) return true;
+    if (conn == ConnState.idle || conn == ConnState.error) {
+      unawaited(start());
+    }
+    final completer = Completer<bool>();
+    void listener() {
+      if (conn == ConnState.connected && _client != null) {
+        if (!completer.isCompleted) completer.complete(true);
+      }
+    }
+    addListener(listener);
+    final timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.complete(conn == ConnState.connected && _client != null);
+      }
+    });
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      removeListener(listener);
+    }
+  }
+
   /// Returns whether the daemon accepted the message — false lets the
   /// composer hand the draft back instead of silently losing it.
   Future<bool> sendMessage(
@@ -919,10 +949,19 @@ class AppState extends ChangeNotifier {
     List<Attachment> attachments = const [],
   }) async {
     final chatId = selectedChatId;
-    final client = _client;
-    if (chatId == null || client == null) return false;
+    if (chatId == null) return false;
     // Text may be empty when files are attached.
     if (text.trim().isEmpty && attachments.isEmpty) return false;
+
+    if (conn != ConnState.connected || _client == null) {
+      final ready = await _waitForConnection(timeout: const Duration(seconds: 6));
+      if (!ready || _client == null) {
+        _appendSystem(chatId, 'Unable to send: not connected to Talon');
+        return false;
+      }
+    }
+    final client = _client;
+    if (client == null) return false;
     // The user committed to this chat: it is no longer an untouched one, even
     // if the send fails or the reply is slow to arrive.
     _unusedChats.remove(chatId);
@@ -2086,10 +2125,17 @@ class AppState extends ChangeNotifier {
 
   /// Resume the UI isolate's connection when the app returns to the foreground.
   void resumeUiStream() {
-    if (!_uiStreamPaused || _disposed) return;
+    if (_disposed) return;
     _uiStreamPaused = false;
-    AppLog.info('app_state', 'UI stream resuming from background');
-    unawaited(start());
+    _backoffMs = 800;
+    _reconnect?.cancel();
+    _reconnect = null;
+    if (conn != ConnState.connected) {
+      AppLog.info('app_state', 'UI stream resuming from background; reconnecting immediately');
+      unawaited(start());
+    } else {
+      reconnectIfStale();
+    }
   }
 
   @override

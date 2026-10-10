@@ -398,7 +398,7 @@ class _ChatViewState extends State<ChatView> {
                         attachments: _attachments,
                         controller: _composerText,
                         focusNode: _composerFocus,
-                        enabled: widget.state.conn == ConnState.connected,
+                        enabled: true,
                         running: widget.state.isTurnRunning(chat.id),
                         onStop: () => widget.state.interruptTurn(chat.id),
                         onVoice: _voiceAvailable
