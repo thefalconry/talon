@@ -475,6 +475,7 @@ void main() {
     testWidgets('a saved file offers to open it', (tester) async {
       AttachmentOpener.instance = _RecordingOpener();
       addTearDown(AttachmentOpener.reset);
+      addTearDown(cancelSavedSnackBarTimer);
 
       await tester.pumpWidget(host(MessageBubble(
         message: ClientMessage(
@@ -499,6 +500,11 @@ void main() {
       await tester.pump();
       expect(find.text('Saved to Download/a.pdf'), findsOneWidget);
       expect(find.widgetWithText(SnackBarAction, 'Open'), findsOneWidget);
+
+      // Verifies the banner auto-dismisses and fades away after 3 seconds
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      expect(find.text('Saved to Download/a.pdf'), findsNothing);
     });
 
     testWidgets('a failed save says so', (tester) async {

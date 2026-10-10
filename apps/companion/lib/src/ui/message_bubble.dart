@@ -1,3 +1,5 @@
+import 'dart:async' show Timer;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -414,6 +416,7 @@ class MessageBubble extends StatelessWidget {
         messenger?.showSnackBar(
           SnackBar(
             duration: const Duration(seconds: 3),
+            showCloseIcon: true,
             content: Text("Couldn't save link: $e"),
           ),
         );
@@ -828,20 +831,45 @@ class _FileChip extends StatefulWidget {
   State<_FileChip> createState() => _FileChipState();
 }
 
+Timer? _savedSnackBarTimer;
+
+/// Cancels any active auto-dismiss timer for the saved snackbar (e.g. in test teardowns).
+@visibleForTesting
+void cancelSavedSnackBarTimer() {
+  _savedSnackBarTimer?.cancel();
+  _savedSnackBarTimer = null;
+}
+
 /// "Saved to …" with an Open action for the cached copy.
+///
+/// On Linux desktop (and other platforms with assistive technologies /
+/// accessible navigation enabled), Flutter suppresses the auto-dismiss timer
+/// for any [SnackBar] that contains a [SnackBarAction]. We manage an explicit
+/// 3-second timer here and provide [showCloseIcon] so the banner reliably
+/// fades away without requiring the user to tap Open.
 void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved) {
-  messenger?.showSnackBar(
+  if (messenger == null) return;
+  _savedSnackBarTimer?.cancel();
+  _savedSnackBarTimer = null;
+  messenger.hideCurrentSnackBar();
+
+  final controller = messenger.showSnackBar(
     SnackBar(
       duration: const Duration(seconds: 3),
+      showCloseIcon: true,
       content: Text('Saved to ${saved.location}'),
       action: SnackBarAction(
         label: 'Open',
         onPressed: () {
+          _savedSnackBarTimer?.cancel();
+          _savedSnackBarTimer = null;
+          messenger.hideCurrentSnackBar();
           AttachmentOpener.instance
               .openLocal(saved.file, saved.mimeType)
               .catchError((Object e) {
             messenger.showSnackBar(SnackBar(
               duration: const Duration(seconds: 3),
+              showCloseIcon: true,
               content: Text('$e'),
             ));
           });
@@ -849,6 +877,17 @@ void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved)
       ),
     ),
   );
+
+  _savedSnackBarTimer = Timer(const Duration(seconds: 3), () {
+    try {
+      controller.close();
+    } catch (_) {}
+  });
+
+  controller.closed.then((_) {
+    _savedSnackBarTimer?.cancel();
+    _savedSnackBarTimer = null;
+  });
 }
 
 /// Tapping downloads the file with the auth header and saves it to the
@@ -875,6 +914,7 @@ class _FileChipState extends State<_FileChip> {
       messenger?.showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 3),
+          showCloseIcon: true,
           content: Text("Couldn't save ${file.name}: $e"),
         ),
       );
@@ -897,7 +937,11 @@ class _FileChipState extends State<_FileChip> {
       );
     } catch (e) {
       messenger?.showSnackBar(
-        SnackBar(content: Text("Couldn't open ${file.name}: $e")),
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          showCloseIcon: true,
+          content: Text("Couldn't open ${file.name}: $e"),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
