@@ -48,8 +48,8 @@ describe("extractSessionName", () => {
   });
 
   it("decodes HTML entities like &quot; and &#34;", () => {
-    expect(extractSessionName('He said &quot;hello&quot; and &#39;hi&#39;')).toBe(
-      'He said "hello" and \'hi\'',
-    );
+    expect(
+      extractSessionName("He said &quot;hello&quot; and &#39;hi&#39;"),
+    ).toBe("He said \"hello\" and 'hi'");
   });
 });

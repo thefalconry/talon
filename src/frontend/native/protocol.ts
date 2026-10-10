@@ -17,6 +17,7 @@
  */
 
 import type { HistoryMessage } from "../../storage/history.js";
+import { unescapeHtml } from "../../util/html-entities.js";
 
 /** Wire-format version. Surfaced in `/health` and the `hello` event. */
 export const BRIDGE_PROTOCOL_VERSION = 1;
@@ -398,27 +399,6 @@ export type BridgeEvent =
   | { kind: "error"; chatId?: string; message: string };
 
 // ── Mappers (Talon internals → wire types) ───────────────────────────────────
-
-export function unescapeHtml(text: string): string {
-  if (!text.includes("&")) return text;
-  return text
-    .replace(/&quot;/g, '"')
-    .replace(/&#34;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&#60;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#62;/g, ">")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&#160;/g, " ")
-    .replace(/&#(?:x([0-9a-fA-F]+)|(\d+));/g, (_, hex, dec) => {
-      const code = hex ? parseInt(hex, 16) : parseInt(dec, 10);
-      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : _;
-    })
-    .replace(/&amp;/g, "&")
-    .replace(/&#38;/g, "&");
-}
 
 /** Collapse whitespace and clip a string for list previews. */
 export function previewOf(text: string, max = 90): string {
