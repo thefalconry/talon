@@ -9,7 +9,12 @@
  */
 
 /** The model-facing shape every mesh tool answers with. */
-export type MeshToolResult = { ok: boolean; text: string };
+export type MeshToolResult = {
+  ok: boolean;
+  text: string;
+  /** A picture for the model to look at (a device screenshot). */
+  image?: { data: string; mimeType: string };
+};
 
 /** Timeout for a single filesystem command (list/stat/one chunk/etc.). */
 export const FS_COMMAND_TIMEOUT_MS = 30_000;

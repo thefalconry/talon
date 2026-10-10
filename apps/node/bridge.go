@@ -46,8 +46,9 @@ const (
 	stableStreamAfter   = 10 * time.Second
 )
 
-// capabilities this node advertises at registration. The daemon gates
-// commands on this list, so it must exactly cover what dispatch() handles.
+// capabilities every node advertises at registration (a platform may add
+// more: see platformCapabilities). The daemon gates commands on the list,
+// so it must exactly cover what dispatch() handles.
 // locate is deliberately absent (servers have no GPS); install_apk is the
 // Android self-update path and does not apply.
 var nodeCapabilities = []string{
@@ -313,7 +314,7 @@ func (n *Node) registrationBody() map[string]any {
 // capabilities is the command surface this host's policy allows.
 func (n *Node) capabilities() []string {
 	if n.cfg == nil {
-		return nodeCapabilities
+		return allCapabilities()
 	}
 	return n.cfg.Policy.capabilities()
 }

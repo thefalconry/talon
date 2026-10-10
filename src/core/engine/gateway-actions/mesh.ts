@@ -34,6 +34,8 @@ export const meshHandlers: SharedActionHandlers = {
       body.cwd,
       body.timeout_sec,
     ),
+  device_computer: (body) =>
+    getMeshService().computerOnDevice(body.device ?? body.deviceId, body),
   device_list_dir: (body) =>
     getMeshService().listDirOnDevice(body.device ?? body.deviceId, body.path),
   device_stat: (body) =>
@@ -117,6 +119,7 @@ export const chatFreeActions: ReadonlySet<string> = new Set([
   "remove_device",
   "get_device_status",
   "device_exec",
+  "device_computer",
   "device_list_dir",
   "device_stat",
   "device_read_file",

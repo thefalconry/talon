@@ -21,6 +21,9 @@ type Policy struct {
 	DisableExec bool `json:"disableExec,omitempty"`
 	// DisableUpdate refuses update_node (remote self-update).
 	DisableUpdate bool `json:"disableUpdate,omitempty"`
+	// DisableComputer refuses computer (screen capture, pointer and keyboard
+	// control) on platforms that offer it.
+	DisableComputer bool `json:"disableComputer,omitempty"`
 	// ReadPaths, when set, confines read_file / list_dir / stat /
 	// upload_file to these directory trees.
 	ReadPaths []string `json:"readPaths,omitempty"`
@@ -60,16 +63,26 @@ func (p Policy) maxWriteBytes() int64 {
 }
 
 // capabilities filters the full command surface down to what the policy
-// allows, so the daemon never offers a tool this host will refuse.
+// allows, so the daemon never offers a tool this host will refuse. The
+// surface is the commands every node has plus the ones this platform adds.
 func (p Policy) capabilities() []string {
-	out := make([]string, 0, len(nodeCapabilities))
-	for _, c := range nodeCapabilities {
-		if (c == "exec" && p.DisableExec) || (c == "update_node" && p.DisableUpdate) {
+	out := make([]string, 0, len(nodeCapabilities)+len(platformCapabilities))
+	for _, c := range allCapabilities() {
+		if (c == "exec" && p.DisableExec) ||
+			(c == "update_node" && p.DisableUpdate) ||
+			(c == "computer" && p.DisableComputer) {
 			continue
 		}
 		out = append(out, c)
 	}
 	return out
+}
+
+// allCapabilities is everything this build can do before policy is applied.
+func allCapabilities() []string {
+	out := make([]string, 0, len(nodeCapabilities)+len(platformCapabilities))
+	out = append(out, nodeCapabilities...)
+	return append(out, platformCapabilities...)
 }
 
 // readPathParams names, per command, the params holding a path it reads.
@@ -104,6 +117,10 @@ func (p Policy) check(name string, params map[string]any, protected []string) er
 	case "update_node":
 		if p.DisableUpdate {
 			return fmt.Errorf("%w: update_node is disabled", errPolicy)
+		}
+	case "computer":
+		if p.DisableComputer {
+			return fmt.Errorf("%w: computer is disabled", errPolicy)
 		}
 	}
 	for _, key := range readPathParams[name] {

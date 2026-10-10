@@ -102,6 +102,70 @@ export const meshTools: ToolDefinition[] = [
     tag: "mesh",
   },
   {
+    name: "device_computer",
+    description:
+      'Look at and operate the desktop of a mesh device that has a screen (today: macOS talon-nodes that list `computer` in list_devices). Work in this order: `snapshot` first — it reads the frontmost window\'s accessibility tree and lists each control with its name and the exact point to click, which is faster and more reliable than judging positions from a picture. Use `screenshot` when the snapshot is empty or unhelpful (canvas apps, games, custom-drawn UI) or to check what a step did. All coordinates, from either source, are in one space: the screenshot\'s own pixels. Actions: screenshot; snapshot (limit); click (x, y, button, count, modifiers); move (x, y); drag (x, y, to_x, to_y); scroll (dy, dx, optionally x, y to aim first — positive dy moves down the page); type (text, into whatever has keyboard focus — click the field first); key (keys, e.g. "cmd+s", "escape", "cmd+shift+4"). Only the primary display is covered. After an action that changes the screen, take a new snapshot or screenshot before the next one — earlier coordinates may be stale.',
+    schema: {
+      device: z
+        .string()
+        .describe(
+          "Device id, exact name, or unique name fragment of a device that supports `computer` (see list_devices).",
+        ),
+      action: z
+        .enum([
+          "screenshot",
+          "snapshot",
+          "click",
+          "move",
+          "drag",
+          "scroll",
+          "type",
+          "key",
+        ])
+        .describe("What to do."),
+      x: z.number().optional().describe("Target x, in screenshot pixels."),
+      y: z.number().optional().describe("Target y, in screenshot pixels."),
+      to_x: z.number().optional().describe("drag: where to release, x."),
+      to_y: z.number().optional().describe("drag: where to release, y."),
+      dy: z
+        .number()
+        .optional()
+        .describe("scroll: lines down the page (negative = up), max 50."),
+      dx: z
+        .number()
+        .optional()
+        .describe("scroll: lines to the right (negative = left), max 50."),
+      button: z
+        .enum(["left", "right", "middle"])
+        .optional()
+        .describe("click: which button (default left)."),
+      count: z
+        .number()
+        .optional()
+        .describe("click: 1, 2 (double) or 3 (triple). Default 1."),
+      modifiers: z
+        .array(z.enum(["cmd", "shift", "alt", "ctrl"]))
+        .optional()
+        .describe("click: keys held during the click."),
+      text: z
+        .string()
+        .optional()
+        .describe("type: the text to type (max 4000 characters)."),
+      keys: z
+        .string()
+        .optional()
+        .describe(
+          'key: one key with optional modifiers joined by +, e.g. "return", "cmd+a", "ctrl+left", "f5".',
+        ),
+      limit: z
+        .number()
+        .optional()
+        .describe("snapshot: max elements to list (default 150, max 400)."),
+    },
+    execute: (params, bridge) => bridge("device_computer", params),
+    tag: "mesh",
+  },
+  {
     name: "device_list_dir",
     description:
       "List a directory on a Talon companion device (name, type, size per entry).",

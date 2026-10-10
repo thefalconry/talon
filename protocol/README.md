@@ -52,7 +52,8 @@ instead of shipping a silent misrender or a device command that times out.
   `MeshService.capabilitiesFor`, and the exec/fs commands run through the
   real `DeviceExec` in a sandbox.
 - **talon-node** — `apps/node/protocol_conformance_test.go` (go test, node
-  CI). Capability parity with `nodeCapabilities`, SSE `device_command` frame
+  CI). Capability parity with `nodeCapabilities` (plus, per platform, a
+  subset of `nodeDesktopCapabilities`), SSE `device_command` frame
   decoding, registration body keys, and real `dispatch()` execution of every
   `run: true` command in a sandbox. The auth fixture's upgrade request is
   built by `upgradeRequestBody`, and every register/upgrade reply parses
