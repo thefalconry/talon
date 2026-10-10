@@ -271,6 +271,29 @@ void main() {
       });
       expect(chat.title, 'General');
 
+      final quotedChat = ClientChat.fromJson({
+        'id': 'quoted',
+        'title': 'Test &quot;Quotes&quot; &amp; &#34;More&#34;',
+        'createdAt': 1,
+        'lastActive': 2,
+        'preview': 'Preview says &quot;Hello World&quot;',
+      });
+      expect(quotedChat.title, 'Test "Quotes" & "More"');
+      expect(quotedChat.preview, 'Preview says "Hello World"');
+
+      final hit = SearchHit.fromJson({
+        'chatId': 'quoted',
+        'chatTitle': 'Search &quot;Hit&quot;',
+        'message': {
+          'id': '1',
+          'chatId': 'quoted',
+          'role': 'user',
+          'text': 'hello',
+          'ts': 1,
+        },
+      });
+      expect(hit.chatTitle, 'Search "Hit"');
+
       final cfg = ConfigSnapshot.fromJson({
         'backend': 'claude',
         'model': 'default',
