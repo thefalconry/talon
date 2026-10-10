@@ -101,6 +101,34 @@ MarkdownStyleSheet talonMarkdownStyle() {
   );
 }
 
+/// Decodes common HTML entities (&quot;, &amp;, &lt;, &gt;, &apos;, &nbsp;, and
+/// numeric character references) into raw characters.
+String unescapeHtml(String text) {
+  if (!text.contains('&')) return text;
+  return text
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#34;', '"')
+      .replaceAll('&apos;', "'")
+      .replaceAll('&#39;', "'")
+      .replaceAll('&lt;', '<')
+      .replaceAll('&#60;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&#62;', '>')
+      .replaceAll('&nbsp;', ' ')
+      .replaceAll('&#160;', ' ')
+      .replaceAllMapped(RegExp(r'&#(?:x([0-9a-fA-F]+)|(\d+));'), (m) {
+        final code = m[1] != null
+            ? int.tryParse(m[1]!, radix: 16)
+            : int.tryParse(m[2]!);
+        if (code != null && code > 0 && code <= 0x10FFFF) {
+          return String.fromCharCode(code);
+        }
+        return m[0]!;
+      })
+      .replaceAll('&amp;', '&')
+      .replaceAll('&#38;', '&');
+}
+
 /// Compact Markdown for list previews. Unlike [MarkdownBody], this stays a
 /// single [RichText], so callers keep proper max-lines + ellipsis behaviour
 /// while common inline syntax is rendered instead of leaking `**` / `_` /
@@ -128,9 +156,11 @@ class InlineMarkdownText extends StatelessWidget {
   static List<md.Node> _parse(String data) {
     final hit = _parsed.remove(data);
     if (hit != null) return _parsed[data] = hit; // refresh LRU position
-    final source = data.replaceAll(_space, ' ').trim();
-    final nodes =
-        md.Document(extensionSet: md.ExtensionSet.gitHubWeb).parse(source);
+    final source = unescapeHtml(data.replaceAll(_space, ' ').trim());
+    final nodes = md.Document(
+      extensionSet: md.ExtensionSet.gitHubWeb,
+      encodeHtml: false,
+    ).parse(source);
     _parsed[data] = nodes;
     if (_parsed.length > _parsedCapacity) _parsed.remove(_parsed.keys.first);
     return nodes;
@@ -157,7 +187,7 @@ class InlineMarkdownText extends StatelessWidget {
       if (separate && i > 0) spans.add(const TextSpan(text: ' '));
       final node = nodes[i];
       if (node is md.Text) {
-        spans.add(TextSpan(text: node.text, style: inherited));
+        spans.add(TextSpan(text: unescapeHtml(node.text), style: inherited));
         continue;
       }
       if (node is! md.Element) continue;
@@ -168,7 +198,7 @@ class InlineMarkdownText extends StatelessWidget {
       }
       if (node.tag == 'img') {
         spans.add(TextSpan(
-          text: node.attributes['alt'] ?? 'Image',
+          text: unescapeHtml(node.attributes['alt'] ?? 'Image'),
           style: inherited,
         ));
         continue;
