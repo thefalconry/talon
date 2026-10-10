@@ -323,6 +323,18 @@ class UpdateService extends ChangeNotifier {
 
   UpdateRelease? _release;
 
+  /// An already downloaded and verified artifact, staged and ready to install
+  /// without re-downloading.
+  File? _stagedArtifact;
+
+  /// Whether an already downloaded and checksum-verified artifact is staged
+  /// and ready to install directly without re-downloading.
+  bool get canInstallStaged =>
+      _stagedArtifact != null &&
+      _stagedArtifact!.existsSync() &&
+      _release != null &&
+      !busy;
+
   /// The release on offer — null unless [phase] is available/downloading/
   /// verifying/installing/restartPending/handedOff.
   UpdateRelease? get release => _release;
@@ -481,14 +493,31 @@ class UpdateService extends ChangeNotifier {
       _setPhase(UpdatePhase.error);
       return;
     }
+
+    final dir = await _installer.stagingDir();
+    await dir.create(recursive: true);
+    final potential =
+        File('${dir.path}${Platform.pathSeparator}${rel.assetName}');
+    if (await potential.exists()) {
+      try {
+        final size = await potential.length();
+        if (rel.assetSize <= 0 || size == rel.assetSize) {
+          final digest = await sha256.bind(potential.openRead()).first;
+          if (digest.toString().toLowerCase() == expected) {
+            _stagedArtifact = potential;
+            await installStaged();
+            return;
+          }
+        }
+      } catch (_) {}
+    }
+
     _received = 0;
     _total = rel.assetSize;
     _setPhase(UpdatePhase.downloading);
     File? artifact;
     try {
-      final dir = await _installer.stagingDir();
-      await dir.create(recursive: true);
-      artifact = File('${dir.path}${Platform.pathSeparator}${rel.assetName}');
+      artifact = potential;
       if (await artifact.exists()) await artifact.delete();
 
       final request = http.Request('GET', Uri.parse(rel.assetUrl))
@@ -514,6 +543,7 @@ class UpdateService extends ChangeNotifier {
       }
       if (_cancelRequested) {
         await _safeDelete(artifact);
+        _stagedArtifact = null;
         _setPhase(UpdatePhase.available);
         return;
       }
@@ -532,6 +562,7 @@ class UpdateService extends ChangeNotifier {
         );
       }
 
+      _stagedArtifact = artifact;
       _setPhase(UpdatePhase.installing);
       final outcome = await _installer.install(artifact, rel);
       _message = outcome.message;
@@ -542,16 +573,57 @@ class UpdateService extends ChangeNotifier {
           _setPhase(UpdatePhase.handedOff);
         case InstallKind.manual:
           await _safeDelete(artifact);
+          _stagedArtifact = null;
           _error = outcome.message;
           _setPhase(UpdatePhase.handedOff);
         case InstallKind.failed:
-          await _safeDelete(artifact);
+          // Keep staged artifact on installer failure (e.g. Samsung Auto
+          // Blocker or missing permissions) so user can retry directly.
           _error = outcome.message;
           _setPhase(UpdatePhase.error);
       }
     } catch (e) {
       AppLog.error('update', 'install failed', e);
-      if (artifact != null) await _safeDelete(artifact);
+      _error = _friendly(e);
+      _setPhase(UpdatePhase.error);
+    }
+  }
+
+  /// Retry installing the already-downloaded and verified artifact without
+  /// downloading it again.
+  Future<void> installStaged() async {
+    final rel = _release;
+    final artifact = _stagedArtifact;
+    if (rel == null ||
+        artifact == null ||
+        !artifact.existsSync() ||
+        busy ||
+        !supported) {
+      return;
+    }
+    _cancelRequested = false;
+    _error = null;
+    _message = null;
+    try {
+      _setPhase(UpdatePhase.installing);
+      final outcome = await _installer.install(artifact, rel);
+      _message = outcome.message;
+      switch (outcome.kind) {
+        case InstallKind.restartPending:
+          _setPhase(UpdatePhase.restartPending);
+        case InstallKind.handedOff:
+          _setPhase(UpdatePhase.handedOff);
+        case InstallKind.manual:
+          await _safeDelete(artifact);
+          _stagedArtifact = null;
+          _error = outcome.message;
+          _setPhase(UpdatePhase.handedOff);
+        case InstallKind.failed:
+          _error = outcome.message;
+          _setPhase(UpdatePhase.error);
+      }
+    } catch (e) {
+      AppLog.error('update', 'staged install failed', e);
       _error = _friendly(e);
       _setPhase(UpdatePhase.error);
     }
@@ -573,6 +645,10 @@ class UpdateService extends ChangeNotifier {
   Future<void> skipCurrentRelease() async {
     final rel = _release;
     if (rel == null) return;
+    if (_stagedArtifact != null) {
+      await _safeDelete(_stagedArtifact!);
+      _stagedArtifact = null;
+    }
     await prefs.setSkippedUpdateVersion(rel.version.toString());
     _release = null;
     _setPhase(UpdatePhase.upToDate);

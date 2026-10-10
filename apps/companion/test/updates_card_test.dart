@@ -198,4 +198,30 @@ void main() {
     expect(find.textContaining('is available'), findsNothing);
     expect(installer.installed, isNull);
   });
+
+  testWidgets('renders Retry install button when canInstallStaged is true',
+      (tester) async {
+    final (state, svc, installer) = await harness();
+    addTearDown(state.dispose);
+    addTearDown(svc.dispose);
+
+    await tester.pumpWidget(wrap(state, svc));
+    await tester.pump();
+
+    await svc.check();
+    await _settleIo(tester);
+
+    // Stage an artifact
+    final f = File('${tmp.path}${Platform.pathSeparator}talon-companion-android.apk');
+    await f.writeAsBytes(asset);
+
+    await svc.downloadAndInstall();
+    await _settleIo(tester);
+
+    expect(find.text('Retry install'), findsOneWidget);
+    await tester.tap(find.text('Retry install'));
+    await _settleIo(tester);
+
+    expect(installer.installed, isNotNull);
+  });
 }

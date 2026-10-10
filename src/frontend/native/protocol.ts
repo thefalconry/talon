@@ -17,6 +17,7 @@
  */
 
 import type { HistoryMessage } from "../../storage/history.js";
+import { unescapeHtml } from "../../util/html-entities.js";
 
 /** Wire-format version. Surfaced in `/health` and the `hello` event. */
 export const BRIDGE_PROTOCOL_VERSION = 1;
@@ -401,7 +402,7 @@ export type BridgeEvent =
 
 /** Collapse whitespace and clip a string for list previews. */
 export function previewOf(text: string, max = 90): string {
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = unescapeHtml(text).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 

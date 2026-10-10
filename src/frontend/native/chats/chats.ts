@@ -62,13 +62,14 @@ export class NativeChats {
       // Deleted by the user: its rows are kept, the chat stays gone.
       if (isChatHistoryHidden(chatId)) continue;
       const recent = getRecentHistory(chatId, 1);
+      if (recent.length === 0) continue;
       const entry: ChatEntry = {
         id: chatId,
         numericId: deriveNumericChatId(chatId),
         title: info.sessionName || defaultTitle(),
         createdAt: info.createdAt || Date.now(),
         lastActive: info.lastActive || Date.now(),
-        preview: recent.length ? previewOf(recent[recent.length - 1].text) : "",
+        preview: previewOf(recent[recent.length - 1].text),
         // Restored from a persisted session: it has carried a turn, even if a
         // later reset cleared its history.
         used: true,

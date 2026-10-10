@@ -186,4 +186,72 @@ void main() {
 
     await tester.pump(const Duration(seconds: 3));
   });
+
+  testWidgets('anchors to bottom on chat switch and server connect',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final now = DateTime.now();
+    final msgs1 = [
+      for (var i = 0; i < 30; i++)
+        msg('$i', Role.user, 'Message $i', now.add(Duration(minutes: i))),
+    ];
+    final msgs2 = [
+      for (var i = 0; i < 40; i++)
+        ClientMessage(
+          id: 'c2_$i',
+          chatId: 'c2',
+          role: Role.user,
+          text: 'Other $i',
+          ts: now.add(Duration(minutes: i)).millisecondsSinceEpoch,
+        ),
+    ];
+
+    SharedPreferences.setMockInitialValues({'onboarded.v1': true});
+    final prefs = await Prefs.load();
+    final state = AppState(prefs, narrowLayout: false);
+    state.debugSeed(
+      chats: [
+        ClientChat(
+          id: 'c1',
+          title: 'First',
+          createdAt: 1,
+          lastActive: 2,
+          preview: 'hi',
+        ),
+        ClientChat(
+          id: 'c2',
+          title: 'Second',
+          createdAt: 1,
+          lastActive: 2,
+          preview: 'hi',
+        ),
+      ],
+      messages: {'c1': msgs1, 'c2': msgs2},
+      select: 'c1',
+      connState: ConnState.connecting,
+    );
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    // Verify latest message in c1 is visible
+    expect(find.text('Message 29'), findsOneWidget);
+
+    // Switch to c2: must land on latest message in c2
+    await state.selectChat('c2');
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Other 39'), findsOneWidget);
+
+    // Simulate server connecting while viewing c2
+    state.debugSeed(connState: ConnState.connected);
+    await tester.pumpWidget(host(state));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Other 39'), findsOneWidget);
+  });
 }

@@ -56,6 +56,18 @@ describe("native protocol mappers", () => {
     expect(out.endsWith("…")).toBe(true);
   });
 
+  it("previewOf decodes each entity once, never twice", () => {
+    expect(previewOf("&amp;lt;b&amp;gt; and &#38;amp;")).toBe(
+      "&lt;b&gt; and &amp;",
+    );
+  });
+
+  it("previewOf decodes HTML entities like &quot; and &#34;", () => {
+    expect(
+      previewOf("Say &quot;hello&quot; and &#39;world&#39; &amp; &lt;tag&gt;"),
+    ).toBe("Say \"hello\" and 'world' & <tag>");
+  });
+
   it("historyToClientMessage maps sender ids to roles", () => {
     const assistant = historyToClientMessage(
       {
