@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 
+import '../models/html_entities.dart';
 import '../theme.dart';
 
 /// Shared Markdown style for assistant content — dark, readable, with framed
@@ -128,9 +129,11 @@ class InlineMarkdownText extends StatelessWidget {
   static List<md.Node> _parse(String data) {
     final hit = _parsed.remove(data);
     if (hit != null) return _parsed[data] = hit; // refresh LRU position
-    final source = data.replaceAll(_space, ' ').trim();
-    final nodes =
-        md.Document(extensionSet: md.ExtensionSet.gitHubWeb).parse(source);
+    final source = unescapeHtml(data.replaceAll(_space, ' ').trim());
+    final nodes = md.Document(
+      extensionSet: md.ExtensionSet.gitHubWeb,
+      encodeHtml: false,
+    ).parse(source);
     _parsed[data] = nodes;
     if (_parsed.length > _parsedCapacity) _parsed.remove(_parsed.keys.first);
     return nodes;

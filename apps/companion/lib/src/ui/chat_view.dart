@@ -87,6 +87,12 @@ class _ChatViewState extends State<ChatView> {
   /// jump-to-latest affordance is useful.
   bool _awayFromBottom = false;
 
+  /// Whether the user has actively scrolled away from the bottom.
+  bool _userScrolledAway = false;
+  int _lastMessageCount = 0;
+  bool _lastHistoryLoading = false;
+  ConnState _lastConnState = ConnState.idle;
+
   /// The on-screen chat's live turn. Streamed tokens notify it (not
   /// AppState), so following the growing reply to the bottom hangs off it.
   TurnState? _followedTurn;
@@ -137,7 +143,7 @@ class _ChatViewState extends State<ChatView> {
       _followQueued = false;
       if (!mounted || !_scroll.hasClients) return;
       final pos = _scroll.position;
-      if (pos.maxScrollExtent - pos.pixels < 260) {
+      if (pos.maxScrollExtent - pos.pixels < 600) {
         _scroll.jumpTo(pos.maxScrollExtent);
       }
     });
@@ -169,8 +175,24 @@ class _ChatViewState extends State<ChatView> {
     final pos = _scroll.position;
     final away = pos.maxScrollExtent - pos.pixels > 420;
     if (away != _awayFromBottom) setState(() => _awayFromBottom = away);
+
+    if (pos.userScrollDirection != ScrollDirection.idle) {
+      if (pos.maxScrollExtent - pos.pixels > 200) {
+        _userScrolledAway = true;
+      } else if (pos.maxScrollExtent - pos.pixels <= 60) {
+        _userScrolledAway = false;
+      }
+    } else if (pos.maxScrollExtent - pos.pixels <= 30) {
+      _userScrolledAway = false;
+    }
+
     // Nearing the top of loaded scrollback → pull the previous page in.
-    if (pos.pixels < 240 && !_pendingJumpToBottom) _maybeLoadOlder();
+    if (pos.pixels < 240 &&
+        !_pendingJumpToBottom &&
+        !widget.state.isHistoryLoading(_anchoredChatId ?? '') &&
+        pos.maxScrollExtent > 300) {
+      _maybeLoadOlder();
+    }
   }
 
   /// Fetch the page above the current scrollback and keep the viewport
@@ -178,9 +200,13 @@ class _ChatViewState extends State<ChatView> {
   /// maxScrollExtent; jump by the delta so nothing visibly shifts).
   Future<void> _maybeLoadOlder() async {
     final chatId = _anchoredChatId;
-    if (chatId == null) return;
+    if (chatId == null || _pendingJumpToBottom) return;
     final state = widget.state;
-    if (state.isLoadingOlder(chatId) || !state.hasMoreHistory(chatId)) return;
+    if (state.isLoadingOlder(chatId) ||
+        state.isHistoryLoading(chatId) ||
+        !state.hasMoreHistory(chatId)) {
+      return;
+    }
     final extentBefore =
         _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
     final pixelsBefore = _scroll.hasClients ? _scroll.position.pixels : 0.0;
@@ -195,6 +221,7 @@ class _ChatViewState extends State<ChatView> {
   }
 
   void _jumpToLatest() {
+    _userScrolledAway = false;
     if (!_scroll.hasClients) return;
     _scroll.animateTo(
       _scroll.position.maxScrollExtent,
@@ -278,16 +305,32 @@ class _ChatViewState extends State<ChatView> {
   }
 
   void _autoScroll(String chatId, int messageCount) {
-    // Opening (or switching to) a chat should land on the newest message. The
-    // history often loads a frame or two after the switch, so keep owing the
-    // jump until the chat actually has content, then snap to the bottom.
+    final historyLoading = widget.state.isHistoryLoading(chatId);
+    final currentConn = widget.state.conn;
+    final connJustConnected = currentConn == ConnState.connected &&
+        _lastConnState != ConnState.connected;
+    final historyJustFinished = !historyLoading && _lastHistoryLoading;
+    final messagesGrew = messageCount > _lastMessageCount;
+
+    // Opening (or switching to) a chat should land on the newest message.
     if (chatId != _anchoredChatId) {
       _anchoredChatId = chatId;
+      _userScrolledAway = false;
+      _pendingJumpToBottom = true;
+      _settleToken++;
+    } else if (!_userScrolledAway &&
+        (connJustConnected || (historyJustFinished && messagesGrew))) {
+      // Server connected or server history finished arriving while user was at
+      // the bottom: re-anchor to the bottom so we don't roll back into older history.
       _pendingJumpToBottom = true;
       _settleToken++;
     }
+
+    _lastConnState = currentConn;
+    _lastHistoryLoading = historyLoading;
+    _lastMessageCount = messageCount;
+
     final token = _settleToken;
-    final historyLoading = widget.state.isHistoryLoading(chatId);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       if (_pendingJumpToBottom) {
@@ -296,7 +339,15 @@ class _ChatViewState extends State<ChatView> {
           final pos = _scroll.position;
           // If the user actively touches or scrolls during settle, yield to the gesture.
           if (pos.userScrollDirection != ScrollDirection.idle) {
+            _userScrolledAway = true;
             _pendingJumpToBottom = false;
+            return;
+          }
+          if (historyLoading && retry < 60) {
+            // Keep waiting until the authoritative history page arrives.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, lastExtent, 0),
+            );
             return;
           }
           // Hard cap: content that keeps growing (a streaming reply) must not
@@ -345,7 +396,7 @@ class _ChatViewState extends State<ChatView> {
       final pos = _scroll.position;
       // Otherwise follow live growth only when the user is already near the
       // bottom, so we never yank them up while they're reading scrollback.
-      if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 260) {
+      if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 600) {
         _scroll.animateTo(
           pos.maxScrollExtent,
           duration: const Duration(milliseconds: 160),
@@ -398,7 +449,7 @@ class _ChatViewState extends State<ChatView> {
                         attachments: _attachments,
                         controller: _composerText,
                         focusNode: _composerFocus,
-                        enabled: widget.state.conn == ConnState.connected,
+                        enabled: true,
                         running: widget.state.isTurnRunning(chat.id),
                         onStop: () => widget.state.interruptTurn(chat.id),
                         onVoice: _voiceAvailable

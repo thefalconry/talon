@@ -87,4 +87,16 @@ void main() {
         findsWidgets);
     expect(find.textContaining(kStreamingCaret), findsNothing);
   });
+
+  testWidgets('InlineMarkdownText unescapes quotes and HTML entities without leaking &quot;',
+      (tester) async {
+    await tester.pumpWidget(_host(const InlineMarkdownText(
+      data: 'He said &quot;hello world&quot; and "direct quote"',
+      style: TextStyle(),
+    )));
+    await tester.pump();
+    expect(find.textContaining('&quot;'), findsNothing);
+    expect(find.textContaining('He said "hello world" and "direct quote"'),
+        findsOneWidget);
+  });
 }

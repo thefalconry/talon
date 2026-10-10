@@ -270,10 +270,23 @@ class _ToolStepState extends State<ToolStep> {
             expanded: _expandable ? _expanded : null,
             child: InkWell(
               onTap: _expandable
-                  ? () => setState(() {
-                        _expanded = !_expanded;
+                  ? () {
+                      final willExpand = !_expanded;
+                      setState(() {
+                        _expanded = willExpand;
                         _userToggled = true;
-                      })
+                      });
+                      if (willExpand) {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          if (!mounted) return;
+                          Scrollable.ensureVisible(
+                            context,
+                            alignmentPolicy:
+                                ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+                          );
+                        });
+                      }
+                    }
                   : null,
               borderRadius: TalonRadius.rSm,
               child: Padding(

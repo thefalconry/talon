@@ -5,6 +5,8 @@
 /// and the `hello` event so a mismatch can be detected.
 library;
 
+import 'html_entities.dart';
+
 const int kBridgeProtocolVersion = 1;
 
 enum Role { user, assistant, system }
@@ -419,10 +421,10 @@ class ClientChat {
 
   factory ClientChat.fromJson(Map<String, dynamic> j) => ClientChat(
         id: _string(j['id']),
-        title: _string(j['title'], 'New chat'),
+        title: unescapeHtml(_string(j['title'], 'New chat')),
         createdAt: _int(j['createdAt']),
         lastActive: _int(j['lastActive']),
-        preview: _string(j['preview']),
+        preview: unescapeHtml(_string(j['preview'])),
         model: j['model'] is String ? j['model'] as String : null,
         backend: j['backend'] is String ? j['backend'] as String : null,
         effort: j['effort'] is String ? j['effort'] as String : null,
@@ -706,7 +708,7 @@ class SearchHit {
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
         chatId: _string(j['chatId']),
-        chatTitle: _string(j['chatTitle']),
+        chatTitle: unescapeHtml(_string(j['chatTitle'])),
         message: ClientMessage.fromJson(_map(j['message'])),
       );
 }
