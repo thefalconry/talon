@@ -87,6 +87,12 @@ class _ChatViewState extends State<ChatView> {
   /// jump-to-latest affordance is useful.
   bool _awayFromBottom = false;
 
+  /// Whether the user has actively scrolled away from the bottom.
+  bool _userScrolledAway = false;
+  int _lastMessageCount = 0;
+  bool _lastHistoryLoading = false;
+  ConnState _lastConnState = ConnState.idle;
+
   /// The on-screen chat's live turn. Streamed tokens notify it (not
   /// AppState), so following the growing reply to the bottom hangs off it.
   TurnState? _followedTurn;
@@ -169,6 +175,17 @@ class _ChatViewState extends State<ChatView> {
     final pos = _scroll.position;
     final away = pos.maxScrollExtent - pos.pixels > 420;
     if (away != _awayFromBottom) setState(() => _awayFromBottom = away);
+
+    if (pos.userScrollDirection != ScrollDirection.idle) {
+      if (pos.maxScrollExtent - pos.pixels > 200) {
+        _userScrolledAway = true;
+      } else if (pos.maxScrollExtent - pos.pixels <= 60) {
+        _userScrolledAway = false;
+      }
+    } else if (pos.maxScrollExtent - pos.pixels <= 30) {
+      _userScrolledAway = false;
+    }
+
     // Nearing the top of loaded scrollback → pull the previous page in.
     if (pos.pixels < 240 &&
         !_pendingJumpToBottom &&
@@ -204,6 +221,7 @@ class _ChatViewState extends State<ChatView> {
   }
 
   void _jumpToLatest() {
+    _userScrolledAway = false;
     if (!_scroll.hasClients) return;
     _scroll.animateTo(
       _scroll.position.maxScrollExtent,
@@ -287,16 +305,32 @@ class _ChatViewState extends State<ChatView> {
   }
 
   void _autoScroll(String chatId, int messageCount) {
-    // Opening (or switching to) a chat should land on the newest message. The
-    // history often loads a frame or two after the switch, so keep owing the
-    // jump until the chat actually has content, then snap to the bottom.
+    final historyLoading = widget.state.isHistoryLoading(chatId);
+    final currentConn = widget.state.conn;
+    final connJustConnected = currentConn == ConnState.connected &&
+        _lastConnState != ConnState.connected;
+    final historyJustFinished = !historyLoading && _lastHistoryLoading;
+    final messagesGrew = messageCount > _lastMessageCount;
+
+    // Opening (or switching to) a chat should land on the newest message.
     if (chatId != _anchoredChatId) {
       _anchoredChatId = chatId;
+      _userScrolledAway = false;
+      _pendingJumpToBottom = true;
+      _settleToken++;
+    } else if (!_userScrolledAway &&
+        (connJustConnected || (historyJustFinished && messagesGrew))) {
+      // Server connected or server history finished arriving while user was at
+      // the bottom: re-anchor to the bottom so we don't roll back into older history.
       _pendingJumpToBottom = true;
       _settleToken++;
     }
+
+    _lastConnState = currentConn;
+    _lastHistoryLoading = historyLoading;
+    _lastMessageCount = messageCount;
+
     final token = _settleToken;
-    final historyLoading = widget.state.isHistoryLoading(chatId);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
       if (_pendingJumpToBottom) {
@@ -305,7 +339,15 @@ class _ChatViewState extends State<ChatView> {
           final pos = _scroll.position;
           // If the user actively touches or scrolls during settle, yield to the gesture.
           if (pos.userScrollDirection != ScrollDirection.idle) {
+            _userScrolledAway = true;
             _pendingJumpToBottom = false;
+            return;
+          }
+          if (historyLoading && retry < 60) {
+            // Keep waiting until the authoritative history page arrives.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, lastExtent, 0),
+            );
             return;
           }
           // Hard cap: content that keeps growing (a streaming reply) must not
