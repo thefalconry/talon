@@ -118,7 +118,11 @@ func computerScreenshot(ctx context.Context, request map[string]any) commandResu
 	shot := filepath.Join(dir, "shot.png")
 	// -x no sound, -m primary display only, -C include the pointer.
 	if out, err := runTool(ctx, "/usr/sbin/screencapture", "-x", "-m", "-C", "-t", "png", shot); err != nil {
-		return fail("computer screenshot: screencapture failed: %v %s — talon-node needs Screen Recording in System Settings › Privacy & Security.", err, out)
+		detail := strings.TrimSpace(out)
+		if detail == "" {
+			detail = err.Error()
+		}
+		return fail("computer screenshot: %s", computerScreenCaptureHint(detail))
 	}
 
 	quality := intParam(request, "quality", 70)
