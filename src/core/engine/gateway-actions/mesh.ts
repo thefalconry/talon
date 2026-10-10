@@ -35,7 +35,10 @@ export const meshHandlers: SharedActionHandlers = {
       body.timeout_sec,
     ),
   device_computer: (body) =>
-    getMeshService().computerOnDevice(body.device ?? body.deviceId, body),
+    getMeshService().computerOnDevice(body.device ?? body.deviceId, {
+      ...body,
+      action: body.computer_action,
+    }),
   device_list_dir: (body) =>
     getMeshService().listDirOnDevice(body.device ?? body.deviceId, body.path),
   device_stat: (body) =>

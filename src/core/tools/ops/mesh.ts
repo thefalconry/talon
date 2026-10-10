@@ -162,7 +162,11 @@ export const meshTools: ToolDefinition[] = [
         .optional()
         .describe("snapshot: max elements to list (default 150, max 400)."),
     },
-    execute: (params, bridge) => bridge("device_computer", params),
+    // The bridge envelope's own `action` field names the gateway route, and
+    // `{ action, ...params }` lets a param of the same name overwrite it — so
+    // the desktop action travels as `computer_action` and is mapped back.
+    execute: ({ action, ...rest }, bridge) =>
+      bridge("device_computer", { ...rest, computer_action: action }),
     tag: "mesh",
   },
   {
