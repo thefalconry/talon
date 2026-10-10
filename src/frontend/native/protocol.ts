@@ -17,7 +17,7 @@
  */
 
 import type { HistoryMessage } from "../../storage/history.js";
-import { unescapeHtml } from "../../util/html-entities.js";
+import { unescapeHtml } from "../../util/text/html-entities.js";
 
 /** Wire-format version. Surfaced in `/health` and the `hello` event. */
 export const BRIDGE_PROTOCOL_VERSION = 1;

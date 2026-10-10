@@ -878,15 +878,18 @@ void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved)
     ),
   );
 
-  _savedSnackBarTimer = Timer(const Duration(seconds: 3), () {
+  final timer = Timer(const Duration(seconds: 3), () {
     try {
       controller.close();
     } catch (_) {}
   });
+  _savedSnackBarTimer = timer;
 
+  // Only clear the timer this banner owns: a superseded banner closes after
+  // its replacement is shown and must not cancel the replacement's timer.
   controller.closed.then((_) {
-    _savedSnackBarTimer?.cancel();
-    _savedSnackBarTimer = null;
+    timer.cancel();
+    if (identical(_savedSnackBarTimer, timer)) _savedSnackBarTimer = null;
   });
 }
 

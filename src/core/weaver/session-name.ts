@@ -10,7 +10,7 @@
  * code lived in three handlers and drifted independently.
  */
 
-import { unescapeHtml } from "../../util/html-entities.js";
+import { unescapeHtml } from "../../util/text/html-entities.js";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
