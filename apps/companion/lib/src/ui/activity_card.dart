@@ -241,7 +241,17 @@ class _ReasoningStripState extends State<_ReasoningStrip> {
           button: true,
           expanded: false,
           child: InkWell(
-            onTap: () => setState(() => _userExpanded = true),
+            onTap: () {
+              setState(() => _userExpanded = true);
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (!mounted) return;
+                Scrollable.ensureVisible(
+                  context,
+                  alignmentPolicy:
+                      ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+                );
+              });
+            },
             borderRadius: TalonRadius.rPill,
             child: Container(
               padding: const EdgeInsets.symmetric(
