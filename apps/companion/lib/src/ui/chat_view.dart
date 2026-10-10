@@ -137,7 +137,7 @@ class _ChatViewState extends State<ChatView> {
       _followQueued = false;
       if (!mounted || !_scroll.hasClients) return;
       final pos = _scroll.position;
-      if (pos.maxScrollExtent - pos.pixels < 260) {
+      if (pos.maxScrollExtent - pos.pixels < 600) {
         _scroll.jumpTo(pos.maxScrollExtent);
       }
     });
@@ -170,7 +170,12 @@ class _ChatViewState extends State<ChatView> {
     final away = pos.maxScrollExtent - pos.pixels > 420;
     if (away != _awayFromBottom) setState(() => _awayFromBottom = away);
     // Nearing the top of loaded scrollback → pull the previous page in.
-    if (pos.pixels < 240 && !_pendingJumpToBottom) _maybeLoadOlder();
+    if (pos.pixels < 240 &&
+        !_pendingJumpToBottom &&
+        !widget.state.isHistoryLoading(_anchoredChatId ?? '') &&
+        pos.maxScrollExtent > 300) {
+      _maybeLoadOlder();
+    }
   }
 
   /// Fetch the page above the current scrollback and keep the viewport
@@ -178,9 +183,13 @@ class _ChatViewState extends State<ChatView> {
   /// maxScrollExtent; jump by the delta so nothing visibly shifts).
   Future<void> _maybeLoadOlder() async {
     final chatId = _anchoredChatId;
-    if (chatId == null) return;
+    if (chatId == null || _pendingJumpToBottom) return;
     final state = widget.state;
-    if (state.isLoadingOlder(chatId) || !state.hasMoreHistory(chatId)) return;
+    if (state.isLoadingOlder(chatId) ||
+        state.isHistoryLoading(chatId) ||
+        !state.hasMoreHistory(chatId)) {
+      return;
+    }
     final extentBefore =
         _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
     final pixelsBefore = _scroll.hasClients ? _scroll.position.pixels : 0.0;
@@ -345,7 +354,7 @@ class _ChatViewState extends State<ChatView> {
       final pos = _scroll.position;
       // Otherwise follow live growth only when the user is already near the
       // bottom, so we never yank them up while they're reading scrollback.
-      if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 260) {
+      if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 600) {
         _scroll.animateTo(
           pos.maxScrollExtent,
           duration: const Duration(milliseconds: 160),
