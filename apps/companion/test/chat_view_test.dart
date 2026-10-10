@@ -110,12 +110,17 @@ void main() {
     await tester.pump(const Duration(seconds: 3));
   });
 
-  testWidgets('opens to the bottom even with a tall last message', (tester) async {
+  testWidgets('opens to the bottom even with a tall last message',
+      (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
     final now = DateTime.now();
-    final tallBody = List.generate(80, (i) => 'Line $i: A moderately long sentence explaining something detail oriented.').join('\n\n');
+    final tallBody = List.generate(
+            80,
+            (i) =>
+                'Line $i: A moderately long sentence explaining something detail oriented.')
+        .join('\n\n');
     final state = await seededState({
       'c1': [
         msg('1', Role.user, 'hello', now.subtract(const Duration(minutes: 5))),
@@ -235,7 +240,7 @@ void main() {
     addTearDown(state.dispose);
 
     await tester.pumpWidget(host(state));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
 
     // Verify latest message in c1 is visible
     expect(find.text('Message 29'), findsOneWidget);
@@ -243,14 +248,14 @@ void main() {
     // Switch to c2: must land on latest message in c2
     await state.selectChat('c2');
     await tester.pumpWidget(host(state));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
 
     expect(find.text('Other 39'), findsOneWidget);
 
     // Simulate server connecting while viewing c2
     state.debugSeed(connState: ConnState.connected);
     await tester.pumpWidget(host(state));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 3));
 
     expect(find.text('Other 39'), findsOneWidget);
   });

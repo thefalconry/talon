@@ -217,7 +217,8 @@ void main() {
       final attachments = ComposerAttachments()
         ..uploader =
             uploaderRecording(uploadedNames, streamedBytes: streamedBytes);
-      attachments.addPaths([write('archive.zip', 64).path, write('s.png').path]);
+      attachments
+          .addPaths([write('archive.zip', 64).path, write('s.png').path]);
       List<Attachment>? sentWith;
 
       await tester.pumpWidget(host(Composer(
@@ -232,8 +233,8 @@ void main() {
       // Both staged files are visible, and both went up on staging — before
       // anything was sent.
       expect(find.text('archive.zip'), findsOneWidget);
-      expect(find.bySemanticsLabel(RegExp('Remove archive.zip')),
-          findsOneWidget);
+      expect(
+          find.bySemanticsLabel(RegExp('Remove archive.zip')), findsOneWidget);
       await settle(tester);
       expect(uploadedNames, ['archive.zip', 's.png']);
       // Both uploads run at once, so the smaller file can finish streaming
@@ -440,6 +441,10 @@ void main() {
       expect(call.url, isNot(contains('token')));
       expect(call.headers, {'Authorization': 'Bearer secret'});
       expect(call.mimeType, 'application/zip');
+
+      // Let the saved banner's 3 s auto-dismiss timer run out.
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
     });
 
     testWidgets('long-pressing a chip opens it instead of saving',
@@ -592,19 +597,17 @@ void main() {
               'https://other/media?id=a%2Fb&token=secret', base),
           'http://host:8080/media?id=a%2Fb');
       // A trailing slash on the base doesn't double up.
-      expect(
-          MessageBubble.bridgeMediaUrl('http://x/media?id=q', '$base/'),
+      expect(MessageBubble.bridgeMediaUrl('http://x/media?id=q', '$base/'),
           'http://host:8080/media?id=q');
       // Not a media link: other path, no id, non-http scheme.
-      expect(MessageBubble.bridgeMediaUrl('http://host:8080/other', base),
-          isNull);
-      expect(MessageBubble.bridgeMediaUrl('http://host:8080/media', base),
-          isNull);
-      expect(MessageBubble.bridgeMediaUrl('ftp://host/media?id=q', base),
-          isNull);
-      // No configured bridge base: nothing is ever treated as in-app.
       expect(
-          MessageBubble.bridgeMediaUrl('http://host:8080/media?id=q', ''),
+          MessageBubble.bridgeMediaUrl('http://host:8080/other', base), isNull);
+      expect(
+          MessageBubble.bridgeMediaUrl('http://host:8080/media', base), isNull);
+      expect(
+          MessageBubble.bridgeMediaUrl('ftp://host/media?id=q', base), isNull);
+      // No configured bridge base: nothing is ever treated as in-app.
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/media?id=q', ''),
           isNull);
     });
 
@@ -621,12 +624,13 @@ void main() {
         botName: 'Talon',
       )));
       await tester.pump();
-      final style = DefaultSelectionStyle.of(
-          tester.element(find.text('copy me')));
+      final style =
+          DefaultSelectionStyle.of(tester.element(find.text('copy me')));
       // Not the theme default (accent at 40%), which is invisible on the
       // accent bubble.
       expect(style.selectionColor, MessageBubble.userSelectionColor);
-      expect(style.selectionColor,
+      expect(
+          style.selectionColor,
           isNot(Theme.of(tester.element(find.text('copy me')))
               .textSelectionTheme
               .selectionColor));

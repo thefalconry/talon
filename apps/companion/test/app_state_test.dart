@@ -902,7 +902,8 @@ void main() {
       expect(bridge.eventRequests.length, greaterThanOrEqualTo(2));
     });
 
-    test('reconnectIfStale reconnects immediately if disconnected', () async {
+    test('foreground resume reconnects immediately after a background pause',
+        () async {
       final bridge = await MockBridge.start();
       addTearDown(bridge.close);
       final state = await stateFor(configFor(bridge));
@@ -913,6 +914,8 @@ void main() {
       state.pauseUiStream();
       expect(state.conn, ConnState.idle);
 
+      // What the app does on resume: un-pause, then probe for staleness.
+      state.resumeUiStream();
       state.reconnectIfStale();
       await _waitFor(() => state.conn == ConnState.connected);
       expect(bridge.eventRequests.length, greaterThanOrEqualTo(2));

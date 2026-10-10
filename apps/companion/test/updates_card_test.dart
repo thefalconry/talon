@@ -20,11 +20,18 @@ class _RecordingInstaller implements UpdateInstaller {
   File? installed;
   int quits = 0;
 
+  /// Installs to refuse before succeeding, like a blocked package installer.
+  int failuresLeft = 0;
+
   @override
   Future<Directory> stagingDir() async => dir;
 
   @override
   Future<InstallOutcome> install(File artifact, UpdateRelease release) async {
+    if (failuresLeft > 0) {
+      failuresLeft--;
+      return const InstallOutcome.failed('The installer was blocked.');
+    }
     installed = artifact;
     return const InstallOutcome.restartPending(
       'Restart Talon to finish — it reopens on its own.',
@@ -199,29 +206,31 @@ void main() {
     expect(installer.installed, isNull);
   });
 
-  testWidgets('renders Retry install button when canInstallStaged is true',
+  testWidgets('a refused install offers Retry install without re-downloading',
       (tester) async {
-    final (state, svc, installer) = await harness();
+    var downloads = 0;
+    final (state, svc, installer) = await harness(onRequest: () => downloads++);
     addTearDown(state.dispose);
     addTearDown(svc.dispose);
+    installer.failuresLeft = 1;
 
     await tester.pumpWidget(wrap(state, svc));
+    await tester.tap(find.text('Check now'));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
 
-    await svc.check();
+    await tester.tap(find.text('Download & install'));
     await _settleIo(tester);
 
-    // Stage an artifact
-    final f = File('${tmp.path}${Platform.pathSeparator}talon-companion-android.apk');
-    await f.writeAsBytes(asset);
+    expect(installer.installed, isNull);
+    expect(svc.canInstallStaged, isTrue);
+    final requestsAfterDownload = downloads;
 
-    await svc.downloadAndInstall();
-    await _settleIo(tester);
-
-    expect(find.text('Retry install'), findsOneWidget);
-    await tester.tap(find.text('Retry install'));
+    await tester.tap(find.text('Retry install').first);
     await _settleIo(tester);
 
     expect(installer.installed, isNotNull);
+    expect(downloads, requestsAfterDownload, reason: 'no second download');
+    expect(find.text('Restart now'), findsOneWidget);
   });
 }

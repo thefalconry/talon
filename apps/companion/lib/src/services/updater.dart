@@ -518,6 +518,7 @@ class UpdateService extends ChangeNotifier {
     File? artifact;
     try {
       artifact = potential;
+      _stagedArtifact = null;
       if (await artifact.exists()) await artifact.delete();
 
       final request = http.Request('GET', Uri.parse(rel.assetUrl))
@@ -584,6 +585,11 @@ class UpdateService extends ChangeNotifier {
       }
     } catch (e) {
       AppLog.error('update', 'install failed', e);
+      // A download that never verified (cut short, bad checksum) is deleted,
+      // never left to be retried; only a verified artifact stays staged.
+      if (artifact != null && _stagedArtifact == null) {
+        await _safeDelete(artifact);
+      }
       _error = _friendly(e);
       _setPhase(UpdatePhase.error);
     }
