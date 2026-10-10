@@ -80,7 +80,10 @@ const SSE_PING_MS = 25_000;
  * and gets a fresh `hello`.
  */
 const SSE_MAX_BACKLOG_BYTES = 16 * 1024 * 1024;
-const MAX_BODY_BYTES = 256 * 1024;
+// Device command results ride this route, and a `computer` screenshot is up
+// to 300 KB of JPEG, i.e. ~400 KB once base64'd into JSON. At 256 KB a busy
+// screen's result was rejected and the daemon timed out waiting for it.
+export const MAX_BODY_BYTES = 1024 * 1024;
 
 /**
  * Routes a page served by the bridge itself posts a plain HTML form to
