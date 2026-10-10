@@ -279,6 +279,18 @@ System Settings › Privacy & Security, for the process that runs the node:
   and the daemon turns that into a warning.
 - **Automation › System Events** for `type`, `key` and `snapshot`.
 
+`talon-node permissions` opens the Screen Recording and Accessibility panes
+directly. A failed capture or an untrusted action names the missing grant and
+its pane (`x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`,
+`?Privacy_Accessibility`).
+
+macOS ties these grants to the binary's code signature. Release binaries
+are signed with the project's stable self-signed identity (`Talon Companion`,
+identifier `dev.talon.node`), so the grants survive `update_node`. A binary
+built from source (`go run ./tools/build`, or the daemon building one in a
+dev checkout) is only ad-hoc signed, so macOS treats each such build as a new
+app and asks again.
+
 **Limits.** Primary display only. `snapshot` reads the frontmost window and
 stops at 150 elements or 8 seconds (both adjustable per call), because a web
 page can hold thousands. The audit log records the action name and nothing

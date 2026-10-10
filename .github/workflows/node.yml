@@ -91,11 +91,129 @@ jobs:
       - name: Check Windows PE hardening
         run: node ../../scripts/check-pe-hardening.mjs build/talon-node-windows-amd64.exe
 
+      # Unsigned output: the darwin binaries carry only the linker's ad-hoc
+      # signature here. The sign job below re-signs them on macOS and
+      # recomputes the SHA256SUMS manifest before anything is published.
+      - name: Upload unsigned build
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: talon-node-unsigned
+          path: apps/node/build/*
+          retention-days: 1
+
+  # macOS ties Screen Recording and Accessibility grants (TCC) to the code
+  # signature. The Go linker only ad-hoc signs (Identifier=a.out, no team),
+  # so each release's cdhash was a new app and every node update made the
+  # host owner grant both permissions again. Re-sign the darwin binaries with
+  # the same persistent self-signed "Talon Companion" identity the companion
+  # uses (docs/companion-macos-signing.md) and a fixed identifier: the
+  # designated requirement is then `identifier "dev.talon.node" and
+  # certificate leaf = H"…"` for every release, and grants carry over.
+  # codesign only runs on macOS, hence the separate job. Checksums,
+  # attestations and the release upload all happen after signing so the
+  # published digests match the signed files.
+  sign:
+    name: Sign macOS binaries & publish
+    needs: build
+    runs-on: macos-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download unsigned build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: talon-node-unsigned
+          path: build
+
+      - name: Set up macOS signing identity
+        env:
+          SIGNING_P12: ${{ secrets.TALON_MAC_SIGNING_P12 }}
+          SIGNING_PASSWORD: ${{ secrets.TALON_MAC_SIGNING_PASSWORD }}
+          IS_RELEASE: ${{ github.event_name == 'release' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SIGNING_P12" ]; then
+            MSG="TALON_MAC_SIGNING_P12 is not set — signing talon-node ad-hoc. Screen Recording and Accessibility grants will not survive this update on users' Macs."
+            if [ "$IS_RELEASE" = "true" ]; then
+              echo "::warning::$MSG"
+            else
+              echo "$MSG"
+            fi
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/talon-signing.keychain-db"
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          P12="$RUNNER_TEMP/talon-signing.p12"
+          printf '%s' "$SIGNING_P12" | base64 -d > "$P12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$P12" -k "$KEYCHAIN" -P "$SIGNING_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          rm -f "$P12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          # Self-signed, so not "valid" for policy purposes (no -v): match by
+          # name among all codesigning identities.
+          if ! security find-identity -p codesigning "$KEYCHAIN" | grep -q '"Talon Companion"'; then
+            echo "::error::TALON_MAC_SIGNING_P12 has no \"Talon Companion\" codesigning identity"
+            security find-identity -p codesigning "$KEYCHAIN"
+            exit 1
+          fi
+          echo "TALON_MAC_SIGNING_IDENTITY=Talon Companion" >> "$GITHUB_ENV"
+          echo "TALON_MAC_SIGNING_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Sign darwin binaries
+        working-directory: build
+        run: |
+          set -euo pipefail
+          IDENTITY="${TALON_MAC_SIGNING_IDENTITY:--}"
+          KEYCHAIN_ARGS=()
+          if [ -n "${TALON_MAC_SIGNING_KEYCHAIN:-}" ]; then
+            KEYCHAIN_ARGS=(--keychain "$TALON_MAC_SIGNING_KEYCHAIN")
+          fi
+          # Artifacts drop the executable bit; restore it on every binary.
+          chmod +x talon-node-*-*
+          for bin in talon-node-darwin-amd64 talon-node-darwin-arm64; do
+            test -f "$bin" || { echo "::error::$bin missing from the build"; exit 1; }
+            codesign --force --sign "$IDENTITY" "${KEYCHAIN_ARGS[@]}" \
+              --identifier dev.talon.node "$bin"
+            codesign --verify --strict "$bin"
+            codesign --display --verbose=2 "$bin" 2>&1 | grep -E '^(Identifier|Authority|Signature|TeamIdentifier)='
+            codesign --display --requirements - "$bin" 2>&1 | tail -n 1
+            if [ "$IDENTITY" != "-" ] && ! codesign --display --verbose=2 "$bin" 2>&1 | grep -q '^Authority=Talon Companion$'; then
+              echo "::error::$bin is not signed by Talon Companion"
+              exit 1
+            fi
+          done
+
+      # Same "<hex>  <name>" format and order as tools/build (bytewise sort),
+      # recomputed over the signed files: the daemon's resolver verifies
+      # downloads against this manifest.
+      - name: Recompute SHA256SUMS
+        working-directory: build
+        run: |
+          set -euo pipefail
+          ls talon-node-* | grep -v '^talon-node-SHA256SUMS$' | LC_ALL=C sort \
+            | xargs shasum -a 256 > talon-node-SHA256SUMS.new
+          mv talon-node-SHA256SUMS.new talon-node-SHA256SUMS
+          cat talon-node-SHA256SUMS
+          shasum -a 256 -c talon-node-SHA256SUMS
+
+      - name: Remove signing keychain
+        if: always()
+        run: |
+          if [ -n "${TALON_MAC_SIGNING_KEYCHAIN:-}" ]; then
+            security delete-keychain "$TALON_MAC_SIGNING_KEYCHAIN" || true
+          fi
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: talon-node-binaries
-          path: apps/node/build/*
+          path: build/*
 
       # SLSA build provenance for every binary plus talon-node-SHA256SUMS,
       # verifiable with `gh attestation verify <file> --repo thefalconry/talon`
@@ -104,10 +222,10 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: apps/node/build/*
+          subject-path: build/*
 
       - name: Attach binaries to release
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" build/* --clobber
+        run: gh release upload "${{ github.event.release.tag_name }}" build/* --clobber --repo "$GITHUB_REPOSITORY"

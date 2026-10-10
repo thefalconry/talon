@@ -69,6 +69,9 @@ Usage:
   talon-node status     Show config, bridge reachability, service state, and
                         the last commands run here
   talon-node audit      Print the on-device command log (-n <count>, --json)
+  talon-node permissions
+                        macOS: open the Screen Recording and Accessibility
+                        panes the computer capability needs
   talon-node version    Print the version
 
 Flags (run/install/status):
@@ -114,6 +117,8 @@ func main() {
 		statusCmd(cfg)
 	case "audit":
 		auditCmd(rest)
+	case "permissions":
+		permissionsCmd()
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":

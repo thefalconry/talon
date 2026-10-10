@@ -133,3 +133,14 @@ attaches the binaries plus `talon-node-SHA256SUMS` to published releases.
 The version.txt drift guard runs on PRs only — release builds stamp from
 the tag, so a stale release PR can no longer ship a release with no node
 binaries.
+
+A second job on a macOS runner re-signs `talon-node-darwin-amd64` and
+`talon-node-darwin-arm64` with the persistent self-signed `Talon Companion`
+identity (same secrets as the companion, see
+[companion-macos-signing.md](companion-macos-signing.md)) and the fixed
+identifier `dev.talon.node`, then recomputes `talon-node-SHA256SUMS` and does
+the attestation and release upload. macOS ties Screen Recording and
+Accessibility grants to the signature, so with a stable identity they survive
+`update_node`. The source-build tier above compiles on the daemon host and
+cannot sign with that identity: a darwin binary built that way is ad-hoc
+signed, and macOS asks for both grants again after the update.

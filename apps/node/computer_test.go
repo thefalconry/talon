@@ -85,3 +85,21 @@ func TestComputerPermissionHint(t *testing.T) {
 		t.Errorf("an ordinary error was decorated: %q", got)
 	}
 }
+
+func TestComputerHintsLinkTheExactPrivacyPane(t *testing.T) {
+	shot := computerScreenCaptureHint("could not create image from display")
+	for _, want := range []string{"could not create image from display", "Screen Recording", "?Privacy_ScreenCapture", "talon-node permissions"} {
+		if !strings.Contains(shot, want) {
+			t.Errorf("screen capture hint %q is missing %q", shot, want)
+		}
+	}
+	for _, msg := range []string{"osascript is not allowed assistive access. (-1719)", "click did nothing"} {
+		trusted := !strings.Contains(msg, "click")
+		if got := computerPermissionHint(msg, trusted); !strings.Contains(got, "?Privacy_Accessibility") {
+			t.Errorf("accessibility hint %q does not link the pane", got)
+		}
+	}
+	if got := computerPermissionHint("Not authorized to send Apple events (-1743)", true); !strings.Contains(got, "?Privacy_Automation") {
+		t.Errorf("automation hint %q does not link the pane", got)
+	}
+}
