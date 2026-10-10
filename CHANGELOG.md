@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.36.0](https://github.com/thefalconry/talon/compare/v5.35.1...v5.36.0) (2026-10-10)
+
+
+### Features
+
+* **mesh:** desktop control for macOS nodes ([#1274](https://github.com/thefalconry/talon/issues/1274)) ([36414b1](https://github.com/thefalconry/talon/commit/36414b1952d0c385a6e00a40524b2bf0cb799aa7))
+* **telegram:** allow configured operators to manage auth ([#1275](https://github.com/thefalconry/talon/issues/1275)) ([6d20f3b](https://github.com/thefalconry/talon/commit/6d20f3bf63ed55583a377679047ff9995c62fdd6))
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump the production-dependencies group across 1 directory with 4 updates ([#1270](https://github.com/thefalconry/talon/issues/1270)) ([7aaf668](https://github.com/thefalconry/talon/commit/7aaf668c5eecd5b95ba633de243674583c2b2f7c))
+
 ## [5.35.1](https://github.com/thefalconry/talon/compare/v5.35.0...v5.35.1) (2026-10-09)
 
 
