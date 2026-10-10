@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.36.1](https://github.com/thefalconry/talon/compare/v5.36.0...v5.36.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **companion:** Fede2782's companion fixes (banner, entities, reconnect, updater, scroll) ([#1277](https://github.com/thefalconry/talon/issues/1277)) ([2ab2dbe](https://github.com/thefalconry/talon/commit/2ab2dbe6cf21eef96f18ea2ec46f7933438c6a0a))
+
 ## [5.36.0](https://github.com/thefalconry/talon/compare/v5.35.1...v5.36.0) (2026-10-10)
 
 
