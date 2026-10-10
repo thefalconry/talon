@@ -459,6 +459,49 @@ void main() {
       await svc.applyAndRestart();
       expect(installer.quits, 1);
     });
+
+    test('installer failure keeps verified artifact and allows installStaged retry without re-downloading', () async {
+      int downloads = 0;
+      final prefs = await freshPrefs();
+      final installer = _FakeInstaller(
+        tmp,
+        outcome: const InstallOutcome.failed('Permission denied / Auto Blocker active'),
+      );
+      final client = MockClient((req) async {
+        if (req.url.path.endsWith('.apk')) {
+          downloads++;
+          return http.Response.bytes(apk, 200);
+        }
+        return http.Response(
+          jsonEncode(
+              _feed(tag: 'v4.2.0', apkBytes: apk, withDigest: true)),
+          200,
+        );
+      });
+      final svc = UpdateService(
+        prefs: prefs,
+        client: client,
+        installer: installer,
+        versionProvider: () async => '4.1.0',
+        platform: 'android',
+      );
+      addTearDown(svc.dispose);
+      await svc.check();
+
+      await svc.downloadAndInstall();
+      expect(svc.phase, UpdatePhase.error);
+      expect(downloads, 1);
+      expect(svc.canInstallStaged, isTrue);
+
+      // Retrying directly with installStaged does not re-download
+      await svc.installStaged();
+      expect(downloads, 1);
+      expect(svc.canInstallStaged, isTrue);
+
+      // Calling downloadAndInstall when already staged re-uses existing file
+      await svc.downloadAndInstall();
+      expect(downloads, 1);
+    });
   });
 
   group('desktop staging directory', () {
