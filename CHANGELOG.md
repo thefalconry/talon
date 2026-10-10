@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.36.3](https://github.com/thefalconry/talon/compare/v5.36.2...v5.36.3) (2026-10-10)
+
+
+### Bug Fixes
+
+* **node:** sign macOS talon-node with a stable identity so privacy grants survive updates ([#1281](https://github.com/thefalconry/talon/issues/1281)) ([f0dd4ee](https://github.com/thefalconry/talon/commit/f0dd4ee6e376d1903780b8cb74383e41e6b87fa4))
+
 ## [5.36.2](https://github.com/thefalconry/talon/compare/v5.36.1...v5.36.2) (2026-10-10)
 
 

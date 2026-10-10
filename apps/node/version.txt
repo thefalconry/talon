@@ -1,1 +1,1 @@
-5.36.2 # x-release-please-version
+5.36.3 # x-release-please-version
