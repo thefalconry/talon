@@ -130,8 +130,10 @@ class AppState extends ChangeNotifier {
       scheduleMicrotask(() {
         if (_disposed || selectedChatId != id) return;
         markRead(id);
+        final needLoad = !_loadedHistory.contains(id);
+        if (needLoad) _loadingHistory.add(id);
         notifyListeners();
-        if (!_loadedHistory.contains(id)) unawaited(_loadHistory(id));
+        if (needLoad) unawaited(_loadHistory(id));
       });
     }
   }
@@ -724,9 +726,14 @@ class AppState extends ChangeNotifier {
     selectedChatId = chatId;
     if (previous != null && previous != chatId) trimHistory(previous);
     markRead(chatId);
+    final needLoad = !_loadedHistory.contains(chatId);
+    if (needLoad) _loadingHistory.add(chatId);
     notifyListeners();
-    if (!_loadedHistory.contains(chatId)) await _loadHistory(chatId);
+    if (needLoad) await _loadHistory(chatId);
   }
+
+  /// Whether the initial history page for [chatId] has been loaded from the daemon.
+  bool hasLoadedHistory(String chatId) => _loadedHistory.contains(chatId);
 
   // ── Unread tracking ────────────────────────────────────────────────────────
 
