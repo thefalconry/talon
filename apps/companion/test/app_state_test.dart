@@ -883,6 +883,40 @@ void main() {
       await _waitFor(() => bridge.eventRequests.length == 2);
       await _waitFor(() => state.conn == ConnState.connected);
     });
+
+    test('resumeUiStream resets backoff and reconnects immediately', () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final state = await stateFor(configFor(bridge));
+      addTearDown(state.dispose);
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+
+      state.pauseUiStream();
+      expect(state.conn, ConnState.idle);
+      expect(state.uiStreamPaused, isTrue);
+
+      state.resumeUiStream();
+      expect(state.uiStreamPaused, isFalse);
+      await _waitFor(() => state.conn == ConnState.connected);
+      expect(bridge.eventRequests.length, greaterThanOrEqualTo(2));
+    });
+
+    test('reconnectIfStale reconnects immediately if disconnected', () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final state = await stateFor(configFor(bridge));
+      addTearDown(state.dispose);
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+
+      state.pauseUiStream();
+      expect(state.conn, ConnState.idle);
+
+      state.reconnectIfStale();
+      await _waitFor(() => state.conn == ConnState.connected);
+      expect(bridge.eventRequests.length, greaterThanOrEqualTo(2));
+    });
   });
 }
 
