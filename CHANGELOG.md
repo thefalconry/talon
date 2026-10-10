@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.36.2](https://github.com/thefalconry/talon/compare/v5.36.1...v5.36.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* **mesh:** device_computer's action param no longer overwrites the bridge route ([#1279](https://github.com/thefalconry/talon/issues/1279)) ([db49ac3](https://github.com/thefalconry/talon/commit/db49ac3412da8cf64862767cc77e0623d5d08679))
+
 ## [5.36.1](https://github.com/thefalconry/talon/compare/v5.36.0...v5.36.1) (2026-10-10)
 
 
