@@ -68,6 +68,7 @@ const meshFixture = JSON.parse(
 ) as {
   protocol: number;
   nodeCapabilities: string[];
+  nodeDesktopCapabilities: string[];
   companionCoreCapabilities: string[];
   companionDeviceControlCapabilities: string[];
   registration: Record<string, unknown>;
@@ -231,6 +232,7 @@ describe("events fixture (protocol/fixtures/events_v1.json)", () => {
   it("device_command samples use advertised capability names", () => {
     const known = new Set([
       ...meshFixture.nodeCapabilities,
+      ...meshFixture.nodeDesktopCapabilities,
       ...meshFixture.companionCoreCapabilities,
       ...meshFixture.companionDeviceControlCapabilities,
     ]);
@@ -293,6 +295,7 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
   it("capability lists are canonical and within registry bounds", () => {
     for (const list of [
       meshFixture.nodeCapabilities,
+      [...meshFixture.nodeCapabilities, ...meshFixture.nodeDesktopCapabilities],
       meshFixture.companionCoreCapabilities,
       meshFixture.companionDeviceControlCapabilities,
     ]) {
@@ -315,6 +318,7 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
     const sampled = new Set(meshFixture.commands.map((c) => c.command.name));
     for (const name of [
       ...meshFixture.nodeCapabilities,
+      ...meshFixture.nodeDesktopCapabilities,
       ...meshFixture.companionCoreCapabilities,
       ...meshFixture.companionDeviceControlCapabilities,
     ]) {
@@ -326,6 +330,7 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
     // And no sample invents a command outside the advertised surfaces.
     const known = new Set([
       ...meshFixture.nodeCapabilities,
+      ...meshFixture.nodeDesktopCapabilities,
       ...meshFixture.companionCoreCapabilities,
       ...meshFixture.companionDeviceControlCapabilities,
     ]);
@@ -334,9 +339,10 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
 
   it("commands marked node-unsupported are outside the node's surface", () => {
     for (const entry of meshFixture.commands) {
-      const inNodeList = meshFixture.nodeCapabilities.includes(
-        entry.command.name,
-      );
+      const inNodeList = [
+        ...meshFixture.nodeCapabilities,
+        ...meshFixture.nodeDesktopCapabilities,
+      ].includes(entry.command.name);
       expect(inNodeList).toBe(!entry.nodeUnsupported);
     }
   });

@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical mesh/device wire samples for Bridge Protocol v1: registration bodies, device/location shapes, the full device_command surface with canonical params, and command-result shapes. Asserted by all three implementations — the daemon validates registrations/locations through its real normalizers (protocol-conformance.test.ts), talon-node executes the `run: true` commands through its real dispatch and asserts capability parity (protocol_conformance_test.go), and the companion asserts capability parity and runs the DeviceExec subset (protocol_conformance_test.dart). `{{TMP}}` in params is replaced by each executor test with a sandbox directory it seeds from `sandboxFiles`. `dataKeys` lists result-data keys BOTH device implementations must produce for that command — the daemon's tools read these names. `transfer: true` marks the streamed transfer commands: each suite serves `transferBody` for the push token and accepts the pull upload on a fake /devices/file, then checks the `sha256` both ways (the push param is the body's digest; the device reports the digest of what it moved).",
+  "_comment": "Canonical mesh/device wire samples for Bridge Protocol v1: registration bodies, device/location shapes, the full device_command surface with canonical params, and command-result shapes. `nodeDesktopCapabilities` are node commands only some platforms implement (today: `computer` on macOS), advertised on top of `nodeCapabilities` where available. Asserted by all three implementations — the daemon validates registrations/locations through its real normalizers (protocol-conformance.test.ts), talon-node executes the `run: true` commands through its real dispatch and asserts capability parity (protocol_conformance_test.go), and the companion asserts capability parity and runs the DeviceExec subset (protocol_conformance_test.dart). `{{TMP}}` in params is replaced by each executor test with a sandbox directory it seeds from `sandboxFiles`. `dataKeys` lists result-data keys BOTH device implementations must produce for that command — the daemon's tools read these names. `transfer: true` marks the streamed transfer commands: each suite serves `transferBody` for the push token and accepts the pull upload on a fake /devices/file, then checks the `sha256` both ways (the push param is the body's digest; the device reports the digest of what it moved).",
   "protocol": 1,
   "nodeCapabilities": [
     "ring",
@@ -16,6 +16,7 @@
     "download_file",
     "update_node"
   ],
+  "nodeDesktopCapabilities": ["computer"],
   "companionCoreCapabilities": ["locate", "ring", "status"],
   "companionDeviceControlCapabilities": [
     "exec",
@@ -273,6 +274,17 @@
           "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
           "allow_downgrade": true
         }
+      }
+    },
+    {
+      "run": false,
+      "expectOk": true,
+      "dataKeys": ["space", "cursor", "trusted"],
+      "command": {
+        "id": "cmd_computer",
+        "deviceId": "dev_node01",
+        "name": "computer",
+        "params": { "action": "click", "x": 640, "y": 360, "button": "left", "count": 1 }
       }
     },
     {

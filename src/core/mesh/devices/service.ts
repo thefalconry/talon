@@ -49,6 +49,11 @@ import {
   resolveNodeBinary,
   type NodeBinaryResolver,
 } from "../links/node-binaries.js";
+import {
+  COMPUTER_COMMAND_TIMEOUT_MS,
+  computerCommandParams,
+  formatComputerResult,
+} from "./computer.js";
 import { MeshRegistry } from "./registry.js";
 import {
   auditErrorText,
@@ -686,6 +691,30 @@ export class MeshService {
       ok: dispatched.result.ok,
       text: formatExecResult(dispatched.target, dispatched.result),
     };
+  }
+
+  /**
+   * `device_computer`: look at and drive a device's desktop (screenshot,
+   * accessibility snapshot, pointer, keyboard). See devices/computer.ts.
+   */
+  async computerOnDevice(
+    query: unknown,
+    input: Record<string, unknown>,
+  ): Promise<MeshToolResult> {
+    const built = computerCommandParams(input);
+    if ("error" in built) return { ok: false, text: built.error };
+    const dispatched = await this.dispatchCommand(
+      query,
+      "computer",
+      built.params,
+      COMPUTER_COMMAND_TIMEOUT_MS,
+    );
+    if ("error" in dispatched) return { ok: false, text: dispatched.error };
+    return formatComputerResult(
+      dispatched.target,
+      built.action,
+      dispatched.result,
+    );
   }
 
   /** `device_list_dir`: list a directory on the device. */

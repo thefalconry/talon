@@ -53,7 +53,12 @@ The node's `appVersion` tracks the Talon release it was built against
 matches, and `update_node` streams a new binary + verifies + swaps + restarts
 in place — see `apps/node/README.md`.
 
-No daemon-side changes were needed — headless nodes registered against an
+A node on macOS additionally advertises `computer` (screenshot,
+accessibility snapshot, pointer and keyboard), which the daemon exposes as
+the `device_computer` tool — see "Desktop control" in `apps/node/README.md`.
+Other platforms recognise the command and answer that it is unavailable.
+
+Apart from that one tool, no daemon-side changes were needed — headless nodes registered against an
 unmodified bridge.
 
 ## Deploying a node

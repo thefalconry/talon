@@ -108,6 +108,7 @@ touch the config directory or the node's own binary.
 "policy": {
   "disableExec": true,
   "disableUpdate": false,
+  "disableComputer": false,
   "readPaths": ["/srv/share", "/var/log"],
   "writePaths": ["/srv/share"],
   "maxConcurrent": 8,
@@ -115,14 +116,15 @@ touch the config directory or the node's own binary.
 }
 ```
 
-| Key             | Effect                                                                                  | Default   |
-| --------------- | --------------------------------------------------------------------------------------- | --------- |
-| `disableExec`   | refuse `exec` (shell) and stop advertising it                                           | `false`   |
-| `disableUpdate` | refuse `update_node` and stop advertising it                                            | `false`   |
-| `readPaths`     | confine `read_file` / `list_dir` / `stat` / `upload_file` to these trees                | anywhere  |
-| `writePaths`    | confine `write_file` / `delete` / `mkdir` / `move` / `download_file` to these trees     | anywhere  |
-| `maxConcurrent` | commands running at once. 32 more can queue. Beyond that the answer is "busy"           | `8`       |
-| `maxWriteBytes` | largest file `write_file` / `download_file` may produce                                 | 4 GiB     |
+| Key               | Effect                                                                              | Default  |
+| ----------------- | ----------------------------------------------------------------------------------- | -------- |
+| `disableExec`     | refuse `exec` (shell) and stop advertising it                                       | `false`  |
+| `disableUpdate`   | refuse `update_node` and stop advertising it                                        | `false`  |
+| `disableComputer` | refuse `computer` (screen capture, pointer, keyboard) and stop advertising it       | `false`  |
+| `readPaths`       | confine `read_file` / `list_dir` / `stat` / `upload_file` to these trees            | anywhere |
+| `writePaths`      | confine `write_file` / `delete` / `mkdir` / `move` / `download_file` to these trees | anywhere |
+| `maxConcurrent`   | commands running at once. 32 more can queue. Beyond that the answer is "busy"       | `8`      |
+| `maxWriteBytes`   | largest file `write_file` / `download_file` may produce                             | 4 GiB    |
 
 Paths are checked after resolving symlinks. Path limits only mean something
 with `disableExec`, because a shell can reach any file.
@@ -133,7 +135,15 @@ Every mesh command the node runs is logged to `audit.jsonl` next to
 `config.json` (0600, the newest 500–999 entries). One JSON line per command:
 
 ```json
-{"time":"2026-09-28T10:00:00Z","commandId":"…","name":"exec","target":"sha256:…","ok":true,"durationMs":12,"credential":"device:0123456789abcdef"}
+{
+  "time": "2026-09-28T10:00:00Z",
+  "commandId": "…",
+  "name": "exec",
+  "target": "sha256:…",
+  "ok": true,
+  "durationMs": 12,
+  "credential": "device:0123456789abcdef"
+}
 ```
 
 `target` is the path a filesystem command touched (`from -> to` for
@@ -231,3 +241,51 @@ Headless nodes do not advertise `locate` (no GPS) or `install_apk`
 equivalent self-update. Everything else matches the app's device-control
 surface, including the capped exec output contract (192 KB head + rolling
 64 KB tail) that teleport's cwd tracking depends on.
+
+## Desktop control (`computer`, macOS)
+
+A node on a Mac also advertises `computer`: the daemon can look at the
+desktop and operate it. One command, eight actions:
+
+| Action       | What it does                                                                      |
+| ------------ | --------------------------------------------------------------------------------- |
+| `screenshot` | the primary display as a JPEG                                                     |
+| `snapshot`   | the frontmost window's accessibility tree: each control, its name, where to click |
+| `click`      | `x`, `y`, optional `button`, `count` (double/triple), `modifiers`                 |
+| `move`       | move the pointer                                                                  |
+| `drag`       | press at `x`,`y`, release at `toX`,`toY`                                          |
+| `scroll`     | `dy` / `dx` in lines, optionally aimed at `x`,`y` first                           |
+| `type`       | type `text` into whatever has keyboard focus                                      |
+| `key`        | one key with modifiers, e.g. `cmd+s`, `escape`                                    |
+
+**One coordinate space.** The primary display is mapped onto a space whose
+longest edge is at most 1280, and the screenshot is rendered at exactly that
+size. A pixel in the image, a position in a snapshot and a click target are
+the same pair of numbers, on Retina and non-Retina displays alike.
+
+**Nothing to install.** Capture is `screencapture` + `sips`; the pointer is
+CoreGraphics events and the keyboard and accessibility tree are System
+Events, both driven through `osascript` (JXA). The script is compiled into
+the binary and passed inline, so nothing is written to disk and the node
+stays a single static file with no cgo.
+
+**Permissions.** macOS asks the host owner three times, once each, under
+System Settings › Privacy & Security, for the process that runs the node:
+
+- **Screen Recording** for `screenshot`. Without it macOS hands back the
+  wallpaper with no windows on it, and nothing reports an error.
+- **Accessibility** for `click`, `move`, `drag`, `scroll`, `type`, `key`.
+  Without it the events are dropped; every result carries `trusted: false`
+  and the daemon turns that into a warning.
+- **Automation › System Events** for `type`, `key` and `snapshot`.
+
+**Limits.** Primary display only. `snapshot` reads the frontmost window and
+stops at 150 elements or 8 seconds (both adjustable per call), because a web
+page can hold thousands. The audit log records the action name and nothing
+else: typed text can be a password.
+
+Set `"disableComputer": true` in the policy block to turn it off. It is on
+by default for the same reason `exec` is: a node that runs shell commands
+can already run `osascript`, so the switch that matters for an untrusted
+daemon is `disableExec`, and this one exists for hosts that want a shell
+but not a hand on the mouse.
