@@ -194,3 +194,22 @@ describe("formatComputerResult", () => {
     });
   });
 });
+
+describe("device_computer tool → bridge envelope", () => {
+  it("keeps the gateway route when the desktop action is also called `action`", async () => {
+    const { meshTools } = await import("../core/tools/ops/mesh.js");
+    const tool = meshTools.find((t) => t.name === "device_computer");
+    expect(tool).toBeDefined();
+    let envelope: Record<string, unknown> = {};
+    // Mirror bridge.ts, which posts `{ action, ...params }`.
+    await tool!.execute(
+      { device: "mac-mini", action: "screenshot" },
+      async (action, params) => {
+        envelope = { action, ...params };
+        return undefined;
+      },
+    );
+    expect(envelope.action).toBe("device_computer");
+    expect(envelope.computer_action).toBe("screenshot");
+  });
+});
