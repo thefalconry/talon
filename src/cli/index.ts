@@ -31,7 +31,12 @@ import { viewConfig } from "./config-view.js";
 import { runLogsCommand } from "./logs.js";
 import { runDoctor } from "./doctor.js";
 import { startChat } from "./chat.js";
-import { daemonStart, daemonStop, daemonRestart } from "./daemon.js";
+import {
+  daemonStart,
+  daemonStop,
+  daemonRestart,
+  daemonWatchdog,
+} from "./daemon.js";
 import { showTasks, killTask } from "./tasks.js";
 import { showEvents } from "./events.js";
 import { runPluginCommand } from "./plugin.js";
@@ -55,6 +60,7 @@ const CLI_COMMANDS = [
   "start",
   "stop",
   "restart",
+  "watchdog",
   "run",
   "chat",
   "doctor",
@@ -94,6 +100,9 @@ function printHelp(): void {
   console.log(`    ${pc.cyan("start")}      Start as background daemon`);
   console.log(`    ${pc.cyan("stop")}       Stop the daemon`);
   console.log(`    ${pc.cyan("restart")}    Restart the daemon`);
+  console.log(
+    `    ${pc.cyan("watchdog")}   Start the daemon if it is down (one check, for a timer)`,
+  );
   console.log(`    ${pc.cyan("run")}        Run in foreground (attached)`);
   console.log(`    ${pc.cyan("chat")}       Terminal chat mode`);
   console.log(`    ${pc.cyan("status")}     Show bot health`);
@@ -173,6 +182,7 @@ const COMMANDS: Record<string, CommandHandler> = {
     printBanner();
     await daemonRestart();
   },
+  watchdog: () => daemonWatchdog(),
   run: () => {
     process.chdir(PKG_ROOT);
     void import("../index.js");

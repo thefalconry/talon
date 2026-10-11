@@ -106,6 +106,11 @@ talon status                 # as youruser
 above. `talon run` stays in the foreground, which is what systemd expects
 (`talon start` would fork away from it).
 
+If you'd rather keep starting Talon with `talon start`, don't install the
+unit above: add the [watchdog](watchdog.md) timer instead, which starts the
+daemon when it is down and leaves it alone after a `talon stop`. Use one or
+the other, never both.
+
 Open the port on the firewall:
 
 ```bash
