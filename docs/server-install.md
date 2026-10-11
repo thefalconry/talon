@@ -142,7 +142,9 @@ See [headless-node.md](headless-node.md).
 
 The token grants the whole bridge API, so don't forward port 19880 on your
 router. Use a VPN or tailnet, or put a reverse proxy with client
-certificates in front ([mtls.md](mtls.md)).
+certificates in front ([mtls.md](mtls.md)). If you use a proxy, validate
+its config before every reload
+([mtls.md](mtls.md#2-configure-the-proxy), "Changing the proxy config").
 
 ## Troubleshooting
 
