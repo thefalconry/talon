@@ -16,6 +16,10 @@ import {
 import { REASONING_LEVEL_ORDER } from "../models/reasoning-levels.js";
 import { DEFAULT_BACKUP_SETTINGS } from "../backup/plan.js";
 import {
+  MAX_MESH_ENDPOINTS,
+  parseDialAddress,
+} from "../mesh/links/endpoints.js";
+import {
   assembleSystemPrompt,
   joinSystemPromptParts,
   type SystemPromptParts,
@@ -243,6 +247,41 @@ const nativeConfigSchema = z
     publicUrl: z
       .string()
       .regex(/^https?:\/\/\S+$/, "native.publicUrl must be an http(s) URL")
+      .optional(),
+    /**
+     * Other ways devices can reach this bridge, advertised to every device
+     * in its heartbeat reply so it can fail over when one stops working
+     * (e.g. DNS is down). `publicUrl` always stays first. Each entry is a
+     * `url` (https; its host goes in TLS SNI and Host) and an optional
+     * `dial` — an IP literal and port to connect to instead of resolving
+     * that host, e.g. `{ "url": "https://mesh.example.org", "dial":
+     * "203.0.113.7:443" }`. Every entry must present this bridge's own
+     * certificate: devices keep the pin they hold and refuse any other.
+     * Unset (default) = nothing is advertised; `[]` tells devices to
+     * forget a list they learned before.
+     */
+    endpoints: z
+      .array(
+        z
+          .object({
+            url: z
+              .string()
+              .regex(
+                /^https:\/\/[^\s"'`$\\%?#@]+$/,
+                "native.endpoints[].url must be a plain https URL",
+              ),
+            dial: z
+              .string()
+              .refine(
+                (v) => parseDialAddress(v) !== null,
+                "native.endpoints[].dial must be an IP literal and port, e.g. 203.0.113.7:443 or [2001:db8::1]:443",
+              )
+              .optional(),
+            label: z.string().max(64).optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_MESH_ENDPOINTS)
       .optional(),
     /**
      * Accept the shared `token` from remote (non-loopback, or proxied)

@@ -19,6 +19,10 @@ works out of the box.
   the node verifies its hash, atomically swaps its own binary, and restarts
   into it (in-place `execve` on Linux/macOS, so the mesh reconnects in
   seconds). Version tracks the Talon release it was built against.
+- **Prompt reconnects across daemon restarts**: the daemon ends each event
+  stream with a restart notice (`bye`, `reason: "restart"`); the node waits
+  the advertised delay, then retries every second for up to two minutes
+  instead of climbing its 1 s → 30 s backoff.
 
 ## Quick start
 
@@ -76,6 +80,12 @@ When the node pins a certificate on first use it logs a banner with the
 fingerprint. Compare it with the `Bridge TLS` line of `talon status` on the
 daemon host. If they differ, stop the node, delete `fingerprint` from the
 config and reconnect with `--fingerprint <the daemon's value>`.
+
+`endpoints` and `endpointsVersion` appear once the daemon advertises
+fallback ways to reach the bridge (`native.endpoints`). The node writes
+them itself. `bridge` is always tried first, and every fallback must present
+the pinned certificate. See
+[Fallback endpoints](../../docs/headless-node.md#fallback-endpoints).
 
 ### Strict TLS (opt-in)
 

@@ -39,6 +39,9 @@ type registerReply struct {
 	OK         bool            `json:"ok"`
 	DeviceID   string          `json:"deviceId"`
 	Credential *credentialHint `json:"credential,omitempty"`
+	// Endpoints is the other ways to reach the bridge (endpoints.go);
+	// absent from older daemons.
+	Endpoints *advertisedEndpoints `json:"endpoints,omitempty"`
 }
 
 type credentialHint struct {

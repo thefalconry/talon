@@ -43,6 +43,7 @@ import { contentTypeFor, safeUploadName } from "../media/media.js";
 import { type BridgeEvent } from "../protocol.js";
 import { buildRoutes } from "./routes/index.js";
 import type { BridgeServerHandlers, RouteHost } from "./routes/host.js";
+import type { AdvertisedEndpoints } from "../../../core/mesh/links/endpoints.js";
 import {
   BRIDGE_ROUTE_AUTH,
   QUERY_TOKEN_ROUTES,
@@ -192,6 +193,11 @@ export class BridgeServer {
        * (±10% jitter) so clients re-authenticate. Unset = never.
        */
       sseMaxLifetimeMs?: number;
+      /**
+       * `native.endpoints`, resolved: the other ways devices can reach this
+       * bridge, sent in every device's register reply. Absent = no field.
+       */
+      endpoints?: AdvertisedEndpoints;
       /** Overrides for tests; production uses the defaults. */
       authPolicy?: Partial<AuthGuardPolicy>;
       timeouts?: Partial<BridgeTimeouts>;
@@ -482,12 +488,32 @@ export class BridgeServer {
     });
   }
 
-  async stop(): Promise<void> {
+  /**
+   * Close every stream and stop listening. Each stream is told why first
+   * (a `bye` frame): with `restart`, a successor is about to listen on the
+   * same address and clients should be back after `reconnectAfterMs`
+   * instead of whenever their backoff next fires.
+   */
+  async stop(
+    opts: { restart?: { reconnectAfterMs: number } } = {},
+  ): Promise<void> {
     clearInterval(this.pingTimer);
     this.unsubscribeRevocations?.();
     this.unsubscribeRevocations = undefined;
+    const bye: BridgeEvent = opts.restart
+      ? {
+          kind: "bye",
+          reason: "restart",
+          reconnectAfterMs: Math.max(
+            0,
+            Math.round(opts.restart.reconnectAfterMs),
+          ),
+        }
+      : { kind: "bye", reason: "shutdown" };
+    const frame = `data: ${JSON.stringify(bye)}\n\n`;
     for (const res of this.clients.keys()) {
       try {
+        res.write(frame);
         res.end();
       } catch {
         /* ignore */
@@ -604,6 +630,7 @@ export class BridgeServer {
       openStream: (res, deviceId, principal) =>
         this.openStream(res, deviceId, principal),
       credentials: this.opts.credentials,
+      endpoints: () => this.opts.endpoints,
       unknownProvision: (res) => this.unknownProvision(res),
     };
   }

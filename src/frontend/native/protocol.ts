@@ -396,7 +396,21 @@ export type BridgeEvent =
       name: string;
       params: MeshDeviceCommand["params"];
     }
-  | { kind: "error"; chatId?: string; message: string };
+  | { kind: "error"; chatId?: string; message: string }
+  /**
+   * The daemon is going away and is closing every stream: sent on each one
+   * just before it ends. `reason: "restart"` means a successor process is
+   * starting on the same address; a client should reconnect after
+   * `reconnectAfterMs` and keep retrying at a short interval for a while
+   * rather than climbing its usual backoff. `"shutdown"` carries no
+   * schedule — reconnect as usual. Additive in v1: clients that predate it
+   * ignore the frame and reconnect on their own backoff.
+   */
+  | {
+      kind: "bye";
+      reason: "restart" | "shutdown";
+      reconnectAfterMs?: number;
+    };
 
 // ── Mappers (Talon internals → wire types) ───────────────────────────────────
 
