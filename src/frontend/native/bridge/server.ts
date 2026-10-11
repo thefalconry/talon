@@ -38,6 +38,7 @@ import {
 } from "./tls.js";
 import { checkBridgeTokenStrength } from "./auth.js";
 import { AuthGuard, type AuthGuardPolicy } from "./auth-guard.js";
+import { clientAddress } from "./client-address.js";
 import { basename } from "node:path";
 import { contentTypeFor, safeUploadName } from "../media/media.js";
 import { type BridgeEvent } from "../protocol.js";
@@ -546,14 +547,18 @@ export class BridgeServer {
       return;
     }
 
-    const remote = req.socket.remoteAddress ?? "unknown";
+    // Behind a same-host reverse proxy the socket peer is the proxy; the
+    // guard keys on the client it forwarded for (client-address.ts).
+    const remote = clientAddress(req);
     const key = `${method} ${path}` as BridgeRouteKey;
     const {
       state: auth,
       principal,
       credentialId,
     } = this.authState(req, url, QUERY_TOKEN_ROUTES.has(key));
-    if (!(await this.admit(res, remote, auth, credentialId))) return;
+    const deviceCredential = principal?.kind === "device";
+    if (!(await this.admit(res, remote, auth, credentialId, deviceCredential)))
+      return;
 
     const route = this.routes.get(key);
     const ctx: RouteContext = { req, res, url, auth, principal };
@@ -792,8 +797,14 @@ export class BridgeServer {
     remote: string,
     auth: AuthState,
     credentialId: string | null,
+    deviceCredential: boolean,
   ): Promise<boolean> {
-    const verdict = this.authGuard.check(remote, auth, credentialId);
+    const verdict = this.authGuard.check(
+      remote,
+      auth,
+      credentialId,
+      deviceCredential,
+    );
     if (verdict.kind === "reject") {
       this.refuse(
         res,
