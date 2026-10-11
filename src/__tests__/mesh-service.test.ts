@@ -8,7 +8,7 @@
  *     and the no-transport fast path
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   mkdtemp,
   readFile as fsReadFile,
@@ -1982,6 +1982,107 @@ describe("MeshService command hold across a reconnect", () => {
     const result = await service.sendCommand(device, "status", {}, 100);
     expect(result.message).toContain("was not delivered");
     expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  /**
+   * A device back with only a moment of the timeout left could run the
+   * command after the caller was told it failed, and a retry would run it
+   * twice. Held commands stop being deliverable max(3 s, 10%) before the
+   * deadline and fail as undelivered instead.
+   */
+  describe("delivery margin before the deadline", () => {
+    afterEach(() => vi.useRealTimers());
+    const fakeClock = () =>
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+        ],
+      });
+
+    it("does not deliver a held command with too little of its timeout left", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      const pending = service.sendCommand(device, "ring", {}, 12_000);
+      // The device is back 0.5 s before the 12 s deadline.
+      await vi.advanceTimersByTimeAsync(11_500);
+      transport.connect();
+      const result = await pending;
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('"ring" was not delivered');
+      // Never offered again: it cannot have run on the device.
+      expect(transport.offers).toHaveLength(1);
+    });
+
+    it("fails as soon as the margin is reached, not at the deadline", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      reconnectingTransport(service);
+      fakeClock();
+
+      let result: Awaited<ReturnType<MeshService["sendCommand"]>> | undefined;
+      void service.sendCommand(device, "ring", {}, 12_000).then((r) => {
+        result = r;
+      });
+      await vi.advanceTimersByTimeAsync(8_900);
+      expect(result).toBeUndefined();
+      // 12 s − max(3 s, 1.2 s) = 9 s.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(result).toMatchObject({ ok: false });
+      expect(result!.message).toContain("did not reconnect within 9s");
+    });
+
+    it("still delivers when the device is back before the margin", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      const pending = service.sendCommand(device, "ring", {}, 12_000);
+      await vi.advanceTimersByTimeAsync(8_500);
+      transport.connect();
+      expect(await pending).toMatchObject({ ok: true, message: "ran ring" });
+    });
+
+    it("scales the margin to 10% of a long timeout", async () => {
+      const service = await tempService({ commandHoldMs: 600_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      // 100 s budget: the margin is 10 s, not 3 s, so 8 s left is too late.
+      const pending = service.sendCommand(device, "exec", {}, 100_000);
+      await vi.advanceTimersByTimeAsync(92_000);
+      transport.connect();
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("did not reconnect within 90s");
+      expect(transport.offers).toHaveLength(1);
+    });
+
+    it("fails a held command at once when the device reconnects past the margin before the hold timer fires", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      const pending = service.sendCommand(device, "ring", {}, 12_000);
+      // The clock moves past the margin without timers running (a stalled
+      // event loop): the reconnect itself must refuse to deliver.
+      vi.setSystemTime(Date.now() + 9_500);
+      transport.connect();
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('"ring" was not delivered');
+      expect(transport.offers).toHaveLength(1);
+    });
   });
 
   it("fails at once with a zero hold", async () => {

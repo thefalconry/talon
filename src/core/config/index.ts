@@ -224,6 +224,8 @@ const nativeConfigSchema = z
      * the device's stream returns; if it does not return in this window the
      * command fails then, saying it was not delivered, rather than waiting
      * out its whole timeout. Default 20000; 0 fails such commands at once.
+     * The hold always ends max(3 s, 10% of the command's timeout) before
+     * that timeout, so a command is never delivered too late to answer.
      */
     commandHoldMs: z.number().int().min(0).max(300_000).optional(),
     /**

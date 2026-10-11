@@ -140,6 +140,18 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 12_000;
  * back soon, so the caller is better served by a clear failure.
  */
 const DEFAULT_COMMAND_HOLD_MS = 20_000;
+/**
+ * A held command is never delivered with less than this much of its own
+ * timeout left: max(COMMAND_DELIVERY_MARGIN_MS, COMMAND_DELIVERY_MARGIN_SHARE
+ * × timeout). Delivered later than that, the device could still run it
+ * (ring, exec) after the caller was told it did not answer, and a retry
+ * would then run it twice. So the hold ends that much before the deadline
+ * and the command fails as undelivered instead: the caller knows it never
+ * ran and can safely retry. 3 s covers a round trip plus a typical
+ * command's own run time; 10% scales it for long budgets (exec, transfers).
+ */
+const COMMAND_DELIVERY_MARGIN_MS = 3_000;
+const COMMAND_DELIVERY_MARGIN_SHARE = 0.1;
 const MOBILE_PLATFORMS = new Set(["android", "ios"]);
 const DEFAULT_HISTORY_HOURS = 24;
 const MAX_HISTORY_LINES = 24;
@@ -166,7 +178,7 @@ export class MeshService {
    * also in `pendingCommands`; `deviceConnected` offers it again, and its
    * hold timer fails it when the device stays away.
    */
-  private readonly heldCommands = new Map<string, DeviceCommand>();
+  private readonly heldCommands = new Map<string, HeldCommand>();
   /**
    * Server-side receipt time (this process's clock) of the last fix per
    * device. Freshness is judged against THIS, never the device-supplied
@@ -240,8 +252,15 @@ export class MeshService {
    * still not taken stays held until its window ends.
    */
   deviceConnected(deviceId: string): void {
-    for (const [id, command] of Array.from(this.heldCommands)) {
+    for (const [id, held] of Array.from(this.heldCommands)) {
+      const { command } = held;
       if (command.deviceId !== deviceId) continue;
+      // Too close to its deadline to run safely (the hold timer may simply
+      // not have fired yet): fail it as undelivered instead.
+      if (Date.now() >= held.deliverBy) {
+        held.expire();
+        continue;
+      }
       if (this.dispatchToTransports(command)) {
         this.heldCommands.delete(id);
         logDebug(
@@ -515,7 +534,12 @@ export class MeshService {
       name,
       params,
     };
-    const holdMs = Math.min(this.commandHoldMs, timeoutMs);
+    // The hold ends early enough that a late delivery still leaves the
+    // device time to answer (see COMMAND_DELIVERY_MARGIN_MS).
+    const holdMs = Math.max(
+      0,
+      Math.min(this.commandHoldMs, timeoutMs - deliveryMarginMs(timeoutMs)),
+    );
     const undelivered = (): string =>
       `${device.name} has no live connection to the bridge` +
       (holdMs > 0
@@ -561,7 +585,15 @@ export class MeshService {
         resolve: finish,
       });
       if (this.dispatchToTransports(command) || settled) return;
-      this.heldCommands.set(command.id, command);
+      if (holdMs <= 0) {
+        fail(undelivered());
+        return;
+      }
+      this.heldCommands.set(command.id, {
+        command,
+        deliverBy: Date.now() + holdMs,
+        expire: () => fail(undelivered()),
+      });
       logDebug(
         "mesh",
         `mesh.command event=held device=${device.id} command=${name} id=${command.id} holdMs=${holdMs}`,
@@ -1414,4 +1446,21 @@ export function getMeshService(): MeshService {
 /** Swap the shared instance — composition/test seam. Pass null to reset. */
 export function setMeshService(service: MeshService | null): void {
   instance = service;
+}
+
+/** A command waiting for its device to reconnect (see `heldCommands`). */
+type HeldCommand = {
+  command: DeviceCommand;
+  /** Epoch ms after which it must not be delivered any more. */
+  deliverBy: number;
+  /** Fail it as undelivered. */
+  expire: () => void;
+};
+
+/** How much of `timeoutMs` must remain for a held command to be delivered. */
+function deliveryMarginMs(timeoutMs: number): number {
+  return Math.max(
+    COMMAND_DELIVERY_MARGIN_MS,
+    COMMAND_DELIVERY_MARGIN_SHARE * timeoutMs,
+  );
 }
