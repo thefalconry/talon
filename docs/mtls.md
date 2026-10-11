@@ -126,6 +126,24 @@ certificate:
 Don't also forward port 19880 on your router. The proxy is meant to be the
 only way in from outside.
 
+**Changing the proxy config.** Once devices depend on the proxy, a typo in
+its config takes every one of them offline. Check the file before every
+reload, and reload only if the check passes. This applies to people and to
+agents (a Talon agent with shell access editing the Caddyfile included):
+
+```bash
+# Caddy
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile \
+  && sudo systemctl reload caddy
+# nginx
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Keep a copy of the last working config so you can put it back. Use
+`reload`, not `restart`: when a reload fails, Caddy and nginx keep serving
+the old config, but a restart with a bad config leaves nothing listening.
+Afterwards, check that `https://talon.example.com/health` still answers.
+
 ## 3. Set up the app
 
 1. Choose **Remote** and enter the website address:
