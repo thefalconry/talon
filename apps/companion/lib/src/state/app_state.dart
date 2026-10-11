@@ -446,11 +446,8 @@ class AppState extends ChangeNotifier {
     final cfg = effectiveConfig ?? config;
     // Keep the process-wide pin (Image.network et al.) in step with the
     // profile this attempt uses; TOFU below adopts one when none is set.
-    BridgeTrust.pin(cfg.tls ? cfg.fingerprint : null,
-        enforce: cfg.enforcesPin);
-    BridgeTrust.useClientContext(cfg.tls
-        ? cfg.clientSecurityContext(trustedRoots: !cfg.enforcesPin)
-        : null);
+    _pinProcessWide(cfg.tls ? cfg : null);
+    BridgeTrust.useClientContext(cfg.tls ? cfg.clientSecurityContext() : null);
     final client = BridgeClient(cfg);
     // Claim our mesh identity on this stream (when one has been minted) so
     // device commands are addressed to us rather than shouted at every
@@ -633,9 +630,26 @@ class AppState extends ChangeNotifier {
 
   /// Make [active] the profile [client] and the process-wide trust use.
   void _applyPin(ConnectionConfig active, BridgeClient client) {
-    BridgeTrust.pin(active.fingerprint, enforce: active.enforcesPin);
+    _pinProcessWide(active);
     client.config = active;
     _activeConfig = active;
+  }
+
+  /// The process-wide pin (Image.network, attachments) for [cfg]: binding
+  /// on the bridge's own address once [ConnectionConfig.enforcesPin], and
+  /// nowhere else.
+  static void _pinProcessWide(ConnectionConfig? cfg) {
+    final strict = cfg != null && cfg.enforcesPin;
+    // The address exactly as the URLs this profile builds will name it.
+    final base = strict ? Uri.tryParse(cfg.baseUrl) : null;
+    BridgeTrust.pin(
+      cfg?.fingerprint,
+      enforceOn: strict
+          ? (host: base?.host ?? cfg.host, port: base?.port ?? cfg.port)
+          : null,
+      strictContext:
+          strict ? cfg.clientSecurityContext(trustedRoots: false) : null,
+    );
   }
 
   /// Tear down a client from a superseded connection attempt without touching

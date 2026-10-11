@@ -158,7 +158,11 @@ class BridgeClient {
         ? (HttpClient(
             context: config.clientSecurityContext(trustedRoots: !strict) ??
                 (strict ? SecurityContext(withTrustedRoots: false) : null),
-          )..badCertificateCallback = (cert, host, port) => _evaluate(cert))
+          )
+            // BridgeTrust (the process-wide HttpOverrides) may have routed
+            // connections through the process pin; this client pins itself.
+            ..connectionFactory = null
+            ..badCertificateCallback = (cert, host, port) => _evaluate(cert))
         : HttpClient();
     inner.idleTimeout = restIdleTimeout;
     return IOClient(inner);

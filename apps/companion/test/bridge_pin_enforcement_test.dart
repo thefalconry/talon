@@ -59,7 +59,8 @@ void main() {
         localAutoDiscover: false,
       );
 
-  test('a profile whose pin was never observed still accepts a CA-valid '
+  test(
+      'a profile whose pin was never observed still accepts a CA-valid '
       'certificate (reverse proxy with its own CA certificate)', () async {
     final server = await startCaValidServer();
     final client =
@@ -106,29 +107,87 @@ void main() {
     await expectLater(client.health(), throwsA(isA<BridgeException>()));
   });
 
-  test('BridgeTrust enforces the pin on implicitly-created clients', () async {
-    final server = await startCaValidServer();
-    Future<bool> reachable() async {
-      final http = BridgeTrust().createHttpClient(null);
+  group('BridgeTrust (implicitly-created clients)', () {
+    tearDown(() => BridgeTrust.pin(null));
+
+    Future<bool> reachable(HttpClient http, int port,
+        {String host = '127.0.0.1'}) async {
       try {
-        final req =
-            await http.getUrl(Uri.parse('https://127.0.0.1:${server.port}/'));
+        final req = await http.getUrl(Uri.parse('https://$host:$port/'));
+        // A fresh connection every time: a pooled one would skip the
+        // handshake this is about.
+        req.persistentConnection = false;
         await (await req.close()).drain<void>();
         return true;
       } on HandshakeException {
         return false;
-      } finally {
-        http.close(force: true);
       }
     }
 
-    BridgeTrust.pin(otherPin);
-    expect(await reachable(), isTrue, reason: 'CA-valid, pin not enforced');
-    BridgeTrust.pin(otherPin, enforce: true);
-    expect(await reachable(), isFalse);
-    BridgeTrust.pin(fixtureFingerprint(), enforce: true);
-    expect(await reachable(), isTrue);
-    BridgeTrust.pin(null);
+    ({String host, int port}) at(HttpServer s) =>
+        (host: '127.0.0.1', port: s.port);
+
+    test('enforces the pin on the bridge address', () async {
+      final server = await startCaValidServer();
+      final http = BridgeTrust().createHttpClient(null);
+      addTearDown(() => http.close(force: true));
+
+      BridgeTrust.pin(otherPin);
+      expect(await reachable(http, server.port), isTrue,
+          reason: 'CA-valid, pin not enforced');
+      BridgeTrust.pin(otherPin, enforceOn: at(server));
+      expect(await reachable(http, server.port), isFalse);
+      BridgeTrust.pin(fixtureFingerprint(), enforceOn: at(server));
+      expect(await reachable(http, server.port), isTrue);
+    });
+
+    test(
+        'leaves CA-valid HTTPS to every other host alone (update checks, '
+        'model downloads, web images)', () async {
+      final bridge = await startCaValidServer();
+      final elsewhere = await startCaValidServer();
+      BridgeTrust.pin(otherPin, enforceOn: at(bridge));
+      final http = BridgeTrust().createHttpClient(null);
+      addTearDown(() => http.close(force: true));
+
+      expect(await reachable(http, bridge.port), isFalse);
+      expect(await reachable(http, elsewhere.port), isTrue);
+      // Same port, another name: not the bridge's address either.
+      expect(await reachable(http, bridge.port, host: 'localhost'), isTrue);
+    });
+
+    test(
+        'a client created before the pin became binding enforces it too '
+        "(NetworkImage's shared client lives as long as the process)",
+        () async {
+      final server = await startCaValidServer();
+      BridgeTrust.pin(otherPin);
+      final http = BridgeTrust().createHttpClient(null);
+      addTearDown(() => http.close(force: true));
+      expect(await reachable(http, server.port), isTrue);
+
+      BridgeTrust.pin(otherPin, enforceOn: at(server));
+      expect(await reachable(http, server.port), isFalse);
+      BridgeTrust.pin(otherPin);
+      expect(await reachable(http, server.port), isTrue);
+    });
+
+    test(
+        "BridgeClient keeps its own pin when BridgeTrust is the app's "
+        'HttpOverrides', () async {
+      final server = await startCaValidServer();
+      final previous = HttpOverrides.current;
+      BridgeTrust.install();
+      addTearDown(() => HttpOverrides.global = previous);
+      // The process-wide pin is some other profile's.
+      BridgeTrust.pin(otherPin, enforceOn: at(server));
+
+      final client = BridgeClient(
+          profile(server.port, fixtureFingerprint(), observed: true));
+      addTearDown(client.dispose);
+      expect(await client.health(), isNotNull);
+      expect(client.pinObserved, isTrue);
+    });
   });
 
   group('ConnectionConfig.pinObserved', () {
@@ -158,7 +217,9 @@ void main() {
       expect(base.copyWith(token: 't').pinObserved, isTrue);
       expect(base.copyWith(fingerprint: fp).pinObserved, isTrue);
       expect(
-        base.copyWith(localUrl: 'https://192.168.0.5:19880').localEndpoint()!
+        base
+            .copyWith(localUrl: 'https://192.168.0.5:19880')
+            .localEndpoint()!
             .enforcesPin,
         isTrue,
       );
