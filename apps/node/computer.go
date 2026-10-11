@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"runtime"
@@ -35,6 +36,7 @@ var computerActions = map[string]bool{
 var computerParams = []string{
 	"action", "x", "y", "toX", "toY", "dx", "dy", "button", "count",
 	"modifiers", "text", "keys", "limit", "budgetMs", "maxEdge", "quality",
+	"scope", "verify", "settleMs", "maxBytes",
 }
 
 // computerMu serializes desktop actions: there is one pointer and one
@@ -126,4 +128,74 @@ func permissionsCmd() {
 		}
 	}
 	fmt.Println("Automation › System Events is asked for on first use of type, key or snapshot.")
+}
+
+// imageEncoder renders the captured screen at width x height and the given
+// JPEG quality.
+type imageEncoder func(width, height, quality int) ([]byte, error)
+
+// fittedImage is what fitImage settled on.
+type fittedImage struct {
+	data          []byte
+	width, height int
+	quality       int
+	// scale is space pixels per image pixel: 1 when the image is the click
+	// space, more when it had to be shrunk to fit.
+	scale float64
+}
+
+const (
+	fitQualityFloor = 35  // below this JPEG text turns to mush; shrink instead
+	fitLastQuality  = 20  // the final try at the smallest size
+	fitMinEdge      = 320 // never shrink the long edge below this
+)
+
+// fitImage encodes the screen at the full space size and, while the result
+// is over maxBytes, first lowers the JPEG quality (to fitQualityFloor), then
+// shrinks the image in proportion to how far over it still is, and only as
+// a last resort drops to fitLastQuality at the smallest size. A screenshot
+// that does not fit the transport never arrives at all — the daemon just
+// times out — so this always returns something under maxBytes, or an error
+// saying it could not.
+func fitImage(width, height, quality, maxBytes int, encode imageEncoder) (fittedImage, error) {
+	if quality > 90 {
+		quality = 90
+	}
+	if quality < fitLastQuality {
+		quality = fitLastQuality
+	}
+	long := max(width, height)
+	minScale := 1.0
+	if long > fitMinEdge {
+		minScale = float64(fitMinEdge) / float64(long)
+	}
+	scale := 1.0 // image size / space size
+	for step := 0; step < 16; step++ {
+		w := max(1, int(math.Round(float64(width)*scale)))
+		h := max(1, int(math.Round(float64(height)*scale)))
+		data, err := encode(w, h, quality)
+		if err != nil {
+			return fittedImage{}, err
+		}
+		if len(data) <= maxBytes {
+			return fittedImage{data: data, width: w, height: h, quality: quality,
+				scale: float64(width) / float64(w)}, nil
+		}
+		switch {
+		case quality > fitQualityFloor:
+			quality = max(fitQualityFloor, quality-20)
+		case scale > minScale:
+			// JPEG size grows roughly with pixel count, so the side length
+			// needed is about sqrt(maxBytes/size); aim 10% under, and
+			// shrink by at least 10% so a near miss still makes progress.
+			ratio := math.Sqrt(float64(maxBytes)/float64(len(data))) * 0.9
+			scale = math.Max(minScale, scale*math.Max(0.4, math.Min(0.9, ratio)))
+		case quality > fitLastQuality:
+			quality = fitLastQuality
+		default:
+			return fittedImage{}, fmt.Errorf("the screen does not fit in %d bytes even at %dx%d, quality %d",
+				maxBytes, w, h, quality)
+		}
+	}
+	return fittedImage{}, fmt.Errorf("gave up fitting the screenshot into %d bytes", maxBytes)
 }

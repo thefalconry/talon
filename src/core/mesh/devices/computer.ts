@@ -47,6 +47,9 @@ const NUMBER_PARAMS: ReadonlyArray<readonly [string, string]> = [
 
 const STRING_PARAMS = ["button", "text", "keys"] as const;
 
+/** snapshot scopes: the frontmost window, or that plus the system's own UI. */
+const SNAPSHOT_SCOPES = ["front", "all"] as const;
+
 /** Which params an action cannot run without. */
 const REQUIRED: Record<ComputerAction, readonly string[]> = {
   screenshot: [],
@@ -96,6 +99,15 @@ export function computerCommandParams(input: Record<string, unknown>):
     const raw = input[key];
     if (typeof raw === "string" && raw !== "") params[key] = raw;
   }
+  if (input.scope !== undefined && input.scope !== null && input.scope !== "") {
+    if (!(SNAPSHOT_SCOPES as readonly unknown[]).includes(input.scope)) {
+      return {
+        error: `computer ${action}: scope must be one of ${SNAPSHOT_SCOPES.join(", ")}.`,
+      };
+    }
+    params.scope = input.scope;
+  }
+  if (typeof input.verify === "boolean") params.verify = input.verify;
   if (Array.isArray(input.modifiers)) {
     const modifiers = input.modifiers.filter(
       (m): m is string => typeof m === "string" && m.trim() !== "",
@@ -137,17 +149,26 @@ function trustNote(data: Record<string, unknown>): string {
     : "";
 }
 
-function describeElement(el: Record<string, unknown>): string {
+function describeElement(
+  el: Record<string, unknown>,
+  omitWhere = false,
+): string {
   const role = typeof el.role === "string" && el.role ? el.role : "Element";
   const label =
     typeof el.label === "string" && el.label
       ? ` ${JSON.stringify(el.label)}`
       : "";
+  // A toggle's raw value ("0"/"1") says less than its state, shown below.
   const value =
-    typeof el.value === "string" && el.value
+    typeof el.value === "string" &&
+    el.value &&
+    !(typeof el.state === "string" && el.state)
       ? ` = ${JSON.stringify(el.value)}`
       : "";
   const flags = [
+    typeof el.state === "string" && el.state ? el.state : "",
+    el.selected === true ? "selected" : "",
+    el.expanded === true ? "expanded" : "",
     el.focused === true ? "focused" : "",
     el.disabled === true ? "disabled" : "",
   ].filter(Boolean);
@@ -155,9 +176,81 @@ function describeElement(el: Record<string, unknown>): string {
     typeof el.w === "number" && typeof el.h === "number"
       ? ` ${el.w}x${el.h}`
       : "";
+  const where = [
+    typeof el.app === "string" && el.app ? el.app : "",
+    typeof el.window === "string" && el.window && el.window !== el.app
+      ? JSON.stringify(el.window)
+      : "",
+  ].filter(Boolean);
   return `${role}${label}${value} @${el.x},${el.y}${size}${
     flags.length ? ` (${flags.join(", ")})` : ""
-  }`;
+  }${where.length && !omitWhere ? ` [${where.join(" ")}]` : ""}`;
+}
+
+function records(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value.filter(
+        (v): v is Record<string, unknown> =>
+          typeof v === "object" && v !== null,
+      )
+    : [];
+}
+
+/** The `scope: "all"` part of a snapshot: menu bar, extras, other windows. */
+function formatSystem(system: Record<string, unknown>): string[] {
+  const lines: string[] = [];
+  const menuBar = records(system.menuBar);
+  if (menuBar.length > 0) {
+    lines.push(
+      `Menu bar: ${menuBar.map((m) => `${String(m.label)} @${m.x},${m.y}`).join(" · ")}`,
+    );
+  }
+  const extras = records(system.extras);
+  if (extras.length > 0) {
+    lines.push("Menu bar extras (click one to open its menu or panel):");
+    for (const x of extras) {
+      const value =
+        typeof x.value === "string" && x.value
+          ? ` = ${JSON.stringify(x.value)}`
+          : "";
+      const owner =
+        typeof x.app === "string" && x.app && x.app !== x.label
+          ? ` [${x.app}]`
+          : "";
+      lines.push(
+        `  ${JSON.stringify(String(x.label))}${value} @${x.x},${x.y}${owner}`,
+      );
+    }
+  }
+  const windows = records(system.windows);
+  if (windows.length > 0) {
+    lines.push("Other on-screen windows, frontmost first:");
+    for (const w of windows) {
+      const title =
+        typeof w.title === "string" && w.title
+          ? ` ${JSON.stringify(w.title)}`
+          : "";
+      const walked =
+        typeof w.walked === "number" ? `, ${w.walked} controls below` : "";
+      lines.push(
+        `  ${String(w.app)}${title} at ${w.x},${w.y} ${w.w}x${w.h}${walked}`,
+      );
+    }
+  }
+  const elements = records(system.elements);
+  if (elements.length > 0) {
+    const cut =
+      system.truncated === "limit"
+        ? " (cut at the element limit)"
+        : system.truncated === "time"
+          ? " (cut at the time budget)"
+          : "";
+    lines.push(
+      `System UI controls — menus, popovers, Control Center, panels${cut}:`,
+    );
+    for (const el of elements) lines.push(`  ${describeElement(el)}`);
+  }
+  return lines;
 }
 
 function formatSnapshot(
@@ -185,10 +278,42 @@ function formatSnapshot(
   ];
   if (typeof data.note === "string" && data.note) lines.push(data.note);
   for (const el of elements) lines.push(describeElement(el));
+  if (typeof data.system === "object" && data.system !== null) {
+    lines.push(...formatSystem(data.system as Record<string, unknown>));
+  }
   if (Array.isArray(data.apps) && data.apps.length > 0) {
     lines.push(`Open apps: ${data.apps.map(String).join(", ")}`);
   }
   return lines.join("\n") + trustNote(data);
+}
+
+/**
+ * What a click hit and what it did: the control under the point before the
+ * click, the same control read again afterwards (a toggle shows its new
+ * state), and whatever is under the point now (a menu or popover that
+ * opened). Empty for nodes that predate it.
+ */
+function formatClickCheck(data: Record<string, unknown>): string {
+  const target = records([data.target])[0];
+  if (!target) return "";
+  const lines = [`\nHit: ${describeElement(target)}`];
+  const after = records([data.targetAfter])[0];
+  if (after) {
+    const was = typeof target.state === "string" ? target.state : "";
+    const now = typeof after.state === "string" ? after.state : "";
+    lines.push(
+      was && now && was !== now
+        ? `Now: ${describeElement(after, true)} — switched ${was} → ${now}`
+        : `Now: ${describeElement(after, true)}${was && was === now ? " — state unchanged" : ""}`,
+    );
+  } else if (data.targetGone === true) {
+    lines.push("Now: that control is gone (its menu or panel closed).");
+  }
+  const under = records([data.under])[0];
+  if (under && describeElement(under) !== describeElement(after ?? target)) {
+    lines.push(`Under the pointer now: ${describeElement(under)}`);
+  }
+  return lines.join("\n");
 }
 
 /** Turn a device's `computer` answer into a tool result. */
@@ -218,12 +343,26 @@ export function formatComputerResult(
         text: `${device.name} answered the screenshot without an image.`,
       };
     }
+    const scale = typeof data.scale === "number" ? data.scale : 1;
+    const mapping =
+      scale > 1.001
+        ? ` — shrunk to fit the transport from the ${spaceOf(data) ?? "click"} space: multiply an image pixel by ${scale} to get the x,y to click`
+        : " — a pixel in this image is the x,y to click";
     return {
       ok: true,
       text:
-        `[${device.name}] screenshot ${data.width}x${data.height} — a pixel in this image is the x,y to click. Pointer at ${pair(data.cursor) ?? "?"}.` +
+        `[${device.name}] screenshot ${data.width}x${data.height}${mapping}. Pointer at ${pair(data.cursor) ?? "?"}.` +
         trustNote(data),
       image: { data: base64, mimeType },
+    };
+  }
+  if (action === "click") {
+    return {
+      ok: true,
+      text:
+        `[${device.name}] click done. Pointer at ${pair(data.cursor) ?? "?"}.` +
+        formatClickCheck(data) +
+        trustNote(data),
     };
   }
   const typed =
