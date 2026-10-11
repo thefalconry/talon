@@ -48,7 +48,7 @@ const NUMBER_PARAMS: ReadonlyArray<readonly [string, string]> = [
 const STRING_PARAMS = ["button", "text", "keys"] as const;
 
 /** snapshot scopes: the frontmost window, or that plus the system's own UI. */
-export const SNAPSHOT_SCOPES = ["front", "all"] as const;
+const SNAPSHOT_SCOPES = ["front", "all"] as const;
 
 /** Which params an action cannot run without. */
 const REQUIRED: Record<ComputerAction, readonly string[]> = {
