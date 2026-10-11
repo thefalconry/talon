@@ -115,6 +115,9 @@ type endpointSet struct {
 	cur  int
 	// nextProbe is the earliest time a failback probe may run.
 	nextProbe time.Time
+	// holdUntil, while in the future, keeps the node on the entry in use
+	// whatever fails (see holdFailover).
+	holdUntil time.Time
 	now       func() time.Time
 }
 
@@ -143,7 +146,7 @@ func (s *endpointSet) snapshot() ([]*endpoint, int) {
 func (s *endpointSet) failed(e *endpoint) *endpoint {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.list) < 2 || s.list[s.cur] != e {
+	if len(s.list) < 2 || s.list[s.cur] != e || s.now().Before(s.holdUntil) {
 		return nil
 	}
 	s.cur = (s.cur + 1) % len(s.list)
@@ -153,6 +156,28 @@ func (s *endpointSet) failed(e *endpoint) *endpoint {
 		s.nextProbe = s.now().Add(failbackProbeInterval)
 	}
 	return s.list[s.cur]
+}
+
+// holdFailover keeps the node on the entry in use until `until`: failures
+// in between neither rotate nor demote it. The daemon's restart notice sets
+// it for the fast-retry window. While the bridge is restarting, every entry
+// is refused (or answered 502 by the proxy) for the same reason, so a
+// failure then says nothing about the path. Rotating on each of the 1 s
+// retries would leave the node on whichever entry it reached first once
+// the successor is up, possibly a DNS-bypass one. A real path failure that
+// coincides with a restart is handled once the window ends (at most
+// maxRestartDelay + restartRetryWindow), or sooner when a stream connects.
+func (s *endpointSet) holdFailover(until time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holdUntil = until
+}
+
+// releaseHold ends a holdFailover window early: a stream is up again.
+func (s *endpointSet) releaseHold() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holdUntil = time.Time{}
 }
 
 // failbackDue returns the configured bridge when the node is on a fallback

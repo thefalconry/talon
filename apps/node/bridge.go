@@ -393,6 +393,11 @@ func (n *Node) Run(ctx context.Context) {
 		}
 		var wait time.Duration
 		wait, backoff, fastUntil = nextReconnect(backoff, fastUntil, uptime, err, time.Now())
+		if restarting := (*bridgeRestarting)(nil); errors.As(err, &restarting) {
+			// A restart is not an endpoint failure: stay on this entry
+			// through the fast retries (see holdFailover).
+			n.endpoints.holdFailover(fastUntil)
+		}
 		log.Printf("event stream dropped (%v) — reconnecting in %s", err, wait)
 		select {
 		case <-time.After(wait):
@@ -519,6 +524,7 @@ func (n *Node) consumeEvents(ctx context.Context) (time.Duration, error) {
 		return 0, fmt.Errorf("events: HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
 	}
 	log.Printf("event stream connected via %s", e.Endpoint)
+	n.endpoints.releaseHold()
 	connectedAt := time.Now()
 	uptime := func() time.Duration { return time.Since(connectedAt) }
 

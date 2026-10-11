@@ -140,6 +140,11 @@ heartbeat. Nodes and daemons that predate this ignore it.
   404 or 429 would be the same on every entry, so it stays put. While on a
   fallback, it probes the configured bridge's `/health` every 5 minutes and
   goes back once it answers. `talon-node status` lists the entries.
+- A daemon restart is not an endpoint failure. After the daemon's restart
+  notice (`bye`), the node stays on the entry it was using through its 1 s
+  retries (up to the advertised delay plus 2 minutes, or until a stream
+  connects), so a `/restart` doesn't walk the list or strand the node on a
+  DNS-bypass entry. A restart without the notice (a crash) still fails over.
 - Leaving `endpoints` unset advertises nothing. Setting it to `[]` tells
   nodes to forget a list they learned earlier.
 
