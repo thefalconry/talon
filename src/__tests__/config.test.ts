@@ -265,6 +265,41 @@ describe("config", () => {
       expect(() => loadConfig()).toThrow(/heartbeatEffort/);
     });
 
+    it("accepts native.endpoints with IP dial overrides", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          publicUrl: "https://mesh.example.org",
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "203.0.113.7:443" },
+            { url: "https://mesh.example.org", dial: "[2001:db8::1]:443" },
+          ],
+        },
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(loadConfig().native?.endpoints).toHaveLength(2);
+    });
+
+    it("rejects a native.endpoints dial that is a hostname, or a plain-http url", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "evil.example:443" },
+          ],
+        },
+      });
+      const first = await import("../core/config/index.js");
+      expect(() => first.loadConfig()).toThrow(/dial must be an IP literal/);
+      vi.resetModules();
+      mockFs({
+        frontend: "terminal",
+        native: { endpoints: [{ url: "http://mesh.example.org" }] },
+      });
+      const second = await import("../core/config/index.js");
+      expect(() => second.loadConfig()).toThrow(/plain https URL/);
+    });
+
     it("reads custom maxMessageLength", async () => {
       mockFs({
         botToken: "test-token",

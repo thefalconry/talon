@@ -37,6 +37,7 @@ import {
   type MeshScope,
 } from "../../core/mesh/credentials/index.js";
 import { isLoopbackHost, loadOrCreateBridgeTlsIdentity } from "./bridge/tls.js";
+import { advertisedEndpoints } from "../../core/mesh/links/endpoints.js";
 
 export { summarizeToolResult } from "./turn/tool-result.js";
 
@@ -178,6 +179,10 @@ export function createNativeFrontend(
       startedAt: runtime.startedAt,
       ...(listen.tls ? { tls: () => loadOrCreateBridgeTlsIdentity() } : {}),
       credentials: bridgeCredentials(listen, mesh),
+      endpoints: advertisedEndpoints(
+        config.native?.publicUrl,
+        config.native?.endpoints,
+      ),
     },
     buildBridgeHandlers(runtime),
   );

@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -70,9 +69,12 @@ var nodeCapabilities = []string{
 // Node is the running mesh client: pinned-TLS HTTP to the bridge plus the
 // SSE consumer that turns device_command events into local work.
 type Node struct {
-	cfg      *Config
-	client   *http.Client
-	DeviceID string
+	cfg *Config
+	// endpoints is every way to reach the bridge — the configured URL
+	// first, then any the daemon advertised — each with its own pinned
+	// HTTP client (endpoints.go).
+	endpoints *endpointSet
+	DeviceID  string
 	// seenFingerprint carries the leaf-certificate hash observed during TLS
 	// verification of the most recent connection, for TOFU capture. Written
 	// from whichever goroutine is handshaking (heartbeat, stream, result
@@ -112,18 +114,16 @@ func NewNode(cfg *Config) (*Node, error) {
 	if cfg.Path != "" {
 		n.audit = newAuditLog(auditPath(cfg.Path))
 	}
-	transport := &http.Transport{
-		// The bridge mints a self-signed certificate; identity is proven by
-		// pinning its SHA-256 (exactly like the companion app), not by a CA
-		// chain or hostname. VerifyPeerCertificate below is the real check.
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify:    true,
-			VerifyPeerCertificate: n.verifyPinnedCert,
-		},
-		// SSE responses are unbounded; only bound the dial + TLS handshake.
-		ResponseHeaderTimeout: 30 * time.Second,
-	}
-	n.client = &http.Client{Transport: transport}
+	n.endpoints = newEndpointSet(
+		n.newEndpoint(Endpoint{URL: cfg.Bridge}, true),
+		nil,
+	)
+	// A list learned on an earlier run, so a node that restarts during a
+	// DNS outage can still reach the bridge.
+	n.endpoints.replaceLearned(
+		sanitizeEndpoints(cfg.Endpoints, cfg.Bridge),
+		func(ep Endpoint) *endpoint { return n.newEndpoint(ep, false) },
+	)
 	return n, nil
 }
 
@@ -227,14 +227,6 @@ func drainClose(body io.ReadCloser) {
 	_ = body.Close()
 }
 
-func (n *Node) apiURL(path string, query url.Values) string {
-	u := n.cfg.Bridge + path
-	if len(query) > 0 {
-		u += "?" + query.Encode()
-	}
-	return u
-}
-
 func (n *Node) authed(req *http.Request) *http.Request {
 	req.Header.Set("Authorization", "Bearer "+n.token())
 	return req
@@ -248,43 +240,53 @@ func (n *Node) postJSON(ctx context.Context, path string, body any, out any) err
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, n.apiURL(path, nil), bytes.NewReader(raw),
-	)
+	_, err = n.postJSONVia(ctx, path, raw, out)
+	return err
+}
+
+// postJSONVia is postJSON for a JSON body already encoded, also reporting
+// the endpoint that carried it.
+func (n *Node) postJSONVia(ctx context.Context, path string, raw []byte, out any) (*endpoint, error) {
+	res, e, err := n.send(ctx, http.MethodPost, path, nil, bytes.NewReader(raw), func(req *http.Request) {
+		req.Header.Set("Content-Type", "application/json")
+		n.authed(req)
+	})
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := n.client.Do(n.authed(req))
-	if err != nil {
-		return err
+		return e, err
 	}
 	defer drainClose(res.Body)
 	reply, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		return fmt.Errorf("%s: HTTP %d: %s", path, res.StatusCode, strings.TrimSpace(string(reply)))
+		return e, &httpStatusError{Path: path, Code: res.StatusCode, Body: strings.TrimSpace(string(reply))}
 	}
 	if out != nil {
-		return json.Unmarshal(reply, out)
+		return e, json.Unmarshal(reply, out)
 	}
-	return nil
+	return e, nil
 }
 
-// Health fetches /health (unauthenticated by design — the discovery ping).
+// Health fetches /health (unauthenticated by design — the discovery ping)
+// from the endpoint in use.
 func (n *Node) Health() (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, n.apiURL("/health", nil), nil,
-	)
+	return n.healthOn(ctx, n.endpoints.current())
+}
+
+// healthOn fetches /health from one particular endpoint.
+func (n *Node) healthOn(ctx context.Context, e *endpoint) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.url("/health", nil), nil)
 	if err != nil {
 		return nil, err
 	}
-	res, err := n.client.Do(req)
+	res, err := e.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer drainClose(res.Body)
+	if res.StatusCode != http.StatusOK {
+		return nil, &httpStatusError{Path: "/health", Code: res.StatusCode}
+	}
 	var out map[string]any
 	if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
 		return nil, err
@@ -322,10 +324,18 @@ func (n *Node) capabilities() []string {
 // Register upserts this node in the daemon's mesh registry. The reply may
 // ask the node to trade its credential (see credentials.go).
 func (n *Node) Register(ctx context.Context) error {
+	raw, err := json.Marshal(n.registrationBody())
+	if err != nil {
+		return err
+	}
 	var reply registerReply
-	err := n.postJSON(ctx, "/devices/register", n.registrationBody(), &reply)
+	e, err := n.postJSONVia(ctx, "/devices/register", raw, &reply)
 	if err == nil {
-		n.maybeAdoptFingerprint()
+		// Trust on first use only ever happens on the configured bridge.
+		if e.primary {
+			n.maybeAdoptFingerprint()
+		}
+		n.learnEndpoints(reply.Endpoints)
 		n.maybeUpgradeCredential(ctx, reply)
 	}
 	return err
@@ -363,6 +373,7 @@ func (n *Node) Run(ctx context.Context) {
 
 	backoff := minReconnectBackoff
 	for ctx.Err() == nil {
+		n.maybeFailBack(ctx)
 		uptime, err := n.consumeEvents(ctx)
 		if ctx.Err() != nil {
 			return
@@ -395,6 +406,7 @@ func reconnectBackoff(current, uptime time.Duration) (wait, next time.Duration) 
 func (n *Node) heartbeatLoop(ctx context.Context) {
 	// Immediate first beat so the node shows up without waiting a minute.
 	for {
+		n.maybeFailBack(ctx)
 		beatCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		if err := n.Register(beatCtx); err != nil {
 			log.Printf("register failed: %v", err)
@@ -425,14 +437,10 @@ func (n *Node) consumeEvents(ctx context.Context) (time.Duration, error) {
 	// frames (which carry transfer tokens and command lines) to the claiming
 	// client alone instead of shouting them at every connected device.
 	q := url.Values{"deviceId": {n.DeviceID}}
-	req, err := http.NewRequestWithContext(
-		streamCtx, http.MethodGet, n.apiURL("/events", q), nil,
-	)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	res, err := n.client.Do(n.authed(req))
+	res, e, err := n.send(streamCtx, http.MethodGet, "/events", q, nil, func(req *http.Request) {
+		req.Header.Set("Accept", "text/event-stream")
+		n.authed(req)
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -441,7 +449,7 @@ func (n *Node) consumeEvents(ctx context.Context) (time.Duration, error) {
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 512))
 		return 0, fmt.Errorf("events: HTTP %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
 	}
-	log.Printf("event stream connected")
+	log.Printf("event stream connected via %s", e.Endpoint)
 	connectedAt := time.Now()
 	uptime := func() time.Duration { return time.Since(connectedAt) }
 
@@ -475,6 +483,9 @@ func (n *Node) consumeEvents(ctx context.Context) (time.Duration, error) {
 		n.enqueueCommand(event)
 	}
 	if streamCtx.Err() != nil && ctx.Err() == nil {
+		// A half-open connection may be this path's fault; the next attempt
+		// tries the next endpoint (all of them reach the same bridge).
+		n.endpointFailed(e, errStreamIdle)
 		return uptime(), errStreamIdle
 	}
 	if err := scanner.Err(); err != nil {

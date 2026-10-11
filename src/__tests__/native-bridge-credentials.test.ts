@@ -28,6 +28,10 @@ import {
   type BridgeServerHandlers,
 } from "../frontend/native/bridge/server.js";
 import { routeAllows } from "../frontend/native/bridge/credentials/principal.js";
+import {
+  advertisedEndpoints,
+  type AdvertisedEndpoints,
+} from "../core/mesh/links/endpoints.js";
 import type { AuthGuardPolicy } from "../frontend/native/bridge/auth-guard.js";
 import {
   DEFAULT_COMPANION_SCOPES,
@@ -127,6 +131,7 @@ async function setup(
     legacySharedToken?: boolean;
     companionScopes?: MeshScope[];
     authPolicy?: Partial<AuthGuardPolicy>;
+    endpoints?: AdvertisedEndpoints;
   } = {},
 ): Promise<Setup> {
   const dir = await mkdtemp(join(tmpdir(), "talon-bridge-creds-"));
@@ -139,6 +144,7 @@ async function setup(
       token: SHARED,
       startedAt: "boot",
       ...(opts.authPolicy ? { authPolicy: opts.authPolicy } : {}),
+      ...(opts.endpoints ? { endpoints: opts.endpoints } : {}),
       credentials: {
         authority: store,
         policy: {
@@ -693,5 +699,68 @@ describe("migration off the shared token", () => {
       id: "x",
     });
     expect(reg.body.credential).toBeUndefined();
+  });
+});
+
+describe("endpoint list in the register reply", () => {
+  const endpoints = advertisedEndpoints("https://mesh.example.org", [
+    { url: "https://mesh.example.org", dial: "203.0.113.7:443" },
+  ]);
+
+  it("hands a device credential the list, publicUrl first", async () => {
+    const { port, store } = await setup({ endpoints });
+    const { token } = await store.mint({
+      deviceId: "A",
+      scopes: ["device"],
+      origin: "upgrade",
+    });
+    const reg = await call(port, "POST", "/devices/register", token, {
+      id: "A",
+    });
+    expect(reg.status).toBe(200);
+    expect(reg.body.endpoints).toEqual({
+      v: endpoints?.v,
+      list: [
+        { url: "https://mesh.example.org" },
+        { url: "https://mesh.example.org", dial: "203.0.113.7:443" },
+      ],
+    });
+  });
+
+  it("a shared-token node (legacy) gets it too", async () => {
+    const { port } = await setup({ endpoints });
+    const reg = await call(port, "POST", "/devices/register", SHARED, {
+      id: "legacy",
+    });
+    expect(reg.status).toBe(200);
+    expect(reg.body.endpoints).toEqual(endpoints);
+  });
+
+  it("a client-only credential is refused the route, so never sees the list", async () => {
+    const { port, store } = await setup({ endpoints });
+    const { token } = await store.mint({
+      deviceId: "C",
+      scopes: ["client"],
+      origin: "upgrade",
+    });
+    const reg = await call(port, "POST", "/devices/register", token, {
+      id: "C",
+    });
+    expect(reg.status).toBe(403);
+    expect(reg.body.endpoints).toBeUndefined();
+  });
+
+  it("without native.endpoints the reply is unchanged", async () => {
+    const { port, store } = await setup();
+    const { token } = await store.mint({
+      deviceId: "A",
+      scopes: ["device"],
+      origin: "upgrade",
+    });
+    const reg = await call(port, "POST", "/devices/register", token, {
+      id: "A",
+    });
+    expect(reg.status).toBe(200);
+    expect(Object.keys(reg.body).sort()).toEqual(["deviceId", "ok"]);
   });
 });

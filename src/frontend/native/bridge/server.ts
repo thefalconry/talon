@@ -43,6 +43,7 @@ import { contentTypeFor, safeUploadName } from "../media/media.js";
 import { type BridgeEvent } from "../protocol.js";
 import { buildRoutes } from "./routes/index.js";
 import type { BridgeServerHandlers, RouteHost } from "./routes/host.js";
+import type { AdvertisedEndpoints } from "../../../core/mesh/links/endpoints.js";
 import {
   BRIDGE_ROUTE_AUTH,
   QUERY_TOKEN_ROUTES,
@@ -192,6 +193,11 @@ export class BridgeServer {
        * (±10% jitter) so clients re-authenticate. Unset = never.
        */
       sseMaxLifetimeMs?: number;
+      /**
+       * `native.endpoints`, resolved: the other ways devices can reach this
+       * bridge, sent in every device's register reply. Absent = no field.
+       */
+      endpoints?: AdvertisedEndpoints;
       /** Overrides for tests; production uses the defaults. */
       authPolicy?: Partial<AuthGuardPolicy>;
       timeouts?: Partial<BridgeTimeouts>;
@@ -604,6 +610,7 @@ export class BridgeServer {
       openStream: (res, deviceId, principal) =>
         this.openStream(res, deviceId, principal),
       credentials: this.opts.credentials,
+      endpoints: () => this.opts.endpoints,
       unknownProvision: (res) => this.unknownProvision(res),
     };
   }
