@@ -77,6 +77,12 @@ fingerprint. Compare it with the `Bridge TLS` line of `talon status` on the
 daemon host. If they differ, stop the node, delete `fingerprint` from the
 config and reconnect with `--fingerprint <the daemon's value>`.
 
+`endpoints` and `endpointsVersion` appear once the daemon advertises
+fallback ways to reach the bridge (`native.endpoints`). The node writes
+them itself. `bridge` is always tried first, and every fallback must present
+the pinned certificate. See
+[Fallback endpoints](../../docs/headless-node.md#fallback-endpoints).
+
 ### Strict TLS (opt-in)
 
 Trust-on-first-use stays the default. To refuse any bridge whose

@@ -29,6 +29,7 @@ import type {
   MemoryListResult,
 } from "../../surface/memory.js";
 import type { ConfigSnapshot } from "../../surface/settings.js";
+import type { AdvertisedEndpoints } from "../../../../core/mesh/links/endpoints.js";
 
 /** Optional attachment references carried alongside a sent message. */
 export type SendOptions = {
@@ -217,4 +218,6 @@ export type RouteHost = {
   unknownProvision: (res: ServerResponse) => void;
   /** Per-device credential support; undefined = shared token only. */
   credentials: BridgeCredentials | undefined;
+  /** Endpoint list for device register replies (undefined = none). */
+  endpoints: () => AdvertisedEndpoints | undefined;
 };

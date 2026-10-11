@@ -34,6 +34,10 @@ import {
 } from "../frontend/native/protocol.js";
 import { MeshRegistry } from "../core/mesh/index.js";
 import {
+  advertisedEndpoints,
+  type MeshEndpoint,
+} from "../core/mesh/links/endpoints.js";
+import {
   DeviceFiles,
   type DeviceFilesHost,
 } from "../core/mesh/transfers/device-files.js";
@@ -73,6 +77,8 @@ const meshFixture = JSON.parse(
   companionDeviceControlCapabilities: string[];
   registration: Record<string, unknown>;
   companionRegistration: Record<string, unknown>;
+  endpointsConfig: { publicUrl: string; endpoints: MeshEndpoint[] };
+  registerReplyWithEndpoints: { endpoints: unknown };
   device: DeviceInfo;
   location: DeviceLocation;
   resultOk: DeviceCommandResult;
@@ -261,6 +267,13 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
 
   it("carries the daemon's protocol version", () => {
     expect(meshFixture.protocol).toBe(BRIDGE_PROTOCOL_VERSION);
+  });
+
+  it("the register reply's endpoints field is what the daemon derives from config", () => {
+    const { publicUrl, endpoints } = meshFixture.endpointsConfig;
+    expect(advertisedEndpoints(publicUrl, endpoints)).toEqual(
+      meshFixture.registerReplyWithEndpoints.endpoints,
+    );
   });
 
   it("node registration passes the real registry validation unchanged", async () => {
