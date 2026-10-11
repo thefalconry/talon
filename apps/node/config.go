@@ -42,6 +42,13 @@ type Config struct {
 	// https to a bridge whose fingerprint is already configured, and never
 	// adopts one it has not been given. Off by default.
 	StrictTLS bool `json:"strictTls,omitempty"`
+	// Endpoints are the other ways to reach the bridge, as the daemon last
+	// advertised them (endpoints.go). Bridge is always tried first; these
+	// are fallbacks, and every one must present the pinned certificate.
+	// Written by the node; an edit here is replaced on the next change.
+	Endpoints []Endpoint `json:"endpoints,omitempty"`
+	// EndpointsVersion is the daemon's version tag for Endpoints.
+	EndpointsVersion string `json:"endpointsVersion,omitempty"`
 	// Policy is the host owner's local limit on what the mesh may do here
 	// (see Policy). Editable only in this file.
 	Policy Policy `json:"policy"`

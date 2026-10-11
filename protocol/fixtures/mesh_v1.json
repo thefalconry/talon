@@ -1,5 +1,5 @@
 {
-  "_comment": "Canonical mesh/device wire samples for Bridge Protocol v1: registration bodies, device/location shapes, the full device_command surface with canonical params, and command-result shapes. `nodeDesktopCapabilities` are node commands only some platforms implement (today: `computer` on macOS), advertised on top of `nodeCapabilities` where available. Asserted by all three implementations — the daemon validates registrations/locations through its real normalizers (protocol-conformance.test.ts), talon-node executes the `run: true` commands through its real dispatch and asserts capability parity (protocol_conformance_test.go), and the companion asserts capability parity and runs the DeviceExec subset (protocol_conformance_test.dart). `{{TMP}}` in params is replaced by each executor test with a sandbox directory it seeds from `sandboxFiles`. `dataKeys` lists result-data keys BOTH device implementations must produce for that command — the daemon's tools read these names. `transfer: true` marks the streamed transfer commands: each suite serves `transferBody` for the push token and accepts the pull upload on a fake /devices/file, then checks the `sha256` both ways (the push param is the body's digest; the device reports the digest of what it moved).",
+  "_comment": "Canonical mesh/device wire samples for Bridge Protocol v1: registration bodies, device/location shapes, the full device_command surface with canonical params, and command-result shapes. `nodeDesktopCapabilities` are node commands only some platforms implement (today: `computer` on macOS), advertised on top of `nodeCapabilities` where available. Asserted by all three implementations — the daemon validates registrations/locations through its real normalizers (protocol-conformance.test.ts), talon-node executes the `run: true` commands through its real dispatch and asserts capability parity (protocol_conformance_test.go), and the companion asserts capability parity and runs the DeviceExec subset (protocol_conformance_test.dart). `{{TMP}}` in params is replaced by each executor test with a sandbox directory it seeds from `sandboxFiles`. `dataKeys` lists result-data keys BOTH device implementations must produce for that command — the daemon's tools read these names. `transfer: true` marks the streamed transfer commands: each suite serves `transferBody` for the push token and accepts the pull upload on a fake /devices/file, then checks the `sha256` both ways (the push param is the body's digest; the device reports the digest of what it moved). `endpointsConfig` is a daemon `native.publicUrl` + `native.endpoints`, and `registerReplyWithEndpoints` the POST /devices/register reply it produces: the daemon derives exactly that `endpoints` field from the config (protocol-conformance.test.ts), and talon-node learns the list from it, keeping its own configured bridge first (protocol_conformance_test.go). `v` is opaque to devices: they only compare it to notice a change.",
   "protocol": 1,
   "nodeCapabilities": [
     "ring",
@@ -61,6 +61,43 @@
     "battery": 87,
     "charging": false,
     "capabilities": ["locate", "ring", "status"]
+  },
+  "endpointsConfig": {
+    "publicUrl": "https://mesh.example.org",
+    "endpoints": [
+      {
+        "url": "https://mesh.example.org",
+        "dial": "203.0.113.7:443",
+        "label": "direct v4"
+      },
+      {
+        "url": "https://mesh.example.org",
+        "dial": "[2001:db8::1]:443",
+        "label": "direct v6"
+      },
+      { "url": "https://mesh.example.net" }
+    ]
+  },
+  "registerReplyWithEndpoints": {
+    "ok": true,
+    "deviceId": "dev_node01",
+    "endpoints": {
+      "v": "8c52ac313cb33010c7d666b71904a907401647b9a1d181d2b1054d62192e7265",
+      "list": [
+        { "url": "https://mesh.example.org" },
+        {
+          "url": "https://mesh.example.org",
+          "dial": "203.0.113.7:443",
+          "label": "direct v4"
+        },
+        {
+          "url": "https://mesh.example.org",
+          "dial": "[2001:db8::1]:443",
+          "label": "direct v6"
+        },
+        { "url": "https://mesh.example.net" }
+      ]
+    }
   },
   "device": {
     "id": "dev_node01",
@@ -148,7 +185,11 @@
         "id": "cmd_exec",
         "deviceId": "dev_node01",
         "name": "exec",
-        "params": { "cmd": "echo conformance", "cwd": "{{TMP}}", "timeoutMs": 30000 }
+        "params": {
+          "cmd": "echo conformance",
+          "cwd": "{{TMP}}",
+          "timeoutMs": 30000
+        }
       }
     },
     {
@@ -230,7 +271,10 @@
         "id": "cmd_move",
         "deviceId": "dev_node01",
         "name": "move",
-        "params": { "from": "{{TMP}}/move-src.txt", "to": "{{TMP}}/move-dst.txt" }
+        "params": {
+          "from": "{{TMP}}/move-src.txt",
+          "to": "{{TMP}}/move-dst.txt"
+        }
       }
     },
     {
@@ -284,7 +328,13 @@
         "id": "cmd_computer",
         "deviceId": "dev_node01",
         "name": "computer",
-        "params": { "action": "click", "x": 640, "y": 360, "button": "left", "count": 1 }
+        "params": {
+          "action": "click",
+          "x": 640,
+          "y": 360,
+          "button": "left",
+          "count": 1
+        }
       }
     },
     {

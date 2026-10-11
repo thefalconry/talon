@@ -171,6 +171,13 @@ func statusCmd(cfg *Config) {
 	fmt.Printf("talon-node %s\n", version)
 	fmt.Printf("config:      %s\n", cfg.Path)
 	fmt.Printf("bridge:      %s\n", cfg.Bridge)
+	for _, ep := range cfg.Endpoints {
+		if ep.Label != "" {
+			fmt.Printf("fallback:    %s — %s\n", ep, ep.Label)
+		} else {
+			fmt.Printf("fallback:    %s\n", ep)
+		}
+	}
 	fmt.Printf("device name: %s\n", cfg.Name)
 	fmt.Printf("device id:   %s\n", cfg.DeviceID)
 	switch {
