@@ -249,9 +249,10 @@ desktop and operate it. One command, eight actions:
 
 | Action       | What it does                                                                      |
 | ------------ | --------------------------------------------------------------------------------- |
-| `screenshot` | the primary display as a JPEG                                                     |
+| `screenshot` | the primary display as a JPEG, always small enough to deliver                     |
 | `snapshot`   | the frontmost window's accessibility tree: each control, its name, where to click |
-| `click`      | `x`, `y`, optional `button`, `count` (double/triple), `modifiers`                 |
+|              | `scope: "all"` adds the menu bar, menu extras, menus, popovers and panels         |
+| `click`      | `x`, `y`, optional `button`, `count` (double/triple), `modifiers`, `verify`       |
 | `move`       | move the pointer                                                                  |
 | `drag`       | press at `x`,`y`, release at `toX`,`toY`                                          |
 | `scroll`     | `dy` / `dx` in lines, optionally aimed at `x`,`y` first                           |
@@ -263,9 +264,34 @@ longest edge is at most 1280, and the screenshot is rendered at exactly that
 size. A pixel in the image, a position in a snapshot and a click target are
 the same pair of numbers, on Retina and non-Retina displays alike.
 
+**System UI.** The frontmost window's tree never holds the system's own
+UI — menu bar extras, Control Center and its module popovers (Video
+Effects, Focus, Sound), open menus, Notification Center, floating panels —
+because all of it belongs to other processes. `snapshot` with
+`scope: "all"` reads those too, straight through the AXUIElement API: the
+frontmost app's menu bar titles, every menu bar extra (on macOS 26 each
+owner's `AXExtrasMenuBar`; on 27 the system ones are grouped under
+MenuBarAgent), and the controls in every on-screen window that is not an
+ordinary app window, frontmost first. Ordinary background windows are
+listed by owner, title and frame but not walked. Toggles (checkboxes,
+switches, radio buttons, checked menu items) report `state: on|off|mixed`.
+
+**Checked clicks.** A `click` hit-tests the point first and reports the
+control it is about to hit; after the click it waits `settleMs` (default 400) and reports the same control again — a toggle shows its new state —
+and whatever is under the pointer now (a menu or popover that opened).
+`verify: false` skips both.
+
+**Screenshots that always arrive.** A result over the transport cap is
+never delivered (the daemon only times out), so the node re-encodes until
+it fits under 300 KB (or a smaller `maxBytes`): JPEG quality first, then
+the image size in proportion to how far over it is. A shrunk image reports
+`scale` — space pixels per image pixel — and its own `width`/`height`; the
+click space (`space`) never changes.
+
 **Nothing to install.** Capture is `screencapture` + `sips`; the pointer is
-CoreGraphics events and the keyboard and accessibility tree are System
-Events, both driven through `osascript` (JXA). The script is compiled into
+CoreGraphics events, the keyboard and the frontmost window's tree are
+System Events, and system UI and click checks use the AXUIElement API, all
+driven through `osascript` (JXA). The script is compiled into
 the binary and passed inline, so nothing is written to disk and the node
 stays a single static file with no cgo.
 
@@ -293,7 +319,8 @@ app and asks again.
 
 **Limits.** Primary display only. `snapshot` reads the frontmost window and
 stops at 150 elements or 8 seconds (both adjustable per call), because a web
-page can hold thousands. The audit log records the action name and nothing
+page can hold thousands; with `scope: "all"` the system UI gets its own
+element limit and at most half the time. The audit log records the action name and nothing
 else: typed text can be a password.
 
 Set `"disableComputer": true` in the policy block to turn it off. It is on
