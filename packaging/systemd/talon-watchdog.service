@@ -1,0 +1,30 @@
+# Talon watchdog: start the daemon if it is down. A systemd --user unit,
+# run by talon-watchdog.timer. See docs/watchdog.md.
+#
+# For a daemon started with `talon start` (or self-respawned by /restart).
+# If you run Talon under talon.service (`talon run`), you don't need this:
+# that unit is already the supervisor. Never enable both.
+#
+# Install (as the user whose ~/.talon it is):
+#   mkdir -p ~/.config/systemd/user
+#   cp packaging/systemd/talon-watchdog.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now talon-watchdog.timer
+#   sudo loginctl enable-linger "$USER"   # keep it running while logged out
+
+[Unit]
+Description=Talon watchdog (start the daemon if it is down)
+Documentation=https://github.com/thefalconry/talon/blob/main/docs/watchdog.md
+
+[Service]
+Type=oneshot
+# The daemon it starts inherits this unit's environment. A user unit gets
+# a minimal PATH, so `bun`, `claude` and friends may be missing: add a
+# drop-in with your shell's PATH (docs/watchdog.md).
+ExecStart=/usr/bin/env talon watchdog
+# The daemon is spawned detached and must outlive this run. The default
+# KillMode=control-group would kill it with the rest of the unit's cgroup
+# the moment the check exits; `process` leaves it alone.
+KillMode=process
+# A start waits up to 30 s for the daemon to report healthy.
+TimeoutStartSec=120

@@ -79,6 +79,7 @@ import {
   removePidRecordIfOwnedBy,
 } from "./core/daemon/pidfile.js";
 import { stampDaemonOwner } from "./core/daemon/pidfile.js";
+import { clearStopMarker } from "./core/daemon/watchdog/stop-marker.js";
 import {
   recordBootMetrics,
   startResourceSampler,
@@ -114,6 +115,9 @@ if (process.argv.includes(BOOT_SMOKE_FLAG)) {
     process.exit(1);
   }
 }
+// This process is the daemon now, however it was launched: an earlier
+// `talon stop` no longer holds, so the watchdog may supervise it again.
+clearStopMarker();
 // Every child spawned from here on names this daemon as its owner, so an
 // orphan sweep can tell a dead daemon's leftovers from a live one's runs.
 stampDaemonOwner();

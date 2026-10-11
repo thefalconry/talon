@@ -4,10 +4,11 @@ Distribution artefacts for installing Talon outside the development tree.
 
 ## Contents
 
-| Path                            | Purpose                                                  |
-| ------------------------------- | -------------------------------------------------------- |
-| `systemd/talon.service`         | Linux systemd unit for a source-checkout daemon run.     |
-| `systemd/talon-package.service` | Linux systemd unit for an npm install (`talon` on PATH). |
+| Path                                        | Purpose                                                                                                             |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `systemd/talon.service`                     | Linux systemd unit for a source-checkout daemon run.                                                                |
+| `systemd/talon-package.service`             | Linux systemd unit for an npm install (`talon` on PATH).                                                            |
+| `systemd/talon-watchdog.service` + `.timer` | systemd `--user` units that start a `talon start` daemon when it is down ([docs/watchdog.md](../docs/watchdog.md)). |
 
 The Dockerfile / Docker Compose configuration lives at the repository
 root for convention (`docker compose up -d` from the checkout). The

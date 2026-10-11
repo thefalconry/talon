@@ -7,9 +7,10 @@
  * synchronously, and the next boot — once the admin notifier and the
  * frontends are up — turns it into a `daemon.crash` alert and deletes it.
  *
- * Three writers: the uncaught-exception handler (./crash.ts), the fatal
- * startup path (app.ts), and the handoff watcher (./handoff.ts) when a
- * `/restart` successor never served. Last write wins; the file is tiny on
+ * Four writers: the uncaught-exception handler (./crash.ts), the fatal
+ * startup path (app.ts), the handoff watcher (./handoff.ts) when a
+ * `/restart` successor never served, and the watchdog (./watchdog/watchdog.ts) when
+ * it found no daemon and started one. Last write wins; the file is tiny on
  * purpose and never grows. This module imports nothing from core so the
  * handoff watcher's bare runtime can carry it.
  */
@@ -18,7 +19,7 @@ import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { dirs } from "../../util/paths.js";
 
-export type CrashKind = "uncaught" | "startup" | "handoff";
+export type CrashKind = "uncaught" | "startup" | "handoff" | "watchdog";
 
 export type CrashMarker = {
   kind: CrashKind;
