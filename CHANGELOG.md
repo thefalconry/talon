@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.37.2](https://github.com/thefalconry/talon/compare/v5.37.1...v5.37.2) (2026-10-11)
+
+
+### Tests
+
+* drop an inherited TALON_DAEMON_* owner stamp before the suite runs ([#1295](https://github.com/thefalconry/talon/issues/1295)) ([429d3ee](https://github.com/thefalconry/talon/commit/429d3ee495557f74bf31f13ce0cf2c73615a9a54))
+
 ## [5.37.1](https://github.com/thefalconry/talon/compare/v5.37.0...v5.37.1) (2026-10-11)
 
 
