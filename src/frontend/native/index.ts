@@ -166,6 +166,17 @@ function registerMeshTransport(
  */
 const RESTART_RECONNECT_AFTER_MS = 5_000;
 
+/**
+ * How the bridge says goodbye. A /restart or /update says so, so devices
+ * come straight back to the successor instead of waiting out their
+ * reconnect backoff.
+ */
+function bridgeStopOptions(): Parameters<BridgeServer["stop"]>[0] {
+  return respawnRequested()
+    ? { restart: { reconnectAfterMs: RESTART_RECONNECT_AFTER_MS } }
+    : {};
+}
+
 export function createNativeFrontend(
   config: TalonConfig,
   gateway: Gateway,
@@ -305,13 +316,7 @@ export function createNativeFrontend(
       unregisterMeshTransport = null;
       mesh.setBridgeInfo(null);
       await removeBridgeDiscovery();
-      // A /restart or /update: say so, so devices come straight back to the
-      // successor instead of waiting out their reconnect backoff.
-      await server.stop(
-        respawnRequested()
-          ? { restart: { reconnectAfterMs: RESTART_RECONNECT_AFTER_MS } }
-          : {},
-      );
+      await server.stop(bridgeStopOptions());
       await gateway.stop();
     },
   };
