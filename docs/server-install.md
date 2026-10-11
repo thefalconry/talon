@@ -151,7 +151,7 @@ certificates in front ([mtls.md](mtls.md)).
 | `Telegram frontend requires "botToken"`                 | `frontend` still includes `telegram`. Set it to `"native"`.                                                            |
 | App can't reach the server                              | `ss -ltnp \| grep 19880` should show `0.0.0.0:19880`. If it shows `127.0.0.1`, set `native.host`. Check the firewall.  |
 | `401` / unauthorized in the app                         | Token mismatch. Re-copy `~/.talon/keys/bridge-token`.                                                                  |
-| `429` / too many failed auth attempts                   | That address sent wrong tokens repeatedly. Fix the token, then wait out the lockout (`Retry-After`), or restart Talon. |
+| `429` / too many failed auth attempts                   | That address sent wrong tokens repeatedly. Fix the token, then wait out the lockout (`Retry-After`), or restart Talon. Devices on per-device credentials are not locked out. |
 | `Refusing to start the bridge: native.token looks weak` | Remove `native.token` (Talon mints a strong one) or use `openssl rand -hex 32`.                                        |
 | App refuses the certificate after a reinstall           | `~/.talon/keys` was regenerated. Reconnect from the connect screen to re-pin, after checking the fingerprint.          |
 | Anything else                                           | `talon doctor` and `talon logs`.                                                                                       |

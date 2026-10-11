@@ -49,6 +49,11 @@ Instead, use [GitHub's private vulnerability reporting](https://github.com/thefa
 - **Brute-force lockout**: an address presenting repeated wrong tokens is
   refused (HTTP 429) for a cooldown window, and the lockout is logged for
   fail2ban-style tooling. Tokenless probes don't count — only wrong secrets.
+  The address is the real client: behind a reverse proxy on the same host
+  the bridge reads `X-Forwarded-For` (rightmost non-loopback hop), and only
+  when the connection comes from loopback; from any other peer the header is
+  ignored. A valid per-device credential is never refused by an address
+  lockout (the shared token is), so one guesser can't lock out the fleet.
 - **Minimal pre-auth surface**: unauthenticated `/health` serves only what
   pairing needs (identity, protocol version, certificate fingerprint);
   operational details require the token.

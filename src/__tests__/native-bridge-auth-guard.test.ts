@@ -173,13 +173,31 @@ describe("auth guard", () => {
     expect(delayOf(guard.check("5.6.7.8", "bad"))).toBe(0);
   });
 
-  it("locks an address out after the limit, even with the right token", () => {
+  it("locks an address out after the limit, even with the right shared token", () => {
     const { guard } = guardAt({ lockoutMaxFailures: 3, backoffBaseMs: 0 });
     for (let i = 0; i < 3; i++) guard.check("1.2.3.4", "bad");
     const locked = guard.check("1.2.3.4", "ok");
     expect(locked).toMatchObject({ kind: "reject", reason: "lockout" });
     expect(locked.kind === "reject" && locked.retryAfterSec).toBeGreaterThan(0);
     expect(loggedText()).toMatch(/bridge\.auth event=lockout addr=1\.2\.3\.4/);
+  });
+
+  it("never refuses a valid per-device credential from a locked address", () => {
+    const { guard } = guardAt({ lockoutMaxFailures: 3, backoffBaseMs: 0 });
+    for (let i = 0; i < 3; i++) guard.check("1.2.3.4", "bad");
+    expect(guard.check("1.2.3.4", "ok", null, true)).toEqual({
+      kind: "allow",
+    });
+    // The device's success doesn't lift the lockout for whoever tripped it:
+    // the shared token and further guesses from there are still refused.
+    expect(guard.check("1.2.3.4", "ok")).toMatchObject({
+      kind: "reject",
+      reason: "lockout",
+    });
+    expect(guard.check("1.2.3.4", "bad")).toMatchObject({
+      kind: "reject",
+      reason: "lockout",
+    });
   });
 
   it("caps the number of tracked addresses", () => {
