@@ -15,18 +15,26 @@ import 'package:crypto/crypto.dart';
 /// Semantics: an otherwise-untrusted certificate is accepted exactly when
 /// its fingerprint matches the pin. Certificates that already chain to a
 /// platform-trusted CA (reverse-proxy setups) never reach this code — the
-/// bad-certificate callback fires only when normal validation failed.
+/// bad-certificate callback fires only when normal validation failed —
+/// unless the pin is enforced ([pin]'s `enforce`, from
+/// `ConnectionConfig.enforcesPin`): then clients are built without the
+/// platform roots and every certificate must match.
 ///
 /// It also carries the profile's client certificate (reverse proxies that
 /// demand one): an avatar loaded by Image.network has to get through the
 /// proxy too, and [createHttpClient] is the only hook into that client.
 class BridgeTrust extends HttpOverrides {
   static String? _pinnedFingerprint;
+  static bool _enforce = false;
   static SecurityContext? _clientContext;
 
   /// Adopt [fingerprint] (lowercase hex, no separators) as the pin; null
-  /// clears it, restoring default certificate validation everywhere.
-  static void pin(String? fingerprint) => _pinnedFingerprint = fingerprint;
+  /// clears it, restoring default certificate validation everywhere. With
+  /// [enforce], even a CA-valid certificate must match it.
+  static void pin(String? fingerprint, {bool enforce = false}) {
+    _pinnedFingerprint = fingerprint;
+    _enforce = enforce && fingerprint != null;
+  }
 
   /// Present [context]'s client certificate on implicitly-created clients;
   /// null stops presenting one.
@@ -50,6 +58,8 @@ class BridgeTrust extends HttpOverrides {
 
   @override
   HttpClient createHttpClient(SecurityContext? context) =>
-      super.createHttpClient(context ?? _clientContext)
+      super.createHttpClient(context ??
+          _clientContext ??
+          (_enforce ? SecurityContext(withTrustedRoots: false) : null))
         ..badCertificateCallback = (cert, host, port) => accepts(cert);
 }
