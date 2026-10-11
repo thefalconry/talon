@@ -393,7 +393,7 @@ function snapshot(req, geo) {
       pr.title || pr.name || pr.accessibilityDescription || pr.help,
       80,
     );
-    var value = role === "AXSecureTextField" ? "" : clip(pr.value, 120);
+    var value = isSecureField(role, pr.subrole) ? "" : clip(pr.value, 120);
     var interactive = !!INTERACTIVE[role];
     // Icon-only controls (calculator keys, toolbar and window buttons) keep
     // their name in attributes the property record leaves out. One extra
@@ -542,6 +542,14 @@ function axChildren(el) {
   return out;
 }
 
+// isSecureField: a password field, whose value must never be reported.
+// AppKit and WebKit expose one as role AXTextField with subrole
+// AXSecureTextField (there is no AXSecureTextField role), so the subrole is
+// what identifies it; the role is checked too in case some app reports it.
+function isSecureField(role, subrole) {
+  return role === "AXSecureTextField" || subrole === "AXSecureTextField";
+}
+
 // toggleState reads the on/off state of a control that has one: "on",
 // "off" or "mixed" for checkboxes, switches, radio buttons and menu items
 // with a check mark; "" for everything else.
@@ -567,7 +575,7 @@ function axItem(a, geo, keepAll) {
   var label = clip(a.AXTitle || a.AXDescription || a.AXHelp, 80);
   var state = toggleState(a);
   var value = "";
-  if (role !== "AXSecureTextField" && role !== "AXHeading" && !state) {
+  if (!isSecureField(role, a.AXSubrole) && role !== "AXHeading" && !state) {
     var v = a.AXValue;
     if (typeof v === "string" || typeof v === "number") value = clip(v, 120);
   }

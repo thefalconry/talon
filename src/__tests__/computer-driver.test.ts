@@ -13,6 +13,7 @@ type Item = Record<string, unknown> | null;
 interface Driver {
   toggleState(a: Record<string, unknown>): string;
   axItem(a: Record<string, unknown>, geo: Geo, keepAll: boolean): Item;
+  isSecureField(role: unknown, subrole: unknown): boolean;
 }
 interface Geo {
   f: number;
@@ -138,6 +139,30 @@ describe("computer_darwin.js helpers", () => {
       false,
     );
     expect(item?.value).toBeUndefined();
+  });
+
+  it("never reports a password field's value as macOS really exposes it (AXTextField + AXSecureTextField subrole)", () => {
+    for (const keepAll of [false, true]) {
+      const item = driver.axItem(
+        {
+          AXRole: "AXTextField",
+          AXSubrole: "AXSecureTextField",
+          AXTitle: "Password",
+          AXValue: "hunter2",
+          AXPosition: [10, 10],
+          AXSize: [100, 20],
+        },
+        retina,
+        keepAll,
+      );
+      expect(item).toMatchObject({ role: "TextField", label: "Password" });
+      expect(item?.value).toBeUndefined();
+    }
+    // The System Events snapshot path uses the same check on its role and
+    // subrole properties.
+    expect(driver.isSecureField("AXTextField", "AXSecureTextField")).toBe(true);
+    expect(driver.isSecureField("AXSecureTextField", undefined)).toBe(true);
+    expect(driver.isSecureField("AXTextField", "AXSearchField")).toBe(false);
   });
 
   it("flags selected, expanded, disabled and focused controls", () => {
