@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show HttpClient, X509Certificate;
+import 'dart:io' show HttpClient, SecurityContext, X509Certificate;
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
@@ -64,6 +64,7 @@ class BridgeClient {
     final prev = _config;
     _config = next;
     if (next.tls != prev.tls ||
+        next.enforcesPin != prev.enforcesPin ||
         next.clientP12 != prev.clientP12 ||
         next.clientP12Password != prev.clientP12Password) {
       _httpClient?.close();
@@ -80,6 +81,7 @@ class BridgeClient {
 
   String? _seenFingerprint;
   bool _pinRejected = false;
+  bool _pinObserved = false;
 
   /// This device's mesh id, when it has one. Claimed on the SSE GET so the
   /// daemon addresses `device_command` frames to this client alone, and sent
@@ -130,6 +132,11 @@ class BridgeClient {
   /// the pin candidate the caller persists after a successful first connect.
   String? get seenFingerprint => _seenFingerprint;
 
+  /// True once a handshake presented exactly the pinned certificate — the
+  /// caller then persists [ConnectionConfig.pinObserved], which makes the
+  /// pin binding even for CA-valid certificates.
+  bool get pinObserved => _pinObserved;
+
   /// How long an idle pooled connection is kept for reuse. dart:io's default
   /// is 15 s, shorter than the mesh's 60 s registration heartbeat, so every
   /// heartbeat paid a fresh DNS lookup, TCP connect and TLS handshake
@@ -143,23 +150,38 @@ class BridgeClient {
   http.Client _newClient() {
     // A reverse proxy in front of the bridge may demand a client
     // certificate; present the imported one whenever it's asked for. Server
-    // trust is still the pin below.
+    // trust is still the pin below. A profile that enforces its pin leaves
+    // the platform's CA roots out, so no certificate is trusted before the
+    // pin has been checked.
+    final strict = config.enforcesPin;
     final inner = config.tls
-        ? (HttpClient(context: config.clientSecurityContext())
-          ..badCertificateCallback = (cert, host, port) => _evaluate(cert))
+        ? (HttpClient(
+            context: config.clientSecurityContext(trustedRoots: !strict) ??
+                (strict ? SecurityContext(withTrustedRoots: false) : null),
+          )
+            // BridgeTrust (the process-wide HttpOverrides) may have routed
+            // connections through the process pin; this client pins itself.
+            ..connectionFactory = null
+            ..badCertificateCallback = (cert, host, port) => _evaluate(cert))
         : HttpClient();
     inner.idleTimeout = restIdleTimeout;
     return IOClient(inner);
   }
 
-  /// Fires only for certificates the platform doesn't already trust (so
-  /// CA-backed reverse proxies bypass it). No pin yet ⇒ trust on first use;
-  /// pinned ⇒ exact fingerprint match or the handshake is refused.
+  /// Fires for certificates the platform doesn't already trust — and, on a
+  /// profile that [ConnectionConfig.enforcesPin], for every certificate.
+  /// Otherwise CA-backed reverse proxies bypass it. No pin yet ⇒ trust on
+  /// first use; pinned ⇒ exact fingerprint match or the handshake is
+  /// refused.
   bool _evaluate(X509Certificate cert) {
     final seen = BridgeTrust.fingerprintOf(cert);
     _seenFingerprint = seen;
     final pinned = config.fingerprint;
-    if (pinned == null || seen == pinned) return true;
+    if (pinned == null) return true;
+    if (seen == pinned) {
+      _pinObserved = true;
+      return true;
+    }
     _pinRejected = true;
     return false;
   }
