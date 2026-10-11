@@ -26,6 +26,7 @@ import {
 } from "../frontend/native/bridge/server.js";
 import { registerMeshTransport } from "../frontend/native/mesh-transport.js";
 import { MeshRegistry, MeshService } from "../core/mesh/index.js";
+import { DeviceCredentialStore } from "../core/mesh/credentials/index.js";
 import type { BridgeEvent } from "../frontend/native/protocol.js";
 
 /** Only what opening an event stream reads. */
@@ -62,10 +63,14 @@ async function startServer(): Promise<{ server: BridgeServer; port: number }> {
   return { server, port: await server.start() };
 }
 
-async function openEvents(port: number, deviceId?: string): Promise<SseStream> {
+async function openEvents(
+  port: number,
+  deviceId?: string,
+  token = "secret",
+): Promise<SseStream> {
   const query = deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : "";
   const res = await fetch(`http://127.0.0.1:${port}/events${query}`, {
-    headers: { Authorization: "Bearer secret" },
+    headers: { Authorization: `Bearer ${token}` },
   });
   expect(res.status).toBe(200);
   const reader = res.body!.getReader();
@@ -181,6 +186,59 @@ describe("device commands across a reconnect", () => {
     await until(() => commandsOn(again).length === 1);
     expect(legacy.text()).not.toContain("s3cret");
     const [frame] = commandsOn(again);
+    mesh.completeCommand({ commandId: frame!.id, deviceId: "phone", ok: true });
+    expect((await pending).ok).toBe(true);
+  });
+
+  it("after a restart, holds a credentialed device's command instead of handing it to an unclaimed client", async () => {
+    // A fresh process: no stream has claimed anything yet. The phone has
+    // used its own per-device credential before (persisted), so every
+    // stream it opens is bound to "phone" — it is reconnecting, not a
+    // pre-claim build that only the unclaimed fallback can reach.
+    const dir = await mkdtemp(join(tmpdir(), "talon-command-hold-creds-"));
+    const store = new DeviceCredentialStore(join(dir, "creds.json"));
+    await store.load();
+    const { token } = store.mintNow({
+      deviceId: "phone",
+      scopes: ["device"],
+      origin: "pair",
+    });
+    expect(store.authenticate(token)).not.toBeNull();
+    server = new BridgeServer(
+      {
+        host: "127.0.0.1",
+        port: 0,
+        token: "secret",
+        startedAt: "boot",
+        credentials: {
+          authority: store,
+          policy: { legacySharedToken: true, companionScopes: ["device"] },
+        },
+      },
+      handlers,
+    );
+    const port = await server.start();
+    const { mesh, phone } = await meshWithPhone(5_000);
+    registerMeshTransport(
+      { mesh, broadcast: (event) => server!.broadcast(event) },
+      server,
+    );
+    // The desktop app / CLI (shared token, no claim) is back first.
+    const legacy = await openEvents(port);
+
+    const pending = mesh.sendCommand(
+      phone,
+      "exec",
+      { cmd: "id", secret: "s3cret" },
+      10_000,
+    );
+    await settle();
+    expect(legacy.text()).not.toContain("s3cret");
+
+    const back = await openEvents(port, undefined, token);
+    await until(() => commandsOn(back).length === 1);
+    expect(legacy.text()).not.toContain("s3cret");
+    const [frame] = commandsOn(back);
     mesh.completeCommand({ commandId: frame!.id, deviceId: "phone", ok: true });
     expect((await pending).ok).toBe(true);
   });

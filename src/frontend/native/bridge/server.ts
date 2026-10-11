@@ -326,7 +326,8 @@ export class BridgeServer {
    * With per-device credentials the claim IS enforced: a credential can
    * only claim the device it is bound to (credentials/claims.ts).
    *
-   * A device that has claimed a stream before is never handed to the
+   * A device that has claimed a stream before — or signs in with its own
+   * per-device credential (`claimsItsStreams`) — is never handed to the
    * fallback: when it has no stream right now it is reconnecting, and the
    * caller should hold the frame until `onDeviceStream` reports it back.
    * The return value says which of the three happened.
@@ -344,7 +345,7 @@ export class BridgeServer {
       this.write(claimed, event);
       return "claimed";
     }
-    if (this.claimers.has(deviceId) || unclaimed.length === 0) {
+    if (unclaimed.length === 0 || this.claimsItsStreams(deviceId)) {
       logDebug(
         "native",
         `bridge.device_send device=${deviceId} result=no_stream`,
@@ -357,6 +358,21 @@ export class BridgeServer {
     );
     this.write(unclaimed, event);
     return "fallback";
+  }
+
+  /**
+   * Whether `deviceId` addresses its own streams, so having none right now
+   * means it is reconnecting: it has claimed one since this server started,
+   * or it has authenticated with its own per-device credential, which binds
+   * every stream it opens to its id (credentials/claims.ts). The second
+   * matters after a daemon restart, when `claimers` starts empty and the
+   * first client back may well be an unclaimed one (the desktop app, the
+   * CLI).
+   */
+  private claimsItsStreams(deviceId: string): boolean {
+    if (this.claimers.has(deviceId)) return true;
+    const live = this.opts.credentials?.authority.activeFor(deviceId) ?? [];
+    return live.some((credential) => credential.lastUsedAt !== undefined);
   }
 
   /**

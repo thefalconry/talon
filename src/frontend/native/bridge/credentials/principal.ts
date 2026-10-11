@@ -67,6 +67,8 @@ type BridgeCredentialAuthority = {
     deviceId: string,
   ): { ok: true } | { ok: false; error: string };
   rotationDue(credentialId: string): boolean;
+  /** Live credentials acting as `deviceId` (and whether each was used). */
+  activeFor(deviceId: string): readonly { lastUsedAt?: number }[];
   noteLegacy(deviceId: string): boolean;
   onRevoked(listener: (credentialIds: readonly string[]) => void): () => void;
   mint(input: {
