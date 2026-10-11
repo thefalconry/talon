@@ -22,6 +22,7 @@ import {
   isDeviceCredentialToken,
 } from "../../../../core/mesh/credentials/index.js";
 import { logWarn } from "../../../../util/log.js";
+import { clientAddress } from "../client-address.js";
 
 /**
  * What a credential may do (see core/mesh/credentials/types.ts):
@@ -177,7 +178,7 @@ export function resolvePrincipal(
   if (!sharedMatches(candidate)) return null;
   const local = isLocalRequest(req);
   if (!local && credentials && !credentials.policy.legacySharedToken) {
-    const remote = req.socket.remoteAddress ?? "unknown";
+    const remote = clientAddress(req);
     if (!refusedLegacy.has(remote) && refusedLegacy.size < 256) {
       refusedLegacy.add(remote);
       logWarn(
