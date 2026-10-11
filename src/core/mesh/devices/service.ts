@@ -63,7 +63,7 @@ import {
   type MeshAuditEntry,
   type MeshAuditQuery,
 } from "../audit.js";
-import { logWarn } from "../../../util/log.js";
+import { logDebug, logWarn } from "../../../util/log.js";
 import {
   DeviceCredentialStore,
   type CredentialAdminContext,
@@ -79,8 +79,13 @@ import type {
 export type MeshTransport = {
   /** Ask one device (or all, when undefined) for a fresh location fix. */
   locate(deviceId?: string): void;
-  /** Deliver an on-demand command to its target device. */
-  command(command: DeviceCommand): void;
+  /**
+   * Deliver an on-demand command to its target device. Return `false` when
+   * the device has no live connection on this transport right now (it is
+   * reconnecting): the mesh then holds the command and offers it again on
+   * `MeshService.deviceConnected`. Anything else counts as handed off.
+   */
+  command(command: DeviceCommand): boolean | void;
 };
 
 /** Outcome of pinging one device (see {@link MeshService.pingAll}). */
@@ -103,6 +108,12 @@ export type MeshServiceOptions = {
   commandTimeoutMs?: number;
   /** How often a long command re-checks that its device is still present. */
   presenceWatchIntervalMs?: number;
+  /**
+   * How long an undelivered command (no transport has a live connection to
+   * its device) waits for the device to reconnect before failing. Default
+   * {@link DEFAULT_COMMAND_HOLD_MS}; 0 fails it at once.
+   */
+  commandHoldMs?: number;
   /** Node-binary resolver override (tests — the real one builds/downloads). */
   nodeBinaryResolver?: NodeBinaryResolver;
   /**
@@ -122,6 +133,13 @@ export type MeshServiceOptions = {
 const DEFAULT_FRESH_FIX_TIMEOUT_MS = 8_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 12_000;
+/**
+ * Default hold for a command whose device is between connections. Nodes are
+ * back within ~1–16 s of a daemon restart; the companion's first retry
+ * lands in a few seconds. Longer than that and the device is not coming
+ * back soon, so the caller is better served by a clear failure.
+ */
+const DEFAULT_COMMAND_HOLD_MS = 20_000;
 const MOBILE_PLATFORMS = new Set(["android", "ios"]);
 const DEFAULT_HISTORY_HOURS = 24;
 const MAX_HISTORY_LINES = 24;
@@ -144,6 +162,12 @@ export class MeshService {
     }
   >();
   /**
+   * Commands no transport could deliver yet, by id, in send order. Each is
+   * also in `pendingCommands`; `deviceConnected` offers it again, and its
+   * hold timer fails it when the device stays away.
+   */
+  private readonly heldCommands = new Map<string, DeviceCommand>();
+  /**
    * Server-side receipt time (this process's clock) of the last fix per
    * device. Freshness is judged against THIS, never the device-supplied
    * `loc.ts` — a companion whose clock runs behind would otherwise have
@@ -160,6 +184,7 @@ export class MeshService {
   private readonly pollIntervalMs: number;
   private readonly commandTimeoutMs: number;
   private readonly presenceWatchIntervalMs: number;
+  private commandHoldMs: number;
   private loading: Promise<void> | null = null;
   /** Per-device credentials (null = shared-token-only mesh). */
   readonly credentials: DeviceCredentialStore | null;
@@ -179,6 +204,7 @@ export class MeshService {
       options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.presenceWatchIntervalMs =
       options.presenceWatchIntervalMs ?? PRESENCE_WATCH_INTERVAL_MS;
+    this.commandHoldMs = options.commandHoldMs ?? DEFAULT_COMMAND_HOLD_MS;
     this.resolveNode = options.nodeBinaryResolver ?? resolveNodeBinary;
     this.files = new DeviceFiles({
       load: () => this.load(),
@@ -198,6 +224,32 @@ export class MeshService {
             store.mintNow({ deviceId: null, scopes, origin }).token
         : undefined,
     );
+  }
+
+  /**
+   * `native.commandHoldMs`: how long an undelivered command waits for its
+   * device to reconnect. Undefined restores the default.
+   */
+  setCommandHoldMs(ms: number | undefined): void {
+    this.commandHoldMs = Math.max(0, ms ?? DEFAULT_COMMAND_HOLD_MS);
+  }
+
+  /**
+   * A transport reports that `deviceId` has a live connection again. Every
+   * command held for it is offered once more, oldest first; one that is
+   * still not taken stays held until its window ends.
+   */
+  deviceConnected(deviceId: string): void {
+    for (const [id, command] of Array.from(this.heldCommands)) {
+      if (command.deviceId !== deviceId) continue;
+      if (this.dispatchToTransports(command)) {
+        this.heldCommands.delete(id);
+        logDebug(
+          "mesh",
+          `mesh.command event=flushed device=${deviceId} command=${command.name} id=${id}`,
+        );
+      }
+    }
   }
 
   /** The native bridge reports its reachable identity here (null on stop). */
@@ -441,7 +493,16 @@ export class MeshService {
     return this.audit ? this.audit.read(query) : Promise.resolve([]);
   }
 
-  /** Deliver one command; resolves with its result, a timeout, or a loss. */
+  /**
+   * Deliver one command; resolves with its result, a timeout, or a loss.
+   *
+   * When no transport has a live connection to the device (it is between
+   * streams: a daemon restart, a network change), the command is held for
+   * `commandHoldMs` and sent the moment the device reconnects
+   * (`deviceConnected`). If it does not come back in that window the
+   * command fails then, saying it was never delivered, instead of waiting
+   * out its whole timeout for an answer that cannot come.
+   */
   private deliverCommand(
     device: DeviceInfo,
     name: string,
@@ -454,45 +515,79 @@ export class MeshService {
       name,
       params,
     };
+    const holdMs = Math.min(this.commandHoldMs, timeoutMs);
+    const undelivered = (): string =>
+      `${device.name} has no live connection to the bridge` +
+      (holdMs > 0
+        ? ` and did not reconnect within ${Math.round(holdMs / 1000)}s`
+        : "") +
+      `, so "${name}" was not delivered.`;
     return new Promise<DeviceCommandResult>((resolve) => {
+      let settled = false;
       let stopWatch: () => void = () => {};
-      const timer = setTimeout(() => {
+      let holdTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (result: DeviceCommandResult): void => {
+        if (settled) return;
+        settled = true;
         this.pendingCommands.delete(command.id);
+        this.heldCommands.delete(command.id);
+        clearTimeout(timer);
+        clearTimeout(holdTimer);
         stopWatch();
-        resolve({
+        resolve(result);
+      };
+      const fail = (message: string): void =>
+        finish({
           commandId: command.id,
           deviceId: device.id,
           ok: false,
-          message: `${device.name} did not answer within ${Math.round(timeoutMs / 1000)}s (device ${device.online ? "was online" : "appears offline"}).`,
+          message,
         });
+      const timer = setTimeout(() => {
+        fail(
+          this.heldCommands.has(command.id)
+            ? undelivered()
+            : `${device.name} did not answer within ${Math.round(timeoutMs / 1000)}s (device ${device.online ? "was online" : "appears offline"}).`,
+        );
       }, timeoutMs);
       timer.unref?.();
       stopWatch = this.watchPresence(device.id, timeoutMs, (current) => {
-        if (!this.pendingCommands.delete(command.id)) return;
-        clearTimeout(timer);
-        resolve({
-          commandId: command.id,
-          deviceId: device.id,
-          ok: false,
-          message: `${device.name} went offline (last seen ${age(Date.now() - current.lastSeen)}) before answering "${name}".`,
-        });
+        fail(
+          `${device.name} went offline (last seen ${age(Date.now() - current.lastSeen)}) before answering "${name}".`,
+        );
       });
       this.pendingCommands.set(command.id, {
         deviceId: device.id,
-        resolve: (result) => {
-          clearTimeout(timer);
-          stopWatch();
-          resolve(result);
-        },
+        resolve: finish,
       });
-      for (const transport of this.transports) {
-        try {
-          transport.command(command);
-        } catch {
-          // One broken transport must not stop the others.
-        }
-      }
+      if (this.dispatchToTransports(command) || settled) return;
+      this.heldCommands.set(command.id, command);
+      logDebug(
+        "mesh",
+        `mesh.command event=held device=${device.id} command=${name} id=${command.id} holdMs=${holdMs}`,
+      );
+      holdTimer = setTimeout(() => {
+        if (this.heldCommands.has(command.id)) fail(undelivered());
+      }, holdMs);
+      holdTimer.unref?.();
     });
+  }
+
+  /**
+   * Offer a command to every transport. True when at least one took it —
+   * did not report "no live connection to that device". A transport that
+   * throws has not taken it.
+   */
+  private dispatchToTransports(command: DeviceCommand): boolean {
+    let taken = false;
+    for (const transport of this.transports) {
+      try {
+        if (transport.command(command) !== false) taken = true;
+      } catch {
+        // One broken transport must not stop the others.
+      }
+    }
+    return taken;
   }
 
   // ── Model-facing tool surface ──────────────────────────────────────────────
