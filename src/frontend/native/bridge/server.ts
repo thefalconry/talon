@@ -65,6 +65,21 @@ export type { BridgeServerHandlers, SendOptions } from "./routes/host.js";
 export { BRIDGE_ROUTE_AUTH, type BridgeRouteKey } from "./routes/table.js";
 export type { BridgeCredentials } from "./credentials/principal.js";
 
+/**
+ * Where `sendToDevice` put a frame: on a stream the device itself claimed,
+ * on the unclaimed legacy fallback, or nowhere (the device is between
+ * streams — reconnecting, or this process just started).
+ */
+export type DeviceDelivery = "claimed" | "fallback" | "none";
+
+/**
+ * Cap on the device ids remembered as "has claimed a stream". Ids come
+ * from authenticated clients only; the cap just keeps a misbehaving one
+ * from growing the set without bound. Past it, new ids fall back to the
+ * legacy delivery rule.
+ */
+const MAX_REMEMBERED_CLAIMERS = 1_024;
+
 /** One live SSE connection: the device it claimed and who opened it. */
 type StreamSession = {
   deviceId: string | undefined;
@@ -153,6 +168,17 @@ export class BridgeServer {
    * the principal is what lets a revocation find and drop the session.
    */
   private clients = new Map<ServerResponse, StreamSession>();
+  /**
+   * Device ids that have claimed a stream since this server started. Such a
+   * device is addressable, so while it is between streams its traffic is
+   * held for it (see `sendToDevice`) instead of falling back to unclaimed
+   * clients.
+   */
+  private readonly claimers = new Set<string>();
+  /** Told whenever a stream claiming a device opens (the command hold). */
+  private readonly deviceStreamListeners = new Set<
+    (deviceId: string) => void
+  >();
   private unsubscribeRevocations: (() => void) | undefined;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private port = 0;
@@ -299,9 +325,13 @@ export class BridgeServer {
    *
    * With per-device credentials the claim IS enforced: a credential can
    * only claim the device it is bound to (credentials/claims.ts).
+   *
+   * A device that has claimed a stream before is never handed to the
+   * fallback: when it has no stream right now it is reconnecting, and the
+   * caller should hold the frame until `onDeviceStream` reports it back.
+   * The return value says which of the three happened.
    */
-  sendToDevice(deviceId: string, event: BridgeEvent): void {
-    if (this.clients.size === 0) return;
+  sendToDevice(deviceId: string, event: BridgeEvent): DeviceDelivery {
     const claimed: ServerResponse[] = [];
     const unclaimed: ServerResponse[] = [];
     for (const [res, { deviceId: id, principal }] of this.clients) {
@@ -310,13 +340,43 @@ export class BridgeServer {
         unclaimed.push(res);
       }
     }
-    if (claimed.length === 0) {
+    if (claimed.length > 0) {
+      this.write(claimed, event);
+      return "claimed";
+    }
+    if (this.claimers.has(deviceId) || unclaimed.length === 0) {
       logDebug(
         "native",
-        `No SSE client claims device ${deviceId} — delivering to ${unclaimed.length} unclaimed client(s)`,
+        `bridge.device_send device=${deviceId} result=no_stream`,
       );
+      return "none";
     }
-    this.write(claimed.length > 0 ? claimed : unclaimed, event);
+    logDebug(
+      "native",
+      `No SSE client claims device ${deviceId} — delivering to ${unclaimed.length} unclaimed client(s)`,
+    );
+    this.write(unclaimed, event);
+    return "fallback";
+  }
+
+  /**
+   * Subscribe to "a stream claiming `deviceId` just opened". Fires after
+   * the stream is addressable, so a listener may `sendToDevice` at once.
+   * Returns an unsubscribe.
+   */
+  onDeviceStream(listener: (deviceId: string) => void): () => void {
+    this.deviceStreamListeners.add(listener);
+    return () => this.deviceStreamListeners.delete(listener);
+  }
+
+  private notifyDeviceStream(deviceId: string): void {
+    for (const listener of Array.from(this.deviceStreamListeners)) {
+      try {
+        listener(deviceId);
+      } catch (err) {
+        logError("native", "Device stream listener threw", err);
+      }
+    }
   }
 
   private write(targets: Iterable<ServerResponse>, event: BridgeEvent): void {
@@ -709,6 +769,12 @@ export class BridgeServer {
       this.clients.delete(res);
       logDebug("native", `SSE client left (${this.clients.size} total)`);
     });
+    if (deviceId !== undefined) {
+      if (this.claimers.size < MAX_REMEMBERED_CLAIMERS) {
+        this.claimers.add(deviceId);
+      }
+      this.notifyDeviceStream(deviceId);
+    }
   }
 
   /**

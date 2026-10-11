@@ -31,6 +31,7 @@ import { startEmptyChatSweep } from "./chats/empty-chat-sweep.js";
 import { buildBridgeHandlers } from "./surface/handlers.js";
 import { createNativeRuntime, type NativeRuntime } from "./runtime.js";
 import { BridgeServer, type BridgeCredentials } from "./bridge/server.js";
+import { registerMeshTransport } from "./mesh-transport.js";
 import {
   DEFAULT_COMPANION_SCOPES,
   FORMER_COMPANION_SCOPES,
@@ -129,33 +130,6 @@ async function adoptCompanionDefault(
   }
 }
 
-/**
- * Plug this bridge in as the mesh's transport: locates and device commands
- * (from ANY frontend's mesh tool calls) leave as SSE events.
- *
- * A locate is a bare "who's there?" — no secret in the frame, and
- * pre-command app builds rely on receiving it — so it still fans out.
- * A command is the opposite: its params carry transfer tokens, exec
- * command lines and (on the chunked fallback) file bodies, so it goes
- * to the target device's own client(s) only.
- */
-function registerMeshTransport(
-  runtime: NativeRuntime,
-  server: BridgeServer,
-): () => void {
-  return runtime.mesh.registerTransport({
-    locate: (deviceId) => runtime.broadcast({ kind: "locate", deviceId }),
-    command: (command) =>
-      server.sendToDevice(command.deviceId, {
-        kind: "device_command",
-        id: command.id,
-        deviceId: command.deviceId,
-        name: command.name,
-        params: command.params,
-      }),
-  });
-}
-
 export function createNativeFrontend(
   config: TalonConfig,
   gateway: Gateway,
@@ -213,6 +187,7 @@ export function createNativeFrontend(
     async init() {
       await mesh.load();
       await adoptCompanionDefault(config, mesh);
+      mesh.setCommandHoldMs(config.native?.commandHoldMs);
       unregisterMeshTransport = registerMeshTransport(runtime, server);
       // Mesh tool actions (list_devices / get_device_location) are shared
       // gateway actions — no native-only cases here.
