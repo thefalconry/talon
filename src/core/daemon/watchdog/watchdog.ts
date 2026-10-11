@@ -33,9 +33,15 @@
  *      exists the watchdog does nothing. Any start clears it.
  *
  * One exception to (1): a pidfile pid that is alive but whose record
- * predates this boot of the machine is a recycled pid, not our daemon, so
- * it doesn't count. Without that, a hard reset that left the pidfile
- * behind could keep Talon down forever.
+ * predates this boot of the machine, and whose command line doesn't look
+ * like Talon, is a recycled pid, not our daemon, so it doesn't count.
+ * Without that, a hard reset that left the pidfile behind could keep
+ * Talon down forever. Before starting, that stale pidfile is removed:
+ * `startDaemon` re-runs discovery, which has no boot-time rule and would
+ * otherwise answer "already running" for the recycled pid. The command
+ * line check keeps a wall-clock step at boot (no RTC, NTP corrects the
+ * clock later and moves `btime` past the record) from making a live,
+ * silent Talon look recycled.
  *
  * When it does start the daemon, it leaves a `watchdog` crash marker
  * (unless the dead daemon left a more specific one), so the new daemon
@@ -56,7 +62,11 @@ import { log, logError, logWarn } from "../../../util/log.js";
 import { startDaemon, type StartOutcome } from "../control.js";
 import { writeCrashMarker } from "../crash-marker.js";
 import { findRunningInstance, type RunningInstance } from "../discovery.js";
-import { isProcessAlive, readPidRecord } from "../pidfile.js";
+import {
+  isProcessAlive,
+  readPidRecord,
+  removePidRecordIfOwnedBy,
+} from "../pidfile.js";
 import { readStopMarker } from "./stop-marker.js";
 
 export type WatchdogOutcome =
@@ -86,6 +96,8 @@ export type WatchdogOptions = {
   now?: () => number;
   /** When this boot of the machine began (epoch ms), or null if unknown. */
   bootTime?: () => number | null;
+  /** A live pid's command line, or null if unreadable. */
+  cmdline?: (pid: number) => string | null;
   markCrash?: (why: string) => void;
 };
 
@@ -116,6 +128,21 @@ function linuxBootTime(): number | null {
   } catch {
     return null;
   }
+}
+
+/** /proc/<pid>/cmdline, NUL-separated args joined by spaces; null off Linux. */
+function linuxCmdline(pid: number): string | null {
+  try {
+    return readFileSync(`/proc/${pid}/cmdline`, "utf-8").replace(/\0/g, " ");
+  } catch {
+    return null;
+  }
+}
+
+/** Could this command line be a Talon daemon? Unknown counts as yes. */
+function mayBeTalon(cmdline: string | null): boolean {
+  if (cmdline === null) return true;
+  return /talon|src[\\/]index\.ts/i.test(cmdline);
 }
 
 function readState(path: string): MissState | null {
@@ -189,20 +216,24 @@ function releaseLock(path: string): void {
 }
 
 /**
- * Whether discovery's answer is a daemon. A pidfile-only answer (live pid,
- * no /health) counts, unless its record predates this machine boot.
+ * The pid of a pidfile record left by a previous boot of the machine whose
+ * pid now belongs to something else, or null. Only for discovery's
+ * pidfile-only answer (live pid, no /health).
  */
-function isDaemon(
+function recycledPid(
   instance: RunningInstance | null,
   pidfilePath: string | undefined,
   bootTime: number | null,
-): instance is RunningInstance {
-  if (!instance) return false;
-  if (instance.source !== "pidfile-unverified" || bootTime === null) {
-    return true;
+  cmdline: (pid: number) => string | null,
+): number | null {
+  if (instance?.source !== "pidfile-unverified" || bootTime === null) {
+    return null;
   }
-  const startedAt = Date.parse(readPidRecord(pidfilePath)?.startedAt ?? "");
-  return !(Number.isFinite(startedAt) && startedAt < bootTime);
+  const record = readPidRecord(pidfilePath);
+  if (record?.pid !== instance.pid) return null;
+  const startedAt = Date.parse(record.startedAt ?? "");
+  if (!(Number.isFinite(startedAt) && startedAt < bootTime)) return null;
+  return mayBeTalon(cmdline(record.pid)) ? null : record.pid;
 }
 
 function describeStart(outcome: StartOutcome): WatchdogOutcome {
@@ -278,7 +309,13 @@ async function checkAndMaybeStart(
   const find = opts.find ?? findRunningInstance;
   const bootTime = (opts.bootTime ?? linuxBootTime)();
   const instance = await find(opts.pidfilePath);
-  if (isDaemon(instance, opts.pidfilePath, bootTime)) {
+  const recycled = recycledPid(
+    instance,
+    opts.pidfilePath,
+    bootTime,
+    opts.cmdline ?? linuxCmdline,
+  );
+  if (instance && recycled === null) {
     writeState(statePath, null);
     return { action: "none", reason: "running", pid: instance.pid };
   }
@@ -306,6 +343,9 @@ async function checkAndMaybeStart(
   const why = `no daemon answered for ${Math.round(downForMs / 1000)}s (${state.misses} checks)`;
   logWarn("watchdog", `Talon is down — ${why}; starting it`);
   (opts.markCrash ?? markFoundDown)(why);
+  // startDaemon's discovery would see the recycled pid as a live daemon
+  // and refuse; the record is from before this boot, so nothing owns it.
+  if (recycled !== null) removePidRecordIfOwnedBy(recycled, opts.pidfilePath);
   const start = opts.start ?? startDaemon;
   const outcome = describeStart(
     await start({ pkgRoot: opts.pkgRoot, pidfilePath: opts.pidfilePath }),

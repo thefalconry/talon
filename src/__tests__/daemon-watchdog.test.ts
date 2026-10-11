@@ -38,7 +38,7 @@ import {
   readStopMarker,
   writeStopMarker,
 } from "../core/daemon/watchdog/stop-marker.js";
-import { writePidRecord } from "../core/daemon/pidfile.js";
+import { readPidRecord, writePidRecord } from "../core/daemon/pidfile.js";
 
 let dir: string;
 let clock: number;
@@ -78,6 +78,8 @@ function opts(extra: Partial<WatchdogOptions> = {}): WatchdogOptions {
     },
     now: () => clock,
     bootTime: () => BOOT,
+    // Whatever now holds a recycled pid; tests that need Talon say so.
+    cmdline: () => "/usr/sbin/sshd -D",
     markCrash: (why) => crashes.push(why),
     ...extra,
   };
@@ -220,16 +222,54 @@ describe("talon watchdog", () => {
     expect(started).toBe(1);
   });
 
-  it("ignores a pidfile pid recycled after a reboot", async () => {
+  it("ignores a pidfile pid recycled after a reboot, and clears it so the start goes through", async () => {
     // The record is from before this boot; the pid now belongs to someone
     // else, so discovery sees "alive, no /health".
     instance = live("pidfile-unverified");
+    const pidfile = join(dir, "talon.pid");
     writePidRecord(
       { pid: process.pid, startedAt: new Date(BOOT - 60_000).toISOString() },
-      join(dir, "talon.pid"),
+      pidfile,
     );
-    await runMinutes(3);
+    // Like the real startDaemon, refuse while the pidfile names a live pid:
+    // its discovery has no boot-time rule.
+    const seen: Array<number | undefined> = [];
+    const o = opts({
+      start: async () => {
+        started++;
+        const rec = readPidRecord(pidfile);
+        seen.push(rec?.pid);
+        return rec
+          ? {
+              ok: false,
+              reason: "already-running",
+              instance: live("pidfile-unverified"),
+            }
+          : startResult;
+      },
+    });
+    const results = await runMinutes(3, o);
     expect(started).toBe(1);
+    expect(seen).toEqual([undefined]);
+    expect(results[2]).toMatchObject({ action: "started" });
+  });
+
+  it("keeps a pre-boot record whose live pid still looks like Talon (clock stepped after boot)", async () => {
+    instance = live("pidfile-unverified");
+    const pidfile = join(dir, "talon.pid");
+    writePidRecord(
+      { pid: process.pid, startedAt: new Date(BOOT - 60_000).toISOString() },
+      pidfile,
+    );
+    await runMinutes(
+      5,
+      opts({ cmdline: () => "node tsx/dist/cli.mjs /srv/talon/src/index.ts" }),
+    );
+    expect(started).toBe(0);
+    expect(readPidRecord(pidfile)?.pid).toBe(process.pid);
+    // Unreadable command line: assume it might be Talon.
+    await runMinutes(5, opts({ cmdline: () => null }));
+    expect(started).toBe(0);
   });
 
   it("reports a start that `startDaemon` refused as running", async () => {
