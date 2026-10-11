@@ -22,7 +22,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sdk = vi.hoisted(() => ({ calls: [] as Array<{ options?: unknown }> }));
@@ -138,7 +138,9 @@ describe("config validation", () => {
     );
     expect(issues).toEqual([
       'claudeAccounts.1.id: "claude-2" is declared twice',
-      'claudeAccounts.2.configDir: /srv/a is already the config dir of "claude-2" — each account needs its own',
+      // resolveAccountDir makes the dir absolute for the host: "/srv/a" is
+      // "/srv/a" on POSIX but "D:\srv\a" on Windows (current drive).
+      `claudeAccounts.2.configDir: ${resolve("/srv/a")} is already the config dir of "claude-2" — each account needs its own`,
       `claudeAccounts.3.configDir: ${join(root, "default")} is already the config dir of "claude" — each account needs its own`,
       'backend: "claude-3" is not a declared Claude account — add it to "claudeAccounts"',
       'enabledBackends.2: "claude-4" is not a declared Claude account — add it to "claudeAccounts"',
@@ -159,10 +161,12 @@ describe("config validation", () => {
   });
 
   it("expands ~ in configDir against the user's home", () => {
+    // Results are host-absolute: on Windows "/home/test" gains the current
+    // drive and backslashes, so compare against path.resolve, not literals.
     expect(resolveAccountDir("~/.talon/accounts/x", "/home/test")).toBe(
-      "/home/test/.talon/accounts/x",
+      resolve("/home/test", ".talon/accounts/x"),
     );
-    expect(resolveAccountDir("/srv/x/", "/home/test")).toBe("/srv/x");
+    expect(resolveAccountDir("/srv/x/", "/home/test")).toBe(resolve("/srv/x"));
   });
 });
 
