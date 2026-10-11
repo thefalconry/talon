@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.37.1](https://github.com/thefalconry/talon/compare/v5.37.0...v5.37.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **companion:** allow reading scrollback and prevent snap back to bottom on gesture end or rebuild ([#1297](https://github.com/thefalconry/talon/issues/1297)) ([a1d7dff](https://github.com/thefalconry/talon/commit/a1d7dffb1ebb3a26e26f1507ca869c0ff5df5885))
+
 ## [5.37.0](https://github.com/thefalconry/talon/compare/v5.36.4...v5.37.0) (2026-10-11)
 
 
