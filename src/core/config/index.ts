@@ -218,6 +218,15 @@ const nativeConfigSchema = z
      */
     sseMaxLifetimeMs: z.number().int().min(60_000).optional(),
     /**
+     * How long a device command waits, in ms, when its device has no live
+     * event stream (it is reconnecting: after a daemon restart, a network
+     * change, an `sseMaxLifetimeMs` cycle). The command is sent the moment
+     * the device's stream returns; if it does not return in this window the
+     * command fails then, saying it was not delivered, rather than waiting
+     * out its whole timeout. Default 20000; 0 fails such commands at once.
+     */
+    commandHoldMs: z.number().int().min(0).max(300_000).optional(),
+    /**
      * Origins allowed to call the bridge from a BROWSER. Native clients
      * (Electron main, Flutter, curl, talon-node) send no Origin header and
      * never need an entry here. Anything listed gets a matching

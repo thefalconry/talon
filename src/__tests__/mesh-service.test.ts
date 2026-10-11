@@ -1877,3 +1877,124 @@ describe("MeshService node provisioning", () => {
     expect(loopback.text).toContain("loopback");
   });
 });
+
+/**
+ * A command for a device that is between streams (the daemon restarted, the
+ * device is reconnecting) used to go nowhere and burn its whole timeout.
+ * The transport now says "no live connection", the mesh holds the command,
+ * and either delivers it when the device's stream returns or fails fast.
+ */
+describe("MeshService command hold across a reconnect", () => {
+  /** A transport whose device is offline until `connect()`; it answers ok. */
+  function reconnectingTransport(service: MeshService) {
+    let connected = false;
+    const offers: string[] = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) => {
+        offers.push(cmd.id);
+        if (!connected) return false;
+        queueMicrotask(() =>
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            message: `ran ${cmd.name}`,
+          }),
+        );
+        return true;
+      },
+    });
+    return {
+      offers,
+      connect: () => {
+        connected = true;
+        service.deviceConnected("phone");
+      },
+    };
+  }
+
+  async function phone(service: MeshService) {
+    await registerPhone(service);
+    const { devices } = await service.list();
+    return devices.find((d) => d.id === "phone")!;
+  }
+
+  it("delivers a command sent while the device has no live stream once it reconnects", async () => {
+    const service = await tempService({ commandHoldMs: 2_000 });
+    const device = await phone(service);
+    const transport = reconnectingTransport(service);
+
+    const pending = service.sendCommand(device, "ring", {}, 5_000);
+    setTimeout(() => transport.connect(), 50);
+    const result = await pending;
+
+    expect(result).toMatchObject({ ok: true, message: "ran ring" });
+    // Offered once (refused), then again when the stream came back.
+    expect(transport.offers).toHaveLength(2);
+    expect(new Set(transport.offers).size).toBe(1);
+  });
+
+  it("fails fast, saying it was not delivered, when the device stays away", async () => {
+    const service = await tempService({ commandHoldMs: 80 });
+    const device = await phone(service);
+    reconnectingTransport(service);
+
+    const started = Date.now();
+    const result = await service.sendCommand(device, "ring", {}, 5_000);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("no live connection to the bridge");
+    expect(result.message).toContain('"ring" was not delivered');
+    // The hold window, not the 5 s command timeout.
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("does not send a command after it has failed", async () => {
+    const service = await tempService({ commandHoldMs: 40 });
+    const device = await phone(service);
+    const transport = reconnectingTransport(service);
+
+    const result = await service.sendCommand(device, "ring", {}, 5_000);
+    expect(result.ok).toBe(false);
+    transport.connect();
+    expect(transport.offers).toHaveLength(1);
+  });
+
+  it("leaves a held command alone when a different device reconnects", async () => {
+    const service = await tempService({ commandHoldMs: 2_000 });
+    const device = await phone(service);
+    const transport = reconnectingTransport(service);
+
+    const pending = service.sendCommand(device, "ring", {}, 5_000);
+    service.deviceConnected("laptop");
+    expect(transport.offers).toHaveLength(1);
+    transport.connect();
+    expect((await pending).ok).toBe(true);
+  });
+
+  it("never holds longer than the command's own timeout", async () => {
+    const service = await tempService({ commandHoldMs: 60_000 });
+    const device = await phone(service);
+    reconnectingTransport(service);
+
+    const started = Date.now();
+    const result = await service.sendCommand(device, "status", {}, 100);
+    expect(result.message).toContain("was not delivered");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("fails at once with a zero hold", async () => {
+    const service = await tempService();
+    service.setCommandHoldMs(0);
+    const device = await phone(service);
+    reconnectingTransport(service);
+
+    const started = Date.now();
+    const result = await service.sendCommand(device, "ring", {}, 5_000);
+    expect(result.message).toBe(
+      'Pixel 9 has no live connection to the bridge, so "ring" was not delivered.',
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
