@@ -1,0 +1,13 @@
+# Runs talon-watchdog.service once a minute. See docs/watchdog.md.
+
+[Unit]
+Description=Run the Talon watchdog every minute
+
+[Timer]
+OnBootSec=1min
+# Measured from the end of the previous check, so runs never overlap.
+OnUnitInactiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

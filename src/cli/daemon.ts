@@ -13,6 +13,10 @@ import {
   type StartOutcome,
   type StopOutcome,
 } from "../core/daemon/control.js";
+import {
+  runWatchdogOnce,
+  type WatchdogOutcome,
+} from "../core/daemon/watchdog/watchdog.js";
 import { PKG_ROOT } from "./context.js";
 
 function renderStartOutcome(result: StartOutcome): void {
@@ -85,11 +89,42 @@ export async function daemonStart(): Promise<void> {
 }
 
 export async function daemonStop(): Promise<void> {
-  renderStopOutcome(await stopDaemon());
+  renderStopOutcome(await stopDaemon({ intentional: true }));
 }
 
 export async function daemonRestart(): Promise<void> {
   const { stop, start } = await restartDaemon({ pkgRoot: PKG_ROOT });
   renderStopOutcome(stop);
   renderStartOutcome(start);
+}
+
+/** One line per run: it lands in the journal of the timer's unit. */
+function describeWatchdogOutcome(result: WatchdogOutcome): string {
+  switch (result.action) {
+    case "started":
+      return `watchdog: Talon was down; started it (PID ${result.pid}${result.port ? `, gateway :${result.port}` : ""})`;
+    case "start-failed":
+      return `watchdog: Talon is down and could not be started: ${result.detail}`;
+    case "none":
+      switch (result.reason) {
+        case "running":
+          return `watchdog: Talon is running (PID ${result.pid})`;
+        case "stopped-on-purpose":
+          return `watchdog: Talon was stopped on purpose (${result.by}, ${result.at}); leaving it down until \`talon start\``;
+        case "busy":
+          return "watchdog: another watchdog run is in progress";
+        case "waiting":
+          return `watchdog: no daemon found (${result.misses} check(s), ${Math.round(result.downForMs / 1000)}s); waiting before starting it`;
+      }
+  }
+}
+
+/**
+ * `talon watchdog`: one supervision check, for a timer or cron. Exits 1
+ * only when it tried to start Talon and couldn't.
+ */
+export async function daemonWatchdog(): Promise<void> {
+  const result = await runWatchdogOnce({ pkgRoot: PKG_ROOT });
+  console.log(describeWatchdogOutcome(result));
+  if (result.action === "start-failed") process.exitCode = 1;
 }
