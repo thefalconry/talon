@@ -482,12 +482,32 @@ export class BridgeServer {
     });
   }
 
-  async stop(): Promise<void> {
+  /**
+   * Close every stream and stop listening. Each stream is told why first
+   * (a `bye` frame): with `restart`, a successor is about to listen on the
+   * same address and clients should be back after `reconnectAfterMs`
+   * instead of whenever their backoff next fires.
+   */
+  async stop(
+    opts: { restart?: { reconnectAfterMs: number } } = {},
+  ): Promise<void> {
     clearInterval(this.pingTimer);
     this.unsubscribeRevocations?.();
     this.unsubscribeRevocations = undefined;
+    const bye: BridgeEvent = opts.restart
+      ? {
+          kind: "bye",
+          reason: "restart",
+          reconnectAfterMs: Math.max(
+            0,
+            Math.round(opts.restart.reconnectAfterMs),
+          ),
+        }
+      : { kind: "bye", reason: "shutdown" };
+    const frame = `data: ${JSON.stringify(bye)}\n\n`;
     for (const res of this.clients.keys()) {
       try {
+        res.write(frame);
         res.end();
       } catch {
         /* ignore */

@@ -46,6 +46,18 @@ const (
 	stableStreamAfter   = 10 * time.Second
 )
 
+// After the daemon's restart notice (a `bye` frame with reason "restart")
+// the node waits the advertised reconnectAfterMs, then retries every
+// restartRetryInterval for up to restartRetryWindow instead of climbing the
+// backoff: a successor is about to listen, and every second the node is
+// away is a second its commands wait. A restart that takes longer than the
+// window falls back to the usual backoff.
+const (
+	maxRestartDelay      = 30 * time.Second
+	restartRetryInterval = time.Second
+	restartRetryWindow   = 2 * time.Minute
+)
+
 // capabilities every node advertises at registration (a platform may add
 // more: see platformCapabilities). The daemon gates commands on the list,
 // so it must exactly cover what dispatch() handles.
@@ -362,13 +374,14 @@ func (n *Node) Run(ctx context.Context) {
 	go watchReload(ctx, n)
 
 	backoff := minReconnectBackoff
+	var fastUntil time.Time
 	for ctx.Err() == nil {
 		uptime, err := n.consumeEvents(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		var wait time.Duration
-		wait, backoff = reconnectBackoff(backoff, uptime)
+		wait, backoff, fastUntil = nextReconnect(backoff, fastUntil, uptime, err, time.Now())
 		log.Printf("event stream dropped (%v) — reconnecting in %s", err, wait)
 		select {
 		case <-time.After(wait):
@@ -390,6 +403,62 @@ func reconnectBackoff(current, uptime time.Duration) (wait, next time.Duration) 
 		next = maxReconnectBackoff
 	}
 	return current, next
+}
+
+// nextReconnect is reconnectBackoff plus the restart notice: a stream the
+// daemon ended with one (err is *bridgeRestarting) waits the advertised
+// delay and opens a fast-retry window until fastUntil; inside the window
+// every attempt waits restartRetryInterval. A stream that stays up closes
+// the window.
+func nextReconnect(
+	backoff time.Duration, fastUntil time.Time, uptime time.Duration, err error, now time.Time,
+) (wait, nextBackoff time.Duration, nextFastUntil time.Time) {
+	var restarting *bridgeRestarting
+	if errors.As(err, &restarting) {
+		return restarting.after, minReconnectBackoff, now.Add(restarting.after + restartRetryWindow)
+	}
+	if uptime >= stableStreamAfter {
+		fastUntil = time.Time{}
+	}
+	if now.Before(fastUntil) {
+		return restartRetryInterval, minReconnectBackoff, fastUntil
+	}
+	wait, nextBackoff = reconnectBackoff(backoff, uptime)
+	return wait, nextBackoff, time.Time{}
+}
+
+// bridgeRestarting reports an event stream the daemon closed with its
+// restart notice: a successor will be listening in about `after`.
+type bridgeRestarting struct{ after time.Duration }
+
+func (e *bridgeRestarting) Error() string {
+	return fmt.Sprintf("bridge is restarting, back in ~%s", e.after)
+}
+
+// decodeRestartNotice reports whether one SSE line is the daemon's restart
+// notice, and the delay it asks for (clamped to [0, maxRestartDelay]). A
+// "shutdown" bye, any other kind, and junk are not.
+func decodeRestartNotice(line string) (time.Duration, bool) {
+	// Cheap screen first: command frames can be megabytes of JSON.
+	if !strings.HasPrefix(line, "data: ") || !strings.Contains(line, `"bye"`) {
+		return 0, false
+	}
+	var event struct {
+		Kind             string   `json:"kind"`
+		Reason           string   `json:"reason"`
+		ReconnectAfterMs *float64 `json:"reconnectAfterMs"`
+	}
+	if err := json.Unmarshal([]byte(line[len("data: "):]), &event); err != nil {
+		return 0, false
+	}
+	if event.Kind != "bye" || event.Reason != "restart" {
+		return 0, false
+	}
+	var after time.Duration
+	if ms := event.ReconnectAfterMs; ms != nil && *ms > 0 {
+		after = time.Duration(min(*ms, float64(maxRestartDelay/time.Millisecond))) * time.Millisecond
+	}
+	return after, true
 }
 
 func (n *Node) heartbeatLoop(ctx context.Context) {
@@ -463,8 +532,15 @@ func (n *Node) consumeEvents(ctx context.Context) (time.Duration, error) {
 	// Command payloads (write_file base64 chunks) can approach ~400KB of
 	// JSON; give the scanner room well beyond that.
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var restart *bridgeRestarting
 	for scanner.Scan() {
-		event, ok := decodeCommandFrame(scanner.Text(), n.DeviceID)
+		line := scanner.Text()
+		if after, ok := decodeRestartNotice(line); ok {
+			// The daemon ends the stream right after this frame.
+			restart = &bridgeRestarting{after: after}
+			continue
+		}
+		event, ok := decodeCommandFrame(line, n.DeviceID)
 		if !ok {
 			continue
 		}
@@ -473,6 +549,9 @@ func (n *Node) consumeEvents(ctx context.Context) (time.Duration, error) {
 		// on a bounded pool — see enqueueCommand.
 		n.workersOnce.Do(func() { n.startWorkers(ctx) })
 		n.enqueueCommand(event)
+	}
+	if restart != nil {
+		return uptime(), restart
 	}
 	if streamCtx.Err() != nil && ctx.Err() == nil {
 		return uptime(), errStreamIdle

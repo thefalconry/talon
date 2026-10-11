@@ -19,6 +19,10 @@ works out of the box.
   the node verifies its hash, atomically swaps its own binary, and restarts
   into it (in-place `execve` on Linux/macOS, so the mesh reconnects in
   seconds). Version tracks the Talon release it was built against.
+- **Prompt reconnects across daemon restarts**: the daemon ends each event
+  stream with a restart notice (`bye`, `reason: "restart"`); the node waits
+  the advertised delay, then retries every second for up to two minutes
+  instead of climbing its 1 s → 30 s backoff.
 
 ## Quick start
 

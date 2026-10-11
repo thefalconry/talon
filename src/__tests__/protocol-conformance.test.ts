@@ -108,6 +108,7 @@ const EVENT_KINDS = [
   "locate",
   "device_command",
   "error",
+  "bye",
 ] as const satisfies readonly BridgeEvent["kind"][];
 
 type MissingKind = Exclude<BridgeEvent["kind"], (typeof EVENT_KINDS)[number]>;
@@ -201,6 +202,12 @@ describe("events fixture (protocol/fixtures/events_v1.json)", () => {
           break;
         case "error":
           expect(e.message).toBeTypeOf("string");
+          break;
+        case "bye":
+          expect(["restart", "shutdown"]).toContain(e.reason);
+          if (e.reconnectAfterMs !== undefined) {
+            expect(e.reconnectAfterMs).toBeGreaterThanOrEqual(0);
+          }
           break;
         default: {
           const unreachable: never = e;

@@ -37,6 +37,7 @@ import {
   type MeshScope,
 } from "../../core/mesh/credentials/index.js";
 import { isLoopbackHost, loadOrCreateBridgeTlsIdentity } from "./bridge/tls.js";
+import { respawnRequested } from "../../core/daemon/respawn.js";
 
 export { summarizeToolResult } from "./turn/tool-result.js";
 
@@ -155,6 +156,14 @@ function registerMeshTransport(
       }),
   });
 }
+
+/**
+ * When devices are told to come back after a restart. The successor binds
+ * the bridge about 10 s after this process lets go of it (measured over
+ * the restarts of 2026-10: 9.7–10.4 s, once 23 s), so this aims a little
+ * early: clients retry at a short interval from here on.
+ */
+const RESTART_RECONNECT_AFTER_MS = 5_000;
 
 export function createNativeFrontend(
   config: TalonConfig,
@@ -291,7 +300,13 @@ export function createNativeFrontend(
       unregisterMeshTransport = null;
       mesh.setBridgeInfo(null);
       await removeBridgeDiscovery();
-      await server.stop();
+      // A /restart or /update: say so, so devices come straight back to the
+      // successor instead of waiting out their reconnect backoff.
+      await server.stop(
+        respawnRequested()
+          ? { restart: { reconnectAfterMs: RESTART_RECONNECT_AFTER_MS } }
+          : {},
+      );
       await gateway.stop();
     },
   };
