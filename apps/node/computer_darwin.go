@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,9 +29,12 @@ var platformCapabilities = []string{"computer"}
 const (
 	computerDriverTimeout = 30 * time.Second
 	// A screenshot rides the command result as base64. Past this size it is
-	// re-encoded harder so the result stays well inside the bridge's body
-	// limit and the model's image budget.
+	// re-encoded at a lower quality, then shrunk (fitImage), so the result
+	// always stays inside the bridge's body limit and the model's image
+	// budget — an oversized result is never delivered, only timed out.
 	computerMaxImageBytes = 300 * 1024
+	// The smallest cap a caller may ask for with maxBytes.
+	computerMinImageBytes = 32 * 1024
 )
 
 // driverReply is what computer_darwin.js prints.
@@ -125,41 +129,39 @@ func computerScreenshot(ctx context.Context, request map[string]any) commandResu
 		return fail("computer screenshot: %s", computerScreenCaptureHint(detail))
 	}
 
-	quality := intParam(request, "quality", 70)
-	if quality < 20 {
-		quality = 20
+	maxBytes := intParam(request, "maxBytes", computerMaxImageBytes)
+	if maxBytes > computerMaxImageBytes {
+		maxBytes = computerMaxImageBytes
 	}
-	if quality > 90 {
-		quality = 90
+	if maxBytes < computerMinImageBytes {
+		maxBytes = computerMinImageBytes
 	}
 	scaled := filepath.Join(dir, "shot.jpg")
-	var image []byte
-	for {
+	encode := func(w, h, quality int) ([]byte, error) {
 		if out, err := runTool(ctx, "/usr/bin/sips",
-			"-z", fmt.Sprint(height), fmt.Sprint(width),
+			"-z", fmt.Sprint(h), fmt.Sprint(w),
 			"-s", "format", "jpeg", "-s", "formatOptions", fmt.Sprint(quality),
 			shot, "--out", scaled); err != nil {
-			return fail("computer screenshot: sips failed: %v %s", err, out)
+			return nil, fmt.Errorf("sips failed: %v %s", err, out)
 		}
-		image, err = os.ReadFile(scaled)
-		if err != nil {
-			return fail("computer screenshot: %v", err)
-		}
-		if len(image) <= computerMaxImageBytes || quality <= 20 {
-			break
-		}
-		quality -= 20
-		if quality < 20 {
-			quality = 20
-		}
+		return os.ReadFile(scaled)
+	}
+	fitted, err := fitImage(width, height, intParam(request, "quality", 70), maxBytes, encode)
+	if err != nil {
+		return fail("computer screenshot: %v", err)
 	}
 
 	delete(data, "ok")
-	data["base64"] = base64.StdEncoding.EncodeToString(image)
+	data["base64"] = base64.StdEncoding.EncodeToString(fitted.data)
 	data["mimeType"] = "image/jpeg"
-	data["width"] = width
-	data["height"] = height
-	data["bytes"] = len(image)
+	// width/height are the image's own size. They equal the space (so a
+	// pixel is a click coordinate) unless a busy screen had to be shrunk to
+	// fit; then scale says how many space pixels one image pixel covers.
+	data["width"] = fitted.width
+	data["height"] = fitted.height
+	data["scale"] = math.Round(fitted.scale*1000) / 1000
+	data["quality"] = fitted.quality
+	data["bytes"] = len(fitted.data)
 	return okData(data)
 }
 

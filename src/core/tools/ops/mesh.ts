@@ -104,7 +104,7 @@ export const meshTools: ToolDefinition[] = [
   {
     name: "device_computer",
     description:
-      'Look at and operate the desktop of a mesh device that has a screen (today: macOS talon-nodes that list `computer` in list_devices). Work in this order: `snapshot` first — it reads the frontmost window\'s accessibility tree and lists each control with its name and the exact point to click, which is faster and more reliable than judging positions from a picture. Use `screenshot` when the snapshot is empty or unhelpful (canvas apps, games, custom-drawn UI) or to check what a step did. All coordinates, from either source, are in one space: the screenshot\'s own pixels. Actions: screenshot; snapshot (limit); click (x, y, button, count, modifiers); move (x, y); drag (x, y, to_x, to_y); scroll (dy, dx, optionally x, y to aim first — positive dy moves down the page); type (text, into whatever has keyboard focus — click the field first); key (keys, e.g. "cmd+s", "escape", "cmd+shift+4"). Only the primary display is covered. After an action that changes the screen, take a new snapshot or screenshot before the next one — earlier coordinates may be stale.',
+      'Look at and operate the desktop of a mesh device that has a screen (today: macOS talon-nodes that list `computer` in list_devices). Work in this order: `snapshot` first — it reads the frontmost window\'s accessibility tree and lists each control with its name, its on/off state where it has one, and the exact point to click, which is faster and more reliable than judging positions from a picture. The frontmost window never contains the system\'s own UI: for menu bar extras, Control Center and its module popovers (e.g. Video Effects), open menus, Notification Center and floating panels, pass scope "all". Use `screenshot` when the snapshot is empty or unhelpful (canvas apps, games, custom-drawn UI) or to check what a step did. All coordinates, from either source, are in one space: the screenshot\'s own pixels (a busy screen may come back shrunk — the result then gives the factor to multiply by). Actions: screenshot; snapshot (scope, limit); click (x, y, button, count, modifiers) — the result names the control it hit and that control\'s state after the click, so a toggle that flipped the wrong way shows up at once; move (x, y); drag (x, y, to_x, to_y); scroll (dy, dx, optionally x, y to aim first — positive dy moves down the page); type (text, into whatever has keyboard focus — click the field first); key (keys, e.g. "cmd+s", "escape", "cmd+shift+4"). Only the primary display is covered. After an action that changes the screen, take a new snapshot or screenshot before the next one — earlier coordinates may be stale.',
     schema: {
       device: z
         .string()
@@ -161,6 +161,18 @@ export const meshTools: ToolDefinition[] = [
         .number()
         .optional()
         .describe("snapshot: max elements to list (default 150, max 400)."),
+      scope: z
+        .enum(["front", "all"])
+        .optional()
+        .describe(
+          'snapshot: "front" (default) reads the frontmost window; "all" also lists the menu bar, every menu bar extra, and the controls in open menus, Control Center popovers, Notification Center and floating panels of other processes.',
+        ),
+      verify: z
+        .boolean()
+        .optional()
+        .describe(
+          "click: report the control hit and its state after the click (default true). false skips the ~0.4 s settle.",
+        ),
     },
     // The bridge envelope's own `action` field names the gateway route, and
     // `{ action, ...params }` lets a param of the same name overwrite it — so
