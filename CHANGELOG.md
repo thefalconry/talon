@@ -1,5 +1,26 @@
 # Changelog
 
+## [5.37.0](https://github.com/thefalconry/talon/compare/v5.36.4...v5.37.0) (2026-10-11)
+
+
+### Features
+
+* **daemon:** talon watchdog — a supervisor that only ever starts ([#1287](https://github.com/thefalconry/talon/issues/1287)) ([896cbc0](https://github.com/thefalconry/talon/commit/896cbc0648cbdb1029dc4f26b45d09218d55a437))
+* **mesh:** advertise fallback bridge endpoints; talon-node fails over between them ([#1289](https://github.com/thefalconry/talon/issues/1289)) ([e4e051e](https://github.com/thefalconry/talon/commit/e4e051ef9a96d4c1b86d469c6589bc4d8e37e18e))
+* **node:** computer snapshot sees system UI, clicks report what they hit, screenshots always fit ([#1290](https://github.com/thefalconry/talon/issues/1290)) ([703efa4](https://github.com/thefalconry/talon/commit/703efa4ca49aeb8e9bc0db80051d14f345cd4e87))
+
+
+### Bug Fixes
+
+* **bridge:** auth guard keys on the real client behind a same-host proxy ([#1286](https://github.com/thefalconry/talon/issues/1286)) ([3050f66](https://github.com/thefalconry/talon/commit/3050f6639569f4d086693e5f3915872aa7f63fdd))
+* **claude:** keep plan usage through a 429 instead of going blank ([#1283](https://github.com/thefalconry/talon/issues/1283)) ([1f677d4](https://github.com/thefalconry/talon/commit/1f677d48b82b3926eaaa3b9dae2be9f834060235))
+* **companion:** enforce the certificate pin on CA-valid certificates once it has been observed ([#1293](https://github.com/thefalconry/talon/issues/1293)) ([619cc4d](https://github.com/thefalconry/talon/commit/619cc4dcb0b382a6b41d0c25de695ec47ec94fa9))
+
+
+### Documentation
+
+* **proxy:** validate the proxy config before every reload ([#1288](https://github.com/thefalconry/talon/issues/1288)) ([682ba3b](https://github.com/thefalconry/talon/commit/682ba3bd3a879e3a722750e709ca435a1f3a0adb))
+
 ## [5.36.4](https://github.com/thefalconry/talon/compare/v5.36.3...v5.36.4) (2026-10-10)
 
 
