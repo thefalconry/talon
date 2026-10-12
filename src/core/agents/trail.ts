@@ -31,6 +31,8 @@ const WRITE_TOOL = /(?:^|__)(?:Write|Edit|MultiEdit|NotebookEdit|write|edit)$/;
 const TOOL_CALL_BLOCK =
   /\*\*(?:MCP )?Tool call:\*\* `([^`]+)`\s*```json\n([\s\S]*?)\n```/g;
 const PATH_KEY = /"(?:file_path|notebook_path|path)":\s*"((?:[^"\\]|\\.)+)"/;
+/** Any logged tool invocation, including ones that touch no file. */
+const ANY_TOOL_CALL = /\*\*(?:MCP )?Tool call:\*\*|\*\*File changes:\*\*/g;
 const FILE_CHANGES_BLOCK = /\*\*File changes:\*\*[^\n]*\n((?:\s+- .*\n?)+)/g;
 
 function clip(text: string): string {
@@ -68,6 +70,8 @@ export class RunTrail {
   private readonly notes: string[] = [];
   private readonly files: string[] = [];
   lastActivityAt: number;
+  /** Tool invocations seen in the run log; zero means the agent never acted. */
+  toolCalls = 0;
 
   constructor(now: number = Date.now()) {
     this.lastActivityAt = now;
@@ -81,6 +85,7 @@ export class RunTrail {
   /** A chunk the backend appended to the run log. */
   onLog(chunk: string): void {
     this.touch();
+    this.toolCalls += chunk.match(ANY_TOOL_CALL)?.length ?? 0;
     for (const file of filesFromLogChunk(chunk)) {
       if (this.files.includes(file)) continue;
       pushBounded(this.files, file, MAX_FILES);

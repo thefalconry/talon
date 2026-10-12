@@ -68,6 +68,7 @@ const chooseBackend = vi.hoisted(() =>
 );
 vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend,
+  openBreaker: () => undefined,
   recordBackendRunUsage: vi.fn(),
   recordBackendRunFailure: vi.fn(),
   recordBackendRunSuccess: vi.fn(),
@@ -545,7 +546,7 @@ describe("spawnAgent settlement", () => {
     const record = await settled(outcome.agentId);
     expect(record?.state).toBe("failed");
     expect(record?.result).toBeNull();
-    expect(record?.error).toContain("without calling report_result");
+    expect(record?.error).toContain("empty run");
   });
 
   it("settles failed when the run throws", async () => {
