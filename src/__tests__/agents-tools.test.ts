@@ -9,7 +9,11 @@
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { z } from "zod";
-import { agentTools, preflightTools } from "../core/tools/ops/agents.js";
+import {
+  agentTools,
+  boardTools,
+  preflightTools,
+} from "../core/tools/ops/agents.js";
 import {
   agentContextActions,
   agentHandlers,
@@ -105,7 +109,7 @@ afterEach(() => {
 
 describe("tool → action routing", () => {
   it("routes every tool to the bridge action of the same name", async () => {
-    for (const tool of [...agentTools, ...preflightTools]) {
+    for (const tool of [...agentTools, ...boardTools, ...preflightTools]) {
       const seen: string[] = [];
       await tool.execute({ probe: 1 }, async (action) => {
         seen.push(action);
@@ -116,7 +120,7 @@ describe("tool → action routing", () => {
   });
 
   it("has a gateway handler for every tool, and no orphan handlers", () => {
-    const toolNames = [...agentTools, ...preflightTools]
+    const toolNames = [...agentTools, ...boardTools, ...preflightTools]
       .map((tool) => tool.name)
       .sort();
     expect(Object.keys(agentHandlers).sort()).toEqual(toolNames);

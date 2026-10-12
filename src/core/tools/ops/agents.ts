@@ -44,7 +44,12 @@ one): an agent runs until it reports, is killed, or goes quiet. A no-progress
 watchdog pings an agent that has made no tool call or output for a while,
 then tells you, then kills it. A killed, timed-out or stalled agent's report
 still carries its last interim messages, progress notes and the files it
-changed, so its work is not lost.`;
+changed, so its work is not lost.
+
+Agents of one chat share a blackboard (board_post / board_read) for findings,
+claims and corrections, and take advisory leases (lease) on resources such as
+a file or branch so two of them don't collide; leases free themselves when the
+holder settles.`;
 
 export const agentTools: ToolDefinition[] = [
   {
@@ -257,6 +262,69 @@ export const preflightTools: ToolDefinition[] = [
         ),
     },
     execute: (params, bridge) => bridge("run_preflight", params),
+    tag: "agents",
+  },
+];
+
+/**
+ * Blackboard and lease tools — their own list so they are appended at the END
+ * of ALL_TOOLS (the prompt-cache prefix).
+ */
+export const boardTools: ToolDefinition[] = [
+  {
+    name: "board_post",
+    description:
+      'Sub-agents only. Append a note to the blackboard shared by every agent working for your chat — visible to all of them via board_read, never to another chat\'s agents. Use it for what peers should not rediscover: a finding, a claim ("I am doing X"), a correction of something posted earlier, or a question. Entries are append-only, ≤4 KB, and rate-limited per agent; the board keeps the newest 200.',
+    schema: {
+      topic: z
+        .string()
+        .min(1)
+        .describe("What it is about, e.g. a file or subsystem"),
+      kind: z
+        .enum(["finding", "claim", "correction", "question"])
+        .describe("The sort of note"),
+      text: z.string().min(1).describe("The note (max 4 KB)"),
+    },
+    execute: (params, bridge) => bridge("board_post", params),
+    tag: "agents",
+  },
+
+  {
+    name: "board_read",
+    description:
+      "Sub-agents only. Read the blackboard entries visible in your chat's agent tree, oldest first, each with its author. Optionally only one topic, or only entries after since_id (use the last id you saw).",
+    schema: {
+      topic: z.string().optional().describe("Only entries on this topic"),
+      since_id: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe("Only entries with a higher id"),
+    },
+    execute: (params, bridge) => bridge("board_read", params),
+    tag: "agents",
+  },
+
+  {
+    name: "lease",
+    description:
+      "Sub-agents only. Advisory lock on a named resource (a file, branch, port…) within your chat's agent tree. acquire is refused with {held_by, expires_in} if another live agent holds it; the lease expires after ttl_s (max 1800) and is released automatically when you settle. Nothing is enforced — it only tells peers to keep off. release frees yours early; list shows live leases.",
+    schema: {
+      op: z.enum(["acquire", "release", "list"]).describe("What to do"),
+      resource: z
+        .string()
+        .optional()
+        .describe("Resource name (required for acquire and release)"),
+      ttl_s: z
+        .number()
+        .int()
+        .positive()
+        .max(1800)
+        .optional()
+        .describe("Seconds to hold it (acquire; default 600, max 1800)"),
+    },
+    execute: (params, bridge) => bridge("lease", params),
     tag: "agents",
   },
 ];

@@ -464,7 +464,31 @@ CREATE TABLE IF NOT EXISTS agents (
   -- keeps the instruction.
   preflight        INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state, depth, created_at);`;
+CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state, depth, created_at);
+
+-- Sub-agent blackboard: an append-only, per-chat-tree log the agents of one
+-- chat share (findings, claims, corrections, questions) plus advisory
+-- leases (kind='lease', topic = the resource). chat_id is the chat key the
+-- agent tree roots in, which is the whole visibility boundary. Leases are
+-- never deleted by release — released_at marks them dead — and a lease is
+-- live while released_at IS NULL and expires_at is in the future.
+CREATE TABLE IF NOT EXISTS agent_board (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id      TEXT    NOT NULL,
+  -- Agent id, or 'parent' for an entry the parent itself wrote.
+  author_id    TEXT    NOT NULL,
+  author_label TEXT    NOT NULL,
+  topic        TEXT    NOT NULL,
+  -- finding | claim | correction | question | lease
+  kind         TEXT    NOT NULL,
+  text         TEXT    NOT NULL,
+  created_at   INTEGER NOT NULL,
+  -- Leases only.
+  expires_at   INTEGER,
+  released_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_agent_board_chat ON agent_board(chat_id, id);
+CREATE INDEX IF NOT EXISTS idx_agent_board_author ON agent_board(author_id, kind);`;
 
 export const agentsSql = {
   upsert: `INSERT OR REPLACE INTO agents
@@ -519,6 +543,50 @@ FROM backup_remotes`,
 FROM backup_remotes WHERE backup_id = ?`,
   removeRemotes: `DELETE FROM backup_remotes WHERE backup_id = ?`,
   removeRemote: `DELETE FROM backup_remotes WHERE backup_id = ? AND target_id = ?`,
+} as const;
+
+export const boardSql = {
+  insert: `INSERT INTO agent_board
+  (chat_id, author_id, author_label, topic, kind, text, created_at, expires_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+
+-- Live entries of one chat tree, oldest first. Dead leases (released or
+-- expired) are not live. Params: chat_id, now, since_id, topic-or-null, topic.`,
+  listLive: `SELECT id, chat_id, author_id, author_label, topic, kind, text, created_at,
+       expires_at
+FROM agent_board
+WHERE chat_id = ?
+  AND id > ?
+  AND (kind != 'lease' OR (released_at IS NULL AND expires_at > ?))
+  AND (? IS NULL OR topic = ?)
+ORDER BY id`,
+  findLiveLease: `SELECT id, chat_id, author_id, author_label, topic, kind, text, created_at,
+       expires_at
+FROM agent_board
+WHERE chat_id = ? AND kind = 'lease' AND topic = ?
+  AND released_at IS NULL AND expires_at > ?
+ORDER BY id DESC LIMIT 1`,
+  renewLease: `UPDATE agent_board SET expires_at = ?, text = ? WHERE id = ?`,
+  releaseLease: `UPDATE agent_board SET released_at = ?
+WHERE chat_id = ? AND kind = 'lease' AND topic = ? AND author_id = ?
+  AND released_at IS NULL AND expires_at > ?`,
+  releaseAllFor: `UPDATE agent_board SET released_at = ?
+WHERE author_id = ? AND kind = 'lease' AND released_at IS NULL
+
+-- Dead leases are garbage; drop them with the cap sweep.`,
+  pruneDeadLeases: `DELETE FROM agent_board
+WHERE chat_id = ? AND kind = 'lease'
+  AND (released_at IS NOT NULL OR expires_at <= ?)`,
+  countLive: `SELECT COUNT(*) AS n FROM agent_board WHERE chat_id = ?
+
+-- Oldest non-lease entries beyond the cap. Param: chat_id, then the number
+-- of surplus rows.`,
+  dropOldestNonLease: `DELETE FROM agent_board WHERE id IN (
+  SELECT id FROM agent_board
+  WHERE chat_id = ? AND kind != 'lease'
+  ORDER BY id LIMIT ?
+)`,
+  removeAll: `DELETE FROM agent_board`,
 } as const;
 
 export const chatSettingsSql = {

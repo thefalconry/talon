@@ -134,6 +134,10 @@ const ALL_TOOLS_ORDER = [
   "run_preflight",
   // Secret drop (feat/secret-drop) — appended at the end.
   "request_secret",
+  // Blackboard and leases (feat/agents-blackboard) — appended at the end.
+  "board_post",
+  "board_read",
+  "lease",
 ];
 
 describe("ALL_TOOLS registry", () => {
