@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.38.1](https://github.com/thefalconry/talon/compare/v5.38.0...v5.38.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **openai-agents:** lean tool surface and fail-fast for background runs ([#1305](https://github.com/thefalconry/talon/issues/1305)) ([376934b](https://github.com/thefalconry/talon/commit/376934bb8312b681bf2d381070a463e194af9b6e))
+
 ## [5.38.0](https://github.com/thefalconry/talon/compare/v5.37.2...v5.38.0) (2026-10-13)
 
 
