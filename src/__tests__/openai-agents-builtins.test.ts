@@ -275,6 +275,44 @@ describe.skipIf(isWindows)("openai-agents / builtins / Bash", () => {
   }, 15_000);
 });
 
+describe.skipIf(isWindows)("openai-agents / builtins / run context", () => {
+  it("runs Bash in the run context's cwd with its env layered on", async () => {
+    // An isolated one-shot (a sub-agent) hands its workspace and private
+    // TMPDIR through `run(…, { context })`; the chat path passes none.
+    const ctx = new RunContext({
+      cwd: workdir,
+      env: { TALON_TEST_SCOPE: "scoped-env" },
+    });
+    const out = await getTool("Bash").invoke(
+      ctx,
+      JSON.stringify({
+        command: 'pwd; echo "$TALON_TEST_SCOPE"; echo "$PATH"',
+      }),
+    );
+    const text = String(out);
+    // basename: macOS reports the realpath (/private/var/…) of a tmp dir.
+    expect(text).toContain(basename(workdir));
+    expect(text).toContain("scoped-env");
+    // Layered over the daemon's environment, not replacing it.
+    expect(text).toContain(process.env.PATH ?? "");
+  });
+
+  it("defaults Glob to the run context's cwd when no path is given", async () => {
+    await writeFile(join(workdir, "scoped.ts"), "");
+    const out = await getTool("Glob").invoke(
+      new RunContext({ cwd: workdir }),
+      JSON.stringify({ pattern: "*.ts" }),
+    );
+    expect(String(out)).toContain(`${basename(workdir)}`);
+    expect(String(out)).toContain("scoped.ts");
+  });
+
+  it("keeps the daemon cwd when the run carries no context", async () => {
+    const out = await call("Bash", { command: "pwd" });
+    expect(out).toContain(process.cwd());
+  });
+});
+
 // ── Glob ────────────────────────────────────────────────────────────────────
 
 describe("openai-agents / builtins / Glob", () => {
