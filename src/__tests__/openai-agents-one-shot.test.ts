@@ -16,28 +16,52 @@ import type { OneShotAgentParams } from "../core/types.js";
 // ── Fake MCP bundle ─────────────────────────────────────────────────────────
 
 const bundleCalls: Array<{ chatId: string; frontends: readonly string[] }> = [];
+const bundleLean: Array<
+  { tools: readonly string[]; plugins: readonly string[] } | undefined
+> = [];
 const toolCalls: Array<{ name: string; args: unknown }> = [];
 let bundleClosed = 0;
 
-function fakeHubServer() {
+/** What the hub's `telegram-tools` serves an agent context: plumbing + the rest. */
+const HUB_TOOLS = [
+  "report_result",
+  "check_inbox",
+  "message_parent",
+  "message_peer",
+  "list_peers",
+  "send",
+  "remember",
+  "create_cron_job",
+  "spawn_agent",
+];
+
+function hubTool(name: string) {
+  return {
+    name,
+    description:
+      name === "report_result"
+        ? "Report your result to whoever spawned you."
+        : `The ${name} tool. ${"Long description. ".repeat(40)}`,
+    inputSchema: {
+      type: "object",
+      properties: { summary: { type: "string" } },
+      required: name === "report_result" ? ["summary"] : [],
+    },
+  };
+}
+
+function fakeHubServer(toolFilter: unknown) {
   return {
     name: "telegram-tools",
-    cacheToolsList: true,
+    // The SDK's tool-list cache is process-global and keyed by name; the
+    // tests vary the listing, so stay out of it.
+    cacheToolsList: false,
+    toolFilter,
     async connect() {},
     async close() {},
     async invalidateToolsCache() {},
     async listTools() {
-      return [
-        {
-          name: "report_result",
-          description: "Report your result to whoever spawned you.",
-          inputSchema: {
-            type: "object",
-            properties: { summary: { type: "string" } },
-            required: ["summary"],
-          },
-        },
-      ];
+      return HUB_TOOLS.map(hubTool);
     },
     async callTool(name: string, args: unknown) {
       toolCalls.push({ name, args });
@@ -49,15 +73,23 @@ function fakeHubServer() {
 vi.mock("../backend/openai-agents/mcp-pool.js", async (orig) => {
   const actual =
     await orig<typeof import("../backend/openai-agents/mcp-pool.js")>();
+  const { createMCPToolStaticFilter } = await import("@openai/agents");
   return {
     ...actual,
     openUnpooledBundle: async (args: {
       chatId: string;
       frontends: readonly string[];
+      lean?: { tools: readonly string[]; plugins: readonly string[] };
     }) => {
       bundleCalls.push({ chatId: args.chatId, frontends: args.frontends });
+      bundleLean.push(args.lean);
+      // The real pool hands a lean run's frontend server a static filter
+      // (see the mcp-pool tests); mirror that so the SDK applies it.
+      const filter = args.lean
+        ? createMCPToolStaticFilter({ allowed: [...args.lean.tools] })
+        : undefined;
       return {
-        servers: [fakeHubServer()],
+        servers: [fakeHubServer(filter)],
         failed: [],
         close: async () => {
           bundleClosed += 1;
@@ -168,7 +200,7 @@ const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
 
 // ── Harness ─────────────────────────────────────────────────────────────────
 
-async function initBackend() {
+async function initBackend(extra: Record<string, unknown> = {}) {
   const { initOpenAIAgentsAgent } =
     await import("../backend/openai-agents/init.js");
   initOpenAIAgentsAgent(
@@ -177,6 +209,7 @@ async function initBackend() {
       openaiBaseUrl: BASE_URL,
       openaiApiKey: "test-key",
       frontend: "telegram",
+      ...extra,
     } as never,
     () => 4321,
     "telegram",
@@ -204,6 +237,7 @@ function makeParams(overrides: Partial<OneShotAgentParams> = {}) {
 
 beforeEach(async () => {
   bundleCalls.length = 0;
+  bundleLean.length = 0;
   toolCalls.length = 0;
   requests.length = 0;
   bundleClosed = 0;
@@ -328,5 +362,165 @@ describe("openai-agents / one-shot run", () => {
       await import("../backend/openai-agents/one-shot.js");
     const { params } = makeParams();
     await expect(runOneShotAgent(params)).rejects.toThrow(/not initialized/);
+  });
+});
+
+// ── Tool surface ────────────────────────────────────────────────────────────
+
+const BUILTINS = ["Read", "Write", "Edit", "Bash", "Glob", "Grep"];
+const PLUMBING = [
+  "mcp_telegram_tools__report_result",
+  "mcp_telegram_tools__check_inbox",
+  "mcp_telegram_tools__message_parent",
+  "mcp_telegram_tools__message_peer",
+  "mcp_telegram_tools__list_peers",
+];
+
+describe("openai-agents / one-shot tool surface", () => {
+  it("sends a background run only the built-ins and the agent plumbing", async () => {
+    const { runOneShotAgent } =
+      await import("../backend/openai-agents/one-shot.js");
+    script = [finalTurn];
+    const { params, log } = makeParams();
+
+    await runOneShotAgent(params);
+
+    expect(bundleLean).toEqual([
+      {
+        tools: [
+          "report_result",
+          "check_inbox",
+          "message_parent",
+          "message_peer",
+          "list_peers",
+        ],
+        plugins: [],
+      },
+    ]);
+    const toolNames = (requests[0]!.tools ?? []).map((t) => t.function.name);
+    expect([...toolNames].sort()).toEqual([...BUILTINS, ...PLUMBING].sort());
+    // The run log says how big the surface is.
+    expect(log.join("")).toMatch(
+      /Tool surface\n11 tools, ~\d+ tokens of schemas \(lean surface\)/,
+    );
+    expect(log.join("")).not.toContain("Warning");
+  });
+
+  it("adds configured extras: a Talon tool by name", async () => {
+    await initBackend({ openaiBackgroundTools: ["send"] });
+    const { runOneShotAgent } =
+      await import("../backend/openai-agents/one-shot.js");
+    script = [finalTurn];
+    const { params } = makeParams();
+
+    await runOneShotAgent(params);
+
+    const toolNames = (requests[0]!.tools ?? []).map((t) => t.function.name);
+    expect(toolNames).toContain("mcp_telegram_tools__send");
+    expect(toolNames).not.toContain("mcp_telegram_tools__remember");
+  });
+
+  it('keeps the whole surface with "full", and warns when it is large', async () => {
+    await initBackend({ openaiBackgroundTools: "full" });
+    const { setEndpointModels } =
+      await import("../backend/openai-agents/state.js").then((m) => ({
+        setEndpointModels: (ctx: number) =>
+          m.getState().endpointModels.set(MODEL, { contextWindow: ctx }),
+      }));
+    setEndpointModels(4096);
+    const { runOneShotAgent } =
+      await import("../backend/openai-agents/one-shot.js");
+    script = [finalTurn];
+    const { params, log } = makeParams();
+
+    await runOneShotAgent(params);
+
+    expect(bundleLean).toEqual([undefined]);
+    const toolNames = (requests[0]!.tools ?? []).map((t) => t.function.name);
+    expect(toolNames).toContain("mcp_telegram_tools__remember");
+    expect(toolNames).toHaveLength(BUILTINS.length + 9);
+    const text = log.join("");
+    expect(text).toContain("(full surface)");
+    expect(text).toMatch(
+      /Warning\ntool schemas are ~\d+ tokens \(15 tools\) — over half the model's 4096-token context/,
+    );
+  });
+});
+
+// ── Failing fast ────────────────────────────────────────────────────────────
+
+const CONTEXT_ERROR = {
+  error: {
+    code: 400,
+    message:
+      "request (154551 tokens) exceeds the available context size (32768 tokens), try increasing it",
+    type: "exceed_context_size_error",
+    n_prompt_tokens: 154551,
+    n_ctx: 32768,
+  },
+};
+
+describe("openai-agents / one-shot fails fast on endpoint errors", () => {
+  it("a 200 streamed bare error body (local router) ends the run on the first request", async () => {
+    const { runOneShotAgent, OpenAIAgentsOneShotError } =
+      await import("../backend/openai-agents/one-shot.js");
+    // What the llama.cpp router on the live install answers: 200, an
+    // event-stream content type, and a bare JSON error with no SSE framing.
+    const routerError = () =>
+      new Response(JSON.stringify(CONTEXT_ERROR), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    script = Array.from({ length: 60 }, () => routerError);
+    const { params, log } = makeParams();
+
+    const err = await runOneShotAgent(params).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(OpenAIAgentsOneShotError);
+    const msg = (err as Error).message;
+    expect(msg).toContain("endpoint rejected the request (HTTP 400)");
+    expect(msg).toContain("exceeds the available context size (32768 tokens)");
+    expect(msg).not.toMatch(/max turns/i);
+    expect(requests).toHaveLength(1);
+    expect(log.join("")).toContain("exceeds the available context size");
+    expect(bundleClosed).toBe(1);
+  });
+
+  it("a real HTTP 400 ends the run on the first request with the endpoint's message", async () => {
+    const { runOneShotAgent } =
+      await import("../backend/openai-agents/one-shot.js");
+    const badRequest = () =>
+      new Response(JSON.stringify(CONTEXT_ERROR), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    script = Array.from({ length: 60 }, () => badRequest);
+    const { params } = makeParams();
+
+    await expect(runOneShotAgent(params)).rejects.toThrow(
+      /HTTP 400.*exceeds the available context size/,
+    );
+    expect(requests).toHaveLength(1);
+  });
+
+  it("gives up after repeated empty responses instead of looping to max turns", async () => {
+    const { runOneShotAgent, OpenAIAgentsOneShotError } =
+      await import("../backend/openai-agents/one-shot.js");
+    const emptyTurn = () => sse([]);
+    script = Array.from({ length: 60 }, () => emptyTurn);
+    const { params } = makeParams();
+
+    const err = await runOneShotAgent(params).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).toBeInstanceOf(OpenAIAgentsOneShotError);
+    expect((err as Error).message).toMatch(/2 empty responses in a row/);
+    expect(requests).toHaveLength(2);
+    expect(params.abortController.signal.aborted).toBe(false);
   });
 });

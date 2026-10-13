@@ -49,6 +49,7 @@ import { log, logWarn } from "../../util/log.js";
 import { nonTerminalFrontends } from "../runtime/frontends.js";
 import { getState } from "./state.js";
 import { startDiscovery } from "./discovery.js";
+import { errorBodyFetch } from "./guards/endpoint-errors.js";
 
 /**
  * Per-request wait for chat turns. The client default is 10 minutes —
@@ -87,6 +88,10 @@ export function createOpenAIClient(opts: {
     // Wait for the response headers (the openai client clears this
     // timer once they arrive; a streamed body is not bounded by it).
     timeout: opts.timeoutMs,
+    // Surface a 2xx bare `{"error": …}` body (some local routers answer
+    // rejected requests that way, even streamed ones) as the HTTP error
+    // it stands for, instead of an empty turn the run loop retries.
+    fetch: errorBodyFetch(),
   });
 }
 

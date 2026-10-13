@@ -99,8 +99,8 @@ authoritative names; use them verbatim. Built-in tools (Read, Write, Edit, Bash,
 prefixed.
 
 Nothing you write as plain text reaches a chat by itself: to message
-someone, call a messaging tool with an explicit \`chat_id\`. Your final
-plain-text answer is kept as this run's result.
+someone, call a messaging tool (if this run has one) with an explicit
+\`chat_id\`. Your final plain-text answer is kept as this run's result.
 `;
 
 /**
