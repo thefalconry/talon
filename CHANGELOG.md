@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.38.0](https://github.com/thefalconry/talon/compare/v5.37.2...v5.38.0) (2026-10-13)
+
+
+### Features
+
+* **openai-agents:** background runner so it can host sub-agents ([#1302](https://github.com/thefalconry/talon/issues/1302)) ([a782b82](https://github.com/thefalconry/talon/commit/a782b825e208a563a01ec847f2f6fab407666d57))
+
 ## [5.37.2](https://github.com/thefalconry/talon/compare/v5.37.1...v5.37.2) (2026-10-11)
 
 
