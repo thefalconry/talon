@@ -151,6 +151,19 @@ export function getActiveBundleIds(): readonly string[] {
   return [...bundles.keys()];
 }
 
+/**
+ * Build + connect a bundle that is NOT cached in the pool. The caller
+ * owns it and must `close()` it. Used by isolated one-shot runs: their
+ * context label (`heartbeat`, `agent:<id>`) can be shared by concurrent
+ * runs (every isolated cron job runs as `heartbeat`), so a pooled bundle
+ * released by one run would be pulled out from under another.
+ */
+export function openUnpooledBundle(
+  args: BundleInputs,
+): Promise<OpenAIAgentsMcpBundle> {
+  return buildBundle(args);
+}
+
 // ── Internal: build + connect ───────────────────────────────────────────────
 
 async function buildBundle(args: BundleInputs): Promise<OpenAIAgentsMcpBundle> {

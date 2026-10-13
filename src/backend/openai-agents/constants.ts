@@ -21,12 +21,14 @@ const OPENAI_AGENTS_NAMESPACING_NOTE = `
 ### Tool namespacing on this backend
 
 Every MCP tool is prefixed with \`mcp_<serverName>__\` so collisions
-across plugins are impossible — e.g. the delivery tools above appear
-as \`mcp_<frontend>-tools__end_turn\`, \`mcp_<frontend>-tools__send\`,
-\`mcp_<frontend>-tools__react\` (\`mcp_telegram-tools__end_turn\` on
-Telegram, \`mcp_discord-tools__end_turn\` on Discord). The
-available-tools list you receive at turn start has the authoritative
-names; use them verbatim. Built-in tools (Read, Write, Edit, Bash,
+across plugins are impossible, and any character in the server name
+other than a letter or digit becomes \`_\` — e.g. the delivery tools
+above appear as \`mcp_<frontend>_tools__end_turn\`,
+\`mcp_<frontend>_tools__send\`, \`mcp_<frontend>_tools__react\`
+(\`mcp_telegram_tools__end_turn\` on Telegram,
+\`mcp_discord_tools__end_turn\` on Discord). The available-tools list
+you receive at turn start has the authoritative names; use them
+verbatim. Built-in tools (Read, Write, Edit, Bash,
 Glob, Grep) are NOT prefixed — they stay short.
 
 If you produce trailing prose AND call \`end_turn(text=...)\` with
@@ -78,3 +80,35 @@ export const OPENAI_AGENTS_MAX_TURNS = 50;
 
 /** Default agent name surfaced in OpenAI traces / observability. */
 export const OPENAI_AGENTS_AGENT_NAME = "Talon";
+
+/**
+ * System-prompt addendum for isolated one-shot runs (sub-agents, cron
+ * query jobs, heartbeat, dream). The chat suffix's delivery contract
+ * (`end_turn`, the FLOW VIOLATION retry) doesn't apply here — nothing is
+ * delivered on a one-shot's behalf — but the tool namespacing does, and a
+ * model that guesses bare names (`report_result`) gets "tool not found".
+ */
+export const OPENAI_AGENTS_ONE_SHOT_SUFFIX = `
+### Tool namespacing on this backend
+
+Every MCP tool is prefixed with \`mcp_<serverName>__\`, and any
+character in the server name other than a letter or digit becomes
+\`_\` — e.g. \`mcp_telegram_tools__report_result\`,
+\`mcp_telegram_tools__send\`. The tool list you receive has the
+authoritative names; use them verbatim. Built-in tools (Read, Write, Edit, Bash, Glob, Grep) are NOT
+prefixed.
+
+Nothing you write as plain text reaches a chat by itself: to message
+someone, call a messaging tool with an explicit \`chat_id\`. Your final
+plain-text answer is kept as this run's result.
+`;
+
+/**
+ * Per-request wait (time to response headers) for isolated one-shot
+ * runs. Much longer than the chat path's: nobody is watching a typing
+ * indicator, and local OpenAI-compatible servers (llama.cpp behind a
+ * router) can take well over a minute to process a long prompt before
+ * the first token. The run as a whole is still bounded by the caller's
+ * own timeout and abort signal.
+ */
+export const OPENAI_AGENTS_ONE_SHOT_REQUEST_TIMEOUT_MS = 10 * 60_000;
