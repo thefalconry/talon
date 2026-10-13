@@ -950,6 +950,22 @@ const configSchema = z.object({
    * explicitly to "responses" only if your proxy supports it.
    */
   openaiApiMode: z.enum(["responses", "chat_completions"]).optional(),
+  /**
+   * Tool surface for the `openai-agents` backend's background runs
+   * (sub-agents, isolated cron jobs, heartbeat, dream).
+   *   - "lean" (default) — the built-ins (Read, Write, Edit, Bash, Glob,
+   *     Grep) plus the agent-plumbing tools (report_result, check_inbox,
+   *     message_parent, message_peer, list_peers). A few thousand tokens:
+   *     fits a 32k-context local model.
+   *   - "full" — every frontend tool server and every plugin, like the
+   *     chat path. Can run past 100k tokens of tool schemas.
+   *   - an array — the lean set plus these entries: a Talon tool name
+   *     (e.g. "send", "remember") adds that tool, a plugin server name
+   *     (e.g. "brave-search", "github-tools") adds that whole server.
+   */
+  openaiBackgroundTools: z
+    .union([z.enum(["lean", "full"]), z.array(z.string())])
+    .optional(),
   timezone: z.string().optional(),
   plugins: z.array(pluginEntrySchema).default([]),
 

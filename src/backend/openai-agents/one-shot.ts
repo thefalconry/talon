@@ -27,7 +27,7 @@
  * record it as failed rather than ok.
  */
 
-import { Agent, OpenAIProvider, Runner } from "@openai/agents";
+import { Agent, OpenAIProvider, RunContext, Runner } from "@openai/agents";
 import type { OneShotAgentParams, OneShotUsage } from "../../core/types.js";
 import { log, logWarn } from "../../util/log.js";
 import { appendBackendSuffix } from "../runtime/index.js";
@@ -48,6 +48,16 @@ import {
   getOpenAIBaseUrl,
 } from "./init.js";
 import { openUnpooledBundle, type OpenAIAgentsMcpBundle } from "./mcp-pool.js";
+import { hubPluginServerNames } from "../../core/mcp-hub/index.js";
+import {
+  estimateToolSchemaTokens,
+  resolveBackgroundToolScope,
+  toolSurfaceWarning,
+} from "./guards/tool-surface.js";
+import {
+  isContextLengthError,
+  isNonRetryableEndpointError,
+} from "./guards/endpoint-errors.js";
 import {
   OPENAI_AGENTS_BUILTIN_TOOLS,
   type BuiltinRunContext,
@@ -95,20 +105,110 @@ function buildOneShotRunner(): Runner {
   return new Runner({ modelProvider: provider });
 }
 
-/** Open the run's own MCP bundle, bound to its context label. */
+/**
+ * Open the run's own MCP bundle, bound to its context label. Lean by
+ * default (see `guards/tool-surface.ts`); `openaiBackgroundTools` widens it.
+ */
 async function openRunBundle(
   contextLabel: string,
 ): Promise<OpenAIAgentsMcpBundle> {
   const state = getState();
   const config = state.config;
   if (!config) throw new Error("OpenAI Agents backend not initialized");
+  const lean = resolveBackgroundToolScope(
+    config.openaiBackgroundTools,
+    hubPluginServerNames(),
+  );
   return openUnpooledBundle({
     chatId: contextLabel,
     bridgeUrl: `http://127.0.0.1:${state.gatewayPortFn()}`,
     frontends: getActiveFrontends(),
     braveApiKey: config.braveApiKey,
     toolExclusions: config,
+    ...(lean ? { lean } : {}),
   });
+}
+
+/**
+ * Measure the tool surface the model will be sent and say so in the run
+ * log; warn when it would crowd a small context out. Best-effort: a
+ * listing failure surfaces on the first model call anyway.
+ */
+async function reportToolSurface(inputs: {
+  agent: Agent<BuiltinRunContext>;
+  context: BuiltinRunContext;
+  contextLabel: string;
+  model: string;
+  lean: boolean;
+  appendLog: OneShotAgentParams["appendLog"];
+}): Promise<void> {
+  const { agent, context, contextLabel, model, lean, appendLog } = inputs;
+  let tools;
+  try {
+    tools = await agent.getAllTools(new RunContext(context));
+  } catch (err) {
+    logWarn(
+      "agent",
+      `[${contextLabel}] could not list the tool surface: ${errMsg(err)}`,
+    );
+    return;
+  }
+  const tokens = estimateToolSchemaTokens(tools as never);
+  const line =
+    `${tools.length} tools, ~${tokens} tokens of schemas ` +
+    `(${lean ? "lean" : "full"} surface)`;
+  log(
+    "agent",
+    `[${contextLabel}] OpenAI Agents one-shot tool surface: ${line}`,
+  );
+  await appendLog(`\n### [${ts()}] Tool surface\n${line}\n`);
+  const warning = toolSurfaceWarning({
+    tokens,
+    toolCount: tools.length,
+    contextWindow: getState().endpointModels.get(model)?.contextWindow,
+    lean,
+  });
+  if (warning) {
+    logWarn("agent", `[${contextLabel}] ${warning}`);
+    await appendLog(`\n### [${ts()}] Warning\n${warning}\n`);
+  }
+}
+
+/**
+ * Consecutive empty model responses (no message, no tool call, no
+ * reasoning) after which the run gives up. An endpoint that swallows its
+ * own error answers every retry the same way, so asking again only burns
+ * turns up to the max-turns cap.
+ */
+const MAX_EMPTY_RESPONSES = 2;
+
+/** Whether a raw stream event is a model response with no output at all. */
+function isEmptyResponseDone(data: unknown): boolean {
+  const d = data as { type?: unknown; response?: { output?: unknown } };
+  if (d?.type !== "response_done") return false;
+  const output = d.response?.output;
+  return Array.isArray(output) && output.length === 0;
+}
+
+/**
+ * A readable failure for an endpoint error that asking again won't fix:
+ * the endpoint's own message, plus a pointer at the tool surface when it
+ * is a context overflow.
+ */
+function describeRunError(err: unknown, lean: boolean): string {
+  const msg = errMsg(err);
+  if (!isNonRetryableEndpointError(err)) return msg;
+  const status = (err as { status: number }).status;
+  // The openai client prefixes its message with the status ("400 …").
+  const reason = msg.replace(/^\d{3}\s+/, "");
+  let text = `endpoint rejected the request (HTTP ${status}): ${reason}`;
+  if (isContextLengthError(msg)) {
+    text += lean
+      ? " — the prompt and tool schemas exceed the model's context window"
+      : " — the prompt and tool schemas exceed the model's context window; " +
+        'set `openaiBackgroundTools` to "lean" for small-context models';
+  }
+  return text;
 }
 
 type RunUsage = {
@@ -223,25 +323,55 @@ async function driveRun(inputs: {
 }): Promise<OneShotUsage | undefined> {
   const { runner, agent, prompt, context, params } = inputs;
   const { abortController } = params;
-  const stream = await runner.run(agent, prompt, {
-    stream: true,
-    maxTurns: OPENAI_AGENTS_MAX_TURNS,
-    signal: abortController.signal,
-    context,
-  });
-  for await (const event of stream) {
-    if (abortController.signal.aborted) break;
-    if (event.type === "run_item_stream_event") {
-      await logRunItem(event, params);
+  // The run's own controller: follows the caller's, and lets the
+  // empty-response guard stop the SDK loop without marking the run as
+  // aborted by its caller.
+  const runAbort = new AbortController();
+  const follow = () => runAbort.abort(abortController.signal.reason);
+  if (abortController.signal.aborted) follow();
+  else abortController.signal.addEventListener("abort", follow, { once: true });
+  try {
+    const stream = await runner.run(agent, prompt, {
+      stream: true,
+      maxTurns: OPENAI_AGENTS_MAX_TURNS,
+      signal: runAbort.signal,
+      context,
+    });
+    let empty = 0;
+    let guardError: OpenAIAgentsOneShotError | undefined;
+    for await (const event of stream) {
+      if (abortController.signal.aborted) break;
+      if (event.type === "run_item_stream_event") {
+        await logRunItem(event, params);
+      } else if (event.type === "raw_model_stream_event") {
+        const data = (event as { data?: unknown }).data;
+        if ((data as { type?: unknown })?.type !== "response_done") continue;
+        empty = isEmptyResponseDone(data) ? empty + 1 : 0;
+        if (empty >= MAX_EMPTY_RESPONSES) {
+          guardError = new OpenAIAgentsOneShotError(
+            `endpoint returned ${empty} empty responses in a row ` +
+              "(no text, no tool call) — giving up instead of retrying " +
+              "to the max-turns cap; check the endpoint's own log",
+          );
+          runAbort.abort(guardError);
+          break;
+        }
+      }
     }
-  }
-  if (abortController.signal.aborted) {
-    await stream.completed.catch(() => {});
+    if (guardError) {
+      await stream.completed.catch(() => {});
+      throw guardError;
+    }
+    if (abortController.signal.aborted) {
+      await stream.completed.catch(() => {});
+      return readRunUsage(stream.state);
+    }
+    await stream.completed;
+    if (stream.error) throw stream.error;
     return readRunUsage(stream.state);
+  } finally {
+    abortController.signal.removeEventListener("abort", follow);
   }
-  await stream.completed;
-  if (stream.error) throw stream.error;
-  return readRunUsage(stream.state);
 }
 
 export async function runOneShotAgent(
@@ -288,6 +418,11 @@ export async function runOneShotAgent(
           "\n",
       );
     }
+    const lean = config.openaiBackgroundTools !== "full";
+    const context: BuiltinRunContext = {
+      cwd: workspace,
+      ...(env ? { env } : {}),
+    };
     const agent = new Agent<BuiltinRunContext>({
       name: OPENAI_AGENTS_AGENT_NAME,
       instructions: appendBackendSuffix(
@@ -299,11 +434,19 @@ export async function runOneShotAgent(
       mcpServers: bundle.servers,
       mcpConfig: { includeServerInToolNames: true },
     });
+    await reportToolSurface({
+      agent,
+      context,
+      contextLabel,
+      model: activeModel,
+      lean,
+      appendLog,
+    });
     const usage = await driveRun({
       runner: buildOneShotRunner(),
       agent,
       prompt,
-      context: { cwd: workspace, ...(env ? { env } : {}) },
+      context,
       params,
     });
     if (abortController.signal.aborted) {
@@ -320,8 +463,13 @@ export async function runOneShotAgent(
     }
     return usage;
   } catch (err) {
-    const msg = errMsg(err);
-    if (abortController.signal.aborted || /abort/i.test(msg)) {
+    if (err instanceof OpenAIAgentsOneShotError) {
+      logWarn("agent", `OpenAI Agents one-shot run failed: ${err.message}`);
+      await appendLog(`\n### [${ts()}] Error\n${err.message}\n`);
+      throw err;
+    }
+    const msg = describeRunError(err, config.openaiBackgroundTools !== "full");
+    if (abortController.signal.aborted || /abort/i.test(errMsg(err))) {
       await appendLog(
         `\n### [${ts()}] Aborted\n${abortLogLine(abortController.signal)}\n`,
       );

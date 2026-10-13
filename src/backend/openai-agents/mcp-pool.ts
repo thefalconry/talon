@@ -17,7 +17,11 @@
  * independently in parallel.
  */
 
-import { connectMcpServers, MCPServerStreamableHttp } from "@openai/agents";
+import {
+  connectMcpServers,
+  createMCPToolStaticFilter,
+  MCPServerStreamableHttp,
+} from "@openai/agents";
 import type { MCPServer } from "@openai/agents";
 import { gatewayAuthHeaders } from "../../core/engine/gateway-auth.js";
 import {
@@ -58,6 +62,24 @@ export interface BundleInputs {
    * Talon tool servers are composed.
    */
   toolExclusions?: ToolExclusionConfig | null;
+  /**
+   * Narrow the bundle to a lean surface (isolated runs; see
+   * `guards/tool-surface.ts`). Absent = the full surface: every frontend
+   * tool server, brave and every plugin.
+   */
+  lean?: LeanToolScope;
+}
+
+/**
+ * A lean bundle: ONE frontend tool server exposing only `tools`, plus the
+ * named plugin servers (whole). Every frontend server answers the same
+ * Talon tools for a cross-surface context, so one is enough.
+ */
+export interface LeanToolScope {
+  /** Talon tool names the frontend server may expose. */
+  tools: readonly string[];
+  /** Plugin/hub server names to include whole (e.g. "brave-search"). */
+  plugins: readonly string[];
 }
 
 /** Live bundles keyed by chatId. */
@@ -167,50 +189,10 @@ export function openUnpooledBundle(
 // ── Internal: build + connect ───────────────────────────────────────────────
 
 async function buildBundle(args: BundleInputs): Promise<OpenAIAgentsMcpBundle> {
-  const { chatId, bridgeUrl, frontends, braveApiKey } = args;
-
-  const built: MCPServerStreamableHttp[] = [];
-
-  // Frontend MCP tool servers. Each exposes the Talon-native delivery
-  // surface (send, react, end_turn, …) for that frontend, scoped to
-  // `chatId` via the hub URL — the server itself runs in-process
-  // inside the daemon. Scoped to the chat's owning frontend;
-  // cross-surface contexts keep the full set.
-  for (const frontend of frontendsForChat(chatId, frontends)) {
-    built.push(
-      new MCPServerStreamableHttp({
-        name: `${frontend}-tools`,
-        url: talonHubUrl(bridgeUrl, frontend, chatId),
-        cacheToolsList: true,
-        requestInit: { headers: gatewayAuthHeaders() },
-      }),
-    );
-  }
-
-  // Brave Search MCP server (if configured) — one hub child shared by
-  // every chat.
-  if (braveApiKey) {
-    built.push(
-      new MCPServerStreamableHttp({
-        name: "brave-search",
-        url: pluginHubUrl(bridgeUrl, "brave-search", chatId),
-        cacheToolsList: true,
-        requestInit: { headers: gatewayAuthHeaders() },
-      }),
-    );
-  }
-
-  // Plugin MCP servers — hub-managed children (chat-scoped, idle-reaped).
-  for (const name of hubPluginServerNames()) {
-    built.push(
-      new MCPServerStreamableHttp({
-        name,
-        url: pluginHubUrl(bridgeUrl, name, chatId),
-        cacheToolsList: true,
-        requestInit: { headers: gatewayAuthHeaders() },
-      }),
-    );
-  }
+  const { chatId } = args;
+  const built = args.lean
+    ? buildLeanServers(args, args.lean)
+    : buildFullServers(args);
 
   // Use the SDK's lifecycle helper. Parallel connect, per-server
   // timeout (10s default), failed servers tracked in `.failed` rather
@@ -245,6 +227,96 @@ async function buildBundle(args: BundleInputs): Promise<OpenAIAgentsMcpBundle> {
     },
   };
   return bundle;
+}
+
+function hubServer(
+  name: string,
+  url: string,
+  extra: Partial<ConstructorParameters<typeof MCPServerStreamableHttp>[0]> = {},
+): MCPServerStreamableHttp {
+  return new MCPServerStreamableHttp({
+    name,
+    url,
+    cacheToolsList: true,
+    requestInit: { headers: gatewayAuthHeaders() },
+    ...extra,
+  });
+}
+
+/** Every frontend tool server, brave (if configured) and every plugin. */
+function buildFullServers(args: BundleInputs): MCPServerStreamableHttp[] {
+  const { chatId, bridgeUrl, frontends, braveApiKey } = args;
+  const built: MCPServerStreamableHttp[] = [];
+
+  // Frontend MCP tool servers. Each exposes the Talon-native delivery
+  // surface (send, react, end_turn, …) for that frontend, scoped to
+  // `chatId` via the hub URL — the server itself runs in-process
+  // inside the daemon. Scoped to the chat's owning frontend;
+  // cross-surface contexts keep the full set.
+  for (const frontend of frontendsForChat(chatId, frontends)) {
+    built.push(
+      hubServer(`${frontend}-tools`, talonHubUrl(bridgeUrl, frontend, chatId)),
+    );
+  }
+
+  // Brave Search MCP server (if configured) — one hub child shared by
+  // every chat.
+  if (braveApiKey) {
+    built.push(
+      hubServer(
+        "brave-search",
+        pluginHubUrl(bridgeUrl, "brave-search", chatId),
+      ),
+    );
+  }
+
+  // Plugin MCP servers — hub-managed children (chat-scoped, idle-reaped).
+  for (const name of hubPluginServerNames()) {
+    built.push(hubServer(name, pluginHubUrl(bridgeUrl, name, chatId)));
+  }
+  return built;
+}
+
+/**
+ * One frontend tool server filtered to `scope.tools`, plus the plugin
+ * servers `scope.plugins` names (when they exist).
+ *
+ * The filtered server does not use the SDK's tool-list cache: that cache
+ * is process-global and keyed by server NAME, so a filtered
+ * `telegram-tools` listing would be served to the chat path's unfiltered
+ * `telegram-tools` (and a cached full listing would skip this filter).
+ * Listing tools from the in-process hub once per turn is cheap.
+ */
+function buildLeanServers(
+  args: BundleInputs,
+  scope: LeanToolScope,
+): MCPServerStreamableHttp[] {
+  const { chatId, bridgeUrl, frontends, braveApiKey } = args;
+  const built: MCPServerStreamableHttp[] = [];
+  const frontend = frontendsForChat(chatId, frontends)[0];
+  if (frontend && scope.tools.length > 0) {
+    built.push(
+      hubServer(`${frontend}-tools`, talonHubUrl(bridgeUrl, frontend, chatId), {
+        cacheToolsList: false,
+        toolFilter: createMCPToolStaticFilter({ allowed: [...scope.tools] }),
+      }),
+    );
+  }
+  const wanted = new Set(scope.plugins);
+  if (braveApiKey && wanted.has("brave-search")) {
+    built.push(
+      hubServer(
+        "brave-search",
+        pluginHubUrl(bridgeUrl, "brave-search", chatId),
+      ),
+    );
+  }
+  for (const name of hubPluginServerNames()) {
+    if (wanted.has(name)) {
+      built.push(hubServer(name, pluginHubUrl(bridgeUrl, name, chatId)));
+    }
+  }
+  return built;
 }
 
 function errMsg(e: unknown): string {
