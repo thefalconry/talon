@@ -86,15 +86,26 @@ function pdfToText(filePath: string): Promise<string> {
   });
 }
 
-/** XML markup → text: paragraph/line/tab markers first, then tags stripped. */
-function xmlText(xml: string, paragraphEnd: RegExp): string {
-  return unescapeHtml(
-    xml
-      .replace(/<w:tab\/>|<a:tab\/>/g, "\t")
-      .replace(/<w:br\/>|<w:cr\/>|<a:br\/>/g, "\n")
-      .replace(paragraphEnd, "\n")
-      .replace(/<[^>]+>/g, ""),
-  )
+/**
+ * XML markup → text. Walks the markup token by token: element tags become
+ * paragraph/line/tab markers or nothing, and only character data is
+ * entity-decoded. The output is plain text for a model prompt, never HTML.
+ */
+function xmlText(xml: string, paragraphEnd: string): string {
+  const parts: string[] = [];
+  for (const [token] of xml.matchAll(/<[^>]*>|[^<]+/g)) {
+    if (!token.startsWith("<")) {
+      parts.push(unescapeHtml(token));
+    } else if (/^<(?:w|a):tab\/>$/.test(token)) {
+      parts.push("\t");
+    } else if (/^<(?:w:br|w:cr|a:br)\/>$/.test(token)) {
+      parts.push("\n");
+    } else if (token === paragraphEnd) {
+      parts.push("\n");
+    }
+  }
+  return parts
+    .join("")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -103,7 +114,7 @@ function xmlText(xml: string, paragraphEnd: RegExp): string {
 function docxText(buf: Buffer): string {
   const [doc] = readZipTextEntries(buf, (n) => n === "word/document.xml");
   if (!doc) throw malformedDocument("no word/document.xml in the archive");
-  return xmlText(doc.text, /<\/w:p>/g);
+  return xmlText(doc.text, "</w:p>");
 }
 
 function pptxSlides(buf: Buffer): string[] {
@@ -111,7 +122,7 @@ function pptxSlides(buf: Buffer): string[] {
     Number(/slide(\d+)\.xml$/.exec(name)?.[1] ?? 0);
   return readZipTextEntries(buf, (n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
     .sort((a, b) => slideNo(a.name) - slideNo(b.name))
-    .map((s) => xmlText(s.text, /<\/a:p>/g));
+    .map((s) => xmlText(s.text, "</a:p>"));
 }
 
 /**
