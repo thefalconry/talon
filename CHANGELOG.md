@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.38.2](https://github.com/thefalconry/talon/compare/v5.38.1...v5.38.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* **whatsapp:** receive documents (PDF) and pass them to the model ([#1313](https://github.com/thefalconry/talon/issues/1313)) ([a5acfe1](https://github.com/thefalconry/talon/commit/a5acfe18babc3dbacbf9828173fcb3201e146fda))
+
 ## [5.38.1](https://github.com/thefalconry/talon/compare/v5.38.0...v5.38.1) (2026-10-13)
 
 
