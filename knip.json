@@ -14,17 +14,12 @@
     "native/scheduler-core/embed.mjs",
     ".github/scripts/**"
   ],
-  "project": [
-    "src/**/*.ts",
-    "scripts/**/*.ts"
-  ],
-  "ignoreDependencies": [
-    "@brave/brave-search-mcp-server",
-    "@playwright/mcp"
-  ],
+  "project": ["src/**/*.ts", "scripts/**/*.ts"],
+  "ignoreDependencies": ["@brave/brave-search-mcp-server", "@playwright/mcp"],
   "ignoreBinaries": [
     "gleam",
     "gofmt",
+    "pdftotext",
     "talon",
     "taskkill.exe",
     "umount",
