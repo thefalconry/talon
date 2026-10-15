@@ -495,3 +495,19 @@ describe("inbox unread notice on tool results", () => {
     );
   });
 });
+
+describe("spawn_agent chat_id (background runs)", () => {
+  const spawn = agentTools.find((t) => t.name === "spawn_agent")!;
+  it("accepts an explicit chat_id and forwards it to the bridge", async () => {
+    expect(spawn.schema.chat_id).toBeDefined();
+    const bridge = vi.fn(async () => ({ ok: true }));
+    const params = { brief: "b", label: "l", chat_id: "352042062" };
+    await spawn.execute(params as never, bridge as never);
+    expect(bridge).toHaveBeenCalledWith("spawn_agent", params);
+  });
+  it("keeps chat_id optional for chat mode", () => {
+    expect(
+      (spawn.schema.chat_id as z.ZodType).safeParse(undefined).success,
+    ).toBe(true);
+  });
+});

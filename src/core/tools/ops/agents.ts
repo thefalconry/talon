@@ -15,6 +15,18 @@
 
 import { z } from "zod";
 import type { ToolDefinition } from "../types.js";
+import { chatIdSchema } from "../schemas.js";
+
+/**
+ * Background runs (cron query jobs, heartbeat) have no ambient chat, so the
+ * gateway rejects spawn with "No active chat context" unless an explicit
+ * chat_id is supplied. That chat becomes the agent's parent / wake-up target.
+ */
+const agentChatId = chatIdSchema
+  .optional()
+  .describe(
+    "Parent chat for the agent (receives its report). Omit in chat mode. Required from cron/heartbeat runs, where there is no ambient chat.",
+  );
 
 const SPAWN_DESCRIPTION = `Delegate a self-contained piece of work to a sub-agent and keep working.
 
@@ -96,6 +108,7 @@ export const agentTools: ToolDefinition[] = [
         .describe(
           "Tell the agent to run the pre-flight lane (`npm run preflight` / run_preflight) before every git push and push only on green. Default: on when the brief mentions a PR, off otherwise.",
         ),
+      chat_id: agentChatId,
     },
     execute: (params, bridge) => bridge("spawn_agent", params),
     tag: "agents",
