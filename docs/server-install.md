@@ -1,7 +1,7 @@
 # Server-only install (no Telegram)
 
 Run Talon on a Linux server with no chat bot at all. The only way in is the
-client bridge: the [companion app](../apps/companion/) on your phone or
+client bridge: the [companion app (Talos)](https://github.com/thefalconry/talos) on your phone or
 desktop, and [talon-node](headless-node.md) on other machines. There's no
 bot token, no admin ID, and nothing that talks to Telegram.
 

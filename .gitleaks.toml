@@ -29,8 +29,6 @@ lives in ~/.talon/keys/."""
 # first exception rather than add to it (verified locally against the full
 # --log-opts=--all history).
 paths = [
-  '''apps/companion/test/fixtures/.*\.pem''',
-  '''apps/companion/test/fixtures/.*\.p12''',
   '''src/__tests__/secret-scan\.test\.ts''',
   '''protocol/fixtures/auth_v1\.json''',
 ]
