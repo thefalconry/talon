@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.39.2](https://github.com/thefalconry/talon/compare/v5.39.1...v5.39.2) (2026-10-16)
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump actions/upload-artifact from 7.0.1 to 7.0.2 ([#1310](https://github.com/thefalconry/talon/issues/1310)) ([3ce8816](https://github.com/thefalconry/talon/commit/3ce8816949abf8628e82658c3f7ccef7d81346a9))
+* **deps:** Bump github/codeql-action/init from 4.38.2 to 4.38.3 ([#1312](https://github.com/thefalconry/talon/issues/1312)) ([6b656d5](https://github.com/thefalconry/talon/commit/6b656d5c04eb08801b985a7e9996235c3cc17f53))
+
 ## [5.39.1](https://github.com/thefalconry/talon/compare/v5.39.0...v5.39.1) (2026-10-16)
 
 
