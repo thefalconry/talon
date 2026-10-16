@@ -348,7 +348,7 @@ jobs:
 
       - name: Upload test-impact map
         if: always() && matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true') && hashFiles('ci/test-impact-map.json') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-impact-map
           path: ci/test-impact-map.json
@@ -365,7 +365,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: test-results-${{ matrix.os }}-node-${{ matrix.node-version }}
           path: test-results.json
@@ -373,7 +373,7 @@ jobs:
 
       - name: Upload coverage
         if: always() && matrix.os == 'ubuntu-latest' && (github.event_name != 'pull_request' || needs.changes.outputs.full == 'true')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-report
           path: coverage/
@@ -420,7 +420,7 @@ jobs:
 
       - name: Upload functional results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: functional-results-${{ matrix.os }}
           path: functional-results.json
@@ -466,7 +466,7 @@ jobs:
 
       - name: Upload integration results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: integration-results-${{ matrix.os }}
           path: integration-results.json
@@ -1039,7 +1039,7 @@ jobs:
 
       - name: Upload backend live results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-live-${{ matrix.backend }}-${{ matrix.os }}
           path: ${{ matrix.backend }}-backend-results.json
@@ -1074,7 +1074,7 @@ jobs:
 
       - name: Upload fuzz results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-results
           path: fuzz-results.json
@@ -1340,7 +1340,7 @@ jobs:
 
       - name: Upload daemon tarball (main)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: talon-daemon-tarball
           path: ${{ runner.temp }}/pack/*.tgz
