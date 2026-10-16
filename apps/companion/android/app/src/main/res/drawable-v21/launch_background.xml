@@ -1,7 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Splash behind the Flutter engine while it boots. @color/launch_background
-     resolves per values/values-night so the flash matches the app palette
-     instead of stock white. -->
-<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@color/launch_background" />
-</layer-list>

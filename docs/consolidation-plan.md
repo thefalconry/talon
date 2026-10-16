@@ -53,7 +53,7 @@ but worth knowing before moving anything.
 | `frontend/native/server.ts` | 1,101 | `BridgeServer.handle()` is a 430-line `if` chain over ~40 routes |
 | `core/engine/gateway-actions/native.ts` | 1,035 | Flat handler table, fine |
 | `util/config.ts` | 843 | Engine configuration filed as a leaf util (see migration) |
-| `apps/companion/.../settings_screen.dart` | 3,434 | Twice the next-largest Dart file |
+| `apps/companion` | — | Companion client moved to separate repository (`thefalconry/talos`) |
 
 ## Findings, ordered by value over risk
 
@@ -149,13 +149,11 @@ telegram and discord). `docs/memory-persona-plan.md` §2 keeps ~460 lines
 and deletes ~4,300 + 26 test files. That is its own rollout; nothing here
 should touch soul except to remove it when that lands.
 
-### 8. Companion
+### 8. Companion — retired from monorepo ✅
 
-`settings_screen.dart` (3,434 lines, 49% covered): the per-card builders
-(`_meshCard`, `_voiceCard`, `_appearanceCard`, `_diagnosticsCard`,
-`_statusCard`, `_aboutCard`) are independent and become one widget file
-each. `mesh_background.dart` at 9% is the Android foreground-service
-isolate — the least-tested, most load-bearing code in the app.
+The Flutter companion client has been retired from this monorepo and now
+lives in its own repository: [`thefalconry/talos`](https://github.com/thefalconry/talos).
+The daemon mesh protocol in `protocol/` remains the shared contract.
 
 ### 9. Test brittleness
 
