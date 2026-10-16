@@ -9,7 +9,7 @@ name: CI
 # portability. Heavier tiers join only when the change touches what they
 # guard (native/** → the drift guards and the native addon/warden suites
 # on ubuntu; Docker files → Docker Build; package.json → Tarball Check).
-# Docs-only / companion-only changes run just the PR title + secret scan.
+# Docs-only changes run just the PR title + secret scan.
 #
 # The FULL matrix — all three OSes, backend-live, fuzz, docker, tarball —
 # runs on every push to main, nightly at 03:00 UTC, on workflow_dispatch,
@@ -58,7 +58,7 @@ jobs:
   # Path-aware at the job level. Outputs (strings "true"/"false"):
   #   full     — push / schedule / dispatch, or the PR (also a queued PR)
   #              carries the `full-ci` label: run everything
-  #   daemon   — anything beyond docs/**, apps/companion/** and loose
+  #   daemon   — anything beyond docs/** and loose
   #              *.md. prompts/** and src/** always count, *.md included
   #              (they ship in the binary); apps/node/** and protocol/**
   #              count too (src tests read them). Gates the light set.
@@ -66,7 +66,6 @@ jobs:
   #   docker   — Dockerfile, .dockerignore, docker/**, docker-compose*.yml
   #   package  — package.json / .npmignore / tarball checker (Tarball Check)
   #   Informational (their own workflows gate on them):
-  #   companion — apps/companion/** or protocol/**   (companion.yml)
   #   node      — apps/node/** or protocol/**        (node.yml)
   #   native_provision — provisioner paths           (native-provision.yml)
   #   packaging — packaging/**, nfpm.yaml             (publish.yml)
@@ -87,7 +86,6 @@ jobs:
       native: ${{ steps.scope.outputs.native }}
       docker: ${{ steps.scope.outputs.docker }}
       package: ${{ steps.scope.outputs.package }}
-      companion: ${{ steps.scope.outputs.companion }}
       node: ${{ steps.scope.outputs.node }}
       native_provision: ${{ steps.scope.outputs.native_provision }}
       packaging: ${{ steps.scope.outputs.packaging }}
@@ -107,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           full=false daemon=false native=false docker=false package=false
-          companion=false node=false native_provision=false packaging=false docs=false
+          node=false native_provision=false packaging=false docs=false
           files=""
           case "$EVENT" in
             pull_request)
@@ -146,12 +144,10 @@ jobs:
             [[ -z "$f" ]] && continue
             case "$f" in
               docs/*) docs=true ;;
-              apps/companion/*) ;;
               prompts/*|src/*) daemon=true ;;
               *.md) docs=true ;;
               *) daemon=true ;;
             esac
-            case "$f" in apps/companion/*|protocol/*) companion=true ;; esac
             case "$f" in apps/node/*|protocol/*) node=true ;; esac
             case "$f" in native/*|src/native/*) native=true ;; esac
             case "$f" in Dockerfile|.dockerignore|docker/*|docker-compose*.yml) docker=true ;; esac
@@ -166,7 +162,7 @@ jobs:
           done <<<"$files"
           if [[ "$full" == true ]]; then
             daemon=true native=true docker=true package=true
-            companion=true node=true native_provision=true packaging=true docs=true
+            node=true native_provision=true packaging=true docs=true
             os='["ubuntu-latest","macos-latest","windows-latest"]'
           else
             os='["ubuntu-latest"]'
@@ -176,7 +172,6 @@ jobs:
           native=$native
           docker=$docker
           package=$package
-          companion=$companion
           node=$node
           native_provision=$native_provision
           packaging=$packaging
@@ -1328,7 +1323,7 @@ jobs:
 
       # Publish the daemon tarball from main as a workflow artifact — the
       # exact `npm pack` output the checker just validated. Anything that
-      # needs a built daemon (manual smoke tests, a companion/node job that
+      # needs a built daemon (manual smoke tests, a node job that
       # wants to drive a real daemon) can `actions/download-artifact` it
       # from the latest main run instead of rebuilding from source.
       - name: Pack daemon tarball (main)

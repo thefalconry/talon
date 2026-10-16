@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Windows PE hardening check for the shipped .exe files (companion and
- * talon-node). Reads each image's optional-header DllCharacteristics and
- * fails CI when ASLR (DYNAMICBASE) or DEP (NXCOMPAT) is missing.
+ * Windows PE hardening check for the shipped .exe files (talon-node).
+ * Reads each image's optional-header DllCharacteristics and fails CI when
+ * ASLR (DYNAMICBASE) or DEP (NXCOMPAT) is missing.
  *
  * Control Flow Guard (GUARD_CF) is reported as a warning only: Go's linker
- * never emits it, and the Flutter runner is not built with /guard:cf. Pass
- * --require-cfg to make it fatal once a binary is expected to carry it.
+ * never emits it. Pass --require-cfg to make it fatal once a binary is
+ * expected to carry it.
  *
  * Dependency-free and cross-platform on purpose: talon-node.exe is
  * cross-compiled on Linux, where dumpbin does not exist.
