@@ -39,6 +39,7 @@ import {
 } from "../../core/mesh/credentials/index.js";
 import { isLoopbackHost, loadOrCreateBridgeTlsIdentity } from "./bridge/tls.js";
 import { respawnRequested } from "../../core/daemon/respawn.js";
+import { advertisedEndpoints } from "../../core/mesh/links/endpoints.js";
 
 export { summarizeToolResult } from "./turn/tool-result.js";
 
@@ -139,6 +140,17 @@ async function adoptCompanionDefault(
  */
 const RESTART_RECONNECT_AFTER_MS = 5_000;
 
+/**
+ * How the bridge says goodbye. A /restart or /update says so, so devices
+ * come straight back to the successor instead of waiting out their
+ * reconnect backoff.
+ */
+function bridgeStopOptions(): Parameters<BridgeServer["stop"]>[0] {
+  return respawnRequested()
+    ? { restart: { reconnectAfterMs: RESTART_RECONNECT_AFTER_MS } }
+    : {};
+}
+
 export function createNativeFrontend(
   config: TalonConfig,
   gateway: Gateway,
@@ -161,6 +173,10 @@ export function createNativeFrontend(
       startedAt: runtime.startedAt,
       ...(listen.tls ? { tls: () => loadOrCreateBridgeTlsIdentity() } : {}),
       credentials: bridgeCredentials(listen, mesh),
+      endpoints: advertisedEndpoints(
+        config.native?.publicUrl,
+        config.native?.endpoints,
+      ),
     },
     buildBridgeHandlers(runtime),
   );
@@ -275,13 +291,7 @@ export function createNativeFrontend(
       unregisterMeshTransport = null;
       mesh.setBridgeInfo(null);
       await removeBridgeDiscovery();
-      // A /restart or /update: say so, so devices come straight back to the
-      // successor instead of waiting out their reconnect backoff.
-      await server.stop(
-        respawnRequested()
-          ? { restart: { reconnectAfterMs: RESTART_RECONNECT_AFTER_MS } }
-          : {},
-      );
+      await server.stop(bridgeStopOptions());
       await gateway.stop();
     },
   };

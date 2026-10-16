@@ -7,7 +7,8 @@
 
 This is deliberately **not** the Claude SDK's sub-agent feature. Talon owns
 the mechanism so it works identically on `claude`, `codex`, `kilo`,
-`opencode` — anything with a `background` capability — and so a chat on one
+`opencode`, `agy`, `openai-agents` — anything with a `background`
+capability — and so a chat on one
 backend can delegate to an agent on another.
 
 ## The model
@@ -28,7 +29,8 @@ other agent work started. It has:
 - a private **scratch dir**, `$TMPDIR/talon-agents/<id>/` (`/tmp/talon-agents/<id>/`
   on Linux), created when the run starts and exported as `TMPDIR` / `TMP` /
   `TEMP` to its shells and tools (backends that take a per-run environment
-  — the Claude SDK today; others see it named in the agent's brief). It
+  — the Claude SDK and OpenAI Agents today; others see it named in the
+  agent's brief). It
   survives a daemon restart, is removed when the agent settles `done`, and
   is kept on any other outcome so the work it left can be inspected;
 - an optional hard **timeout** (none by default), a **no-progress

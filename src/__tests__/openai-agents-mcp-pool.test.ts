@@ -29,10 +29,17 @@ vi.mock("@openai/agents", () => {
     name: string;
     url: string;
     cacheToolsList: boolean | undefined;
-    constructor(opts: { name: string; url: string; cacheToolsList?: boolean }) {
+    toolFilter: unknown;
+    constructor(opts: {
+      name: string;
+      url: string;
+      cacheToolsList?: boolean;
+      toolFilter?: unknown;
+    }) {
       this.name = opts.name;
       this.url = opts.url;
       this.cacheToolsList = opts.cacheToolsList;
+      this.toolFilter = opts.toolFilter;
     }
     async connect(): Promise<void> {
       /* no-op */
@@ -67,6 +74,9 @@ vi.mock("@openai/agents", () => {
   return {
     MCPServerStreamableHttp: FakeMCPServerStreamableHttp,
     connectMcpServers,
+    createMCPToolStaticFilter: (o: { allowed?: string[] }) => ({
+      allowedToolNames: o.allowed,
+    }),
   };
 });
 
@@ -96,6 +106,7 @@ vi.mock("../util/log.js", () => ({
 }));
 
 import {
+  openUnpooledBundle,
   getOrCreateBundle,
   releaseBundle,
   releaseAllBundles,
@@ -262,5 +273,71 @@ describe("openai-agents / mcp-pool", () => {
       (s) => s.name,
     );
     expect(names).not.toContain("brave-search");
+  });
+
+  describe("lean bundles (isolated runs)", () => {
+    type FakeServer = {
+      name: string;
+      url: string;
+      cacheToolsList?: boolean;
+      toolFilter?: { allowedToolNames?: string[] };
+    };
+    const lastServers = () =>
+      connectCalls[connectCalls.length - 1]!.servers as FakeServer[];
+
+    it("the full surface is every frontend, brave and every plugin", async () => {
+      const bundle = await openUnpooledBundle({
+        chatId: "agent:agt_1",
+        bridgeUrl: "http://127.0.0.1:19876",
+        frontends: ["telegram", "native"],
+        braveApiKey: "k",
+      });
+      expect(lastServers().map((s) => s.name)).toEqual([
+        "telegram-tools",
+        "native-tools",
+        "brave-search",
+        "fake-plugin-tools",
+      ]);
+      await bundle.close();
+    });
+
+    it("a lean bundle is one filtered frontend server and no plugins", async () => {
+      const bundle = await openUnpooledBundle({
+        chatId: "agent:agt_1",
+        bridgeUrl: "http://127.0.0.1:19876",
+        frontends: ["telegram", "native"],
+        braveApiKey: "k",
+        lean: { tools: ["report_result", "check_inbox"], plugins: [] },
+      });
+      const servers = lastServers();
+      expect(servers.map((s) => s.name)).toEqual(["telegram-tools"]);
+      expect(servers[0]!.toolFilter?.allowedToolNames).toEqual([
+        "report_result",
+        "check_inbox",
+      ]);
+      // The SDK's tool-list cache is global and keyed by server name: a
+      // filtered listing must never be stored for (or read from) the chat
+      // path's same-named server.
+      expect(servers[0]!.cacheToolsList).toBe(false);
+      await bundle.close();
+    });
+
+    it("a lean bundle adds only the plugin servers it names", async () => {
+      const bundle = await openUnpooledBundle({
+        chatId: "agent:agt_1",
+        bridgeUrl: "http://127.0.0.1:19876",
+        frontends: ["telegram"],
+        braveApiKey: "k",
+        lean: {
+          tools: ["report_result"],
+          plugins: ["fake-plugin-tools", "not-loaded"],
+        },
+      });
+      expect(lastServers().map((s) => s.name)).toEqual([
+        "telegram-tools",
+        "fake-plugin-tools",
+      ]);
+      await bundle.close();
+    });
   });
 });

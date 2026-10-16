@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -136,5 +140,91 @@ func TestConsumeEventsReportsTheRestartNotice(t *testing.T) {
 	shutdown.Store(true)
 	if _, err := n.consumeEvents(ctx); errors.As(err, &restarting) || err == nil {
 		t.Fatalf("shutdown bye: err = %v, want a plain stream-closed error", err)
+	}
+}
+
+// After the restart notice the node retries every second while the bridge
+// is down. Those failures (here the proxy's 502s) must not rotate it onto
+// a fallback entry: a restart is not an endpoint failure, so the node
+// comes back on the entry it was using.
+func TestRestartNoticeDoesNotRotateEndpoints(t *testing.T) {
+	var (
+		mu         sync.Mutex
+		streams    int
+		downUntil  time.Time
+		reopened   = make(chan struct{}, 1)
+		downFor    = 2500 * time.Millisecond
+		afterMs    = 100
+		restarting = httptest.NewTLSServer(nil)
+	)
+	restarting.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		down := time.Now().Before(downUntil)
+		mu.Unlock()
+		if down {
+			// Caddy while the bridge is between processes.
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		if r.URL.Path != "/events" {
+			_, _ = io.WriteString(w, `{"ok":true,"deviceId":"node-abc"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		mu.Lock()
+		streams++
+		first := streams == 1
+		if first {
+			downUntil = time.Now().Add(downFor)
+		}
+		mu.Unlock()
+		if first {
+			_, _ = fmt.Fprintf(w, `data: {"kind":"bye","reason":"restart","reconnectAfterMs":%d}`+"\n\n", afterMs)
+			return
+		}
+		_, _ = io.WriteString(w, ": ping\n\n")
+		w.(http.Flusher).Flush()
+		select {
+		case reopened <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+	})
+	t.Cleanup(restarting.Close)
+	sum := sha256.Sum256(restarting.Certificate().Raw)
+	fp := hex.EncodeToString(sum[:])
+	// A live fallback with the same leaf, as a DNS-bypass entry would be.
+	fallback := newMeshBridge(t, nil)
+
+	n := endpointNode(t, restarting.URL, fp, Endpoint{URL: fallback.srv.URL})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { n.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+
+	select {
+	case <-reopened:
+	case <-time.After(downFor + 6*time.Second):
+		t.Fatalf("never came back to the restarted bridge (now on %s)", currentURL(n))
+	}
+	if currentURL(n) != restarting.URL {
+		t.Fatalf("restart moved the node to %s", currentURL(n))
+	}
+	if got := fallback.count(func() int { return fallback.requests }); got != 0 {
+		t.Fatalf("the fallback saw %d requests during a restart", got)
+	}
+	// Once the stream is back, a real failure fails over as before.
+	held := func() bool {
+		n.endpoints.mu.Lock()
+		defer n.endpoints.mu.Unlock()
+		return !n.endpoints.holdUntil.IsZero()
+	}
+	for deadline := time.Now().Add(2 * time.Second); held() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	n.endpointFailed(n.endpoints.current(), errors.New("connection refused"))
+	if currentURL(n) != fallback.srv.URL {
+		t.Fatal("failover stayed held after the stream reconnected")
 	}
 }

@@ -16,9 +16,13 @@ export default defineConfig({
     // worker home in it) afterwards; home-global records the real home and
     // points the workers' inherited env at a run-wide fallback home. Order
     // matters: the home is created inside the reaper's root.
+    // daemon-env drops a TALON_DAEMON_* owner stamp inherited from a live
+    // daemon (a run started from an agent's shell), so the orphan sweeps
+    // don't mistake test processes for that daemon's children.
     globalSetup: [
       "src/__tests__/setup/tmp-reaper.ts",
       "src/__tests__/setup/home-global.ts",
+      "src/__tests__/setup/daemon-env.ts",
     ],
     // The codex-handler integration tests drive a full
     // initCodexAgent + handleMessage flow per case; some retry-path

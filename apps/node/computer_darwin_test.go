@@ -55,6 +55,35 @@ func TestComputerLive(t *testing.T) {
 		t.Fatalf("pointer is at %v after moving to (%v,%v)", cursor, x, y)
 	}
 
+	// A tight cap forces the shrink path; the result must still fit and say
+	// how image pixels map back to the space.
+	small := cmdComputer(ctx, map[string]any{"action": "screenshot", "maxBytes": 40 * 1024})
+	if !small.OK {
+		t.Fatalf("small screenshot: %s", small.Message)
+	}
+	smallRaw, _ := base64.StdEncoding.DecodeString(small.Data["base64"].(string))
+	if len(smallRaw) > 40*1024 {
+		t.Fatalf("a 40 KB cap returned %d bytes", len(smallRaw))
+	}
+	smallScale := small.Data["scale"].(float64)
+	if got := float64(small.Data["width"].(int)) * smallScale; got < float64(width)-2 || got > float64(width)+2 {
+		t.Fatalf("image width %v x scale %v does not map back to the %d space", small.Data["width"], smallScale, width)
+	}
+	t.Logf("40 KB screenshot: %vx%v scale %v quality %v, %d bytes",
+		small.Data["width"], small.Data["height"], smallScale, small.Data["quality"], len(smallRaw))
+
+	all := cmdComputer(ctx, map[string]any{"action": "snapshot", "scope": "all", "limit": 60})
+	if !all.OK {
+		t.Fatalf("snapshot scope all: %s", all.Message)
+	}
+	system, _ := all.Data["system"].(map[string]any)
+	extras, _ := system["extras"].([]any)
+	if len(extras) == 0 {
+		t.Fatalf("scope all found no menu bar extras: %v", system)
+	}
+	t.Logf("scope all: %d extras, %d windows, %d system elements",
+		len(extras), len(system["windows"].([]any)), len(system["elements"].([]any)))
+
 	snap := cmdComputer(ctx, map[string]any{"action": "snapshot", "limit": 40})
 	if !snap.OK {
 		t.Fatalf("snapshot: %s", snap.Message)

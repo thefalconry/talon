@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // system templates (prompts/system/*.md) are part of the code under
 // test, so the mock delegates those reads to the real filesystem.
 import { readFileSync as realReadFileSync } from "node:fs";
+import { resolve } from "node:path";
 // The prompt embeds the date in the configured timezone (util/time.ts),
 // not UTC — computing "today" via toISOString() makes these tests fail
 // around midnight in any non-UTC timezone.
@@ -132,7 +133,8 @@ describe("config", () => {
         {
           id: "claude-2",
           label: "Claude (claude-2)",
-          configDir: "/srv/talon-test/accounts/claude-2",
+          // Host-absolute: gains the current drive letter on Windows.
+          configDir: resolve("/srv/talon-test/accounts/claude-2"),
         },
       ]);
     });
@@ -263,6 +265,41 @@ describe("config", () => {
 
       const { loadConfig } = await import("../core/config/index.js");
       expect(() => loadConfig()).toThrow(/heartbeatEffort/);
+    });
+
+    it("accepts native.endpoints with IP dial overrides", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          publicUrl: "https://mesh.example.org",
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "203.0.113.7:443" },
+            { url: "https://mesh.example.org", dial: "[2001:db8::1]:443" },
+          ],
+        },
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(loadConfig().native?.endpoints).toHaveLength(2);
+    });
+
+    it("rejects a native.endpoints dial that is a hostname, or a plain-http url", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "evil.example:443" },
+          ],
+        },
+      });
+      const first = await import("../core/config/index.js");
+      expect(() => first.loadConfig()).toThrow(/dial must be an IP literal/);
+      vi.resetModules();
+      mockFs({
+        frontend: "terminal",
+        native: { endpoints: [{ url: "http://mesh.example.org" }] },
+      });
+      const second = await import("../core/config/index.js");
+      expect(() => second.loadConfig()).toThrow(/plain https URL/);
     });
 
     it("reads custom maxMessageLength", async () => {

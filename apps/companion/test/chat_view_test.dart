@@ -259,4 +259,40 @@ void main() {
 
     expect(find.text('Other 39'), findsOneWidget);
   });
+
+  testWidgets(
+      'scrolling up allows reading scrollback and does not snap back to bottom on gesture end or rebuild',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(900, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final now = DateTime.now();
+    final msgs = [
+      for (var i = 0; i < 40; i++)
+        msg('$i', Role.user, 'Scrollback item $i', now.add(Duration(minutes: i))),
+    ];
+
+    final state = await seededState({'c1': msgs});
+    addTearDown(state.dispose);
+
+    await tester.pumpWidget(host(state));
+    await tester.pump(const Duration(seconds: 3));
+
+    // Initially at the bottom
+    expect(find.text('Scrollback item 39'), findsOneWidget);
+
+    // Scroll up into history
+    await tester.drag(find.byType(ListView), const Offset(0, 500));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    // An earlier message is now visible, and the bottom message is scrolled out
+    expect(find.text('Scrollback item 39'), findsNothing);
+
+    // Simulate rebuild / state tick / idle scroll end: should NOT snap back to item 39
+    state.debugSeed(connState: ConnState.connected);
+    await tester.pumpWidget(host(state));
+    await tester.pump(const Duration(seconds: 2));
+
+    expect(find.text('Scrollback item 39'), findsNothing);
+  });
 }
