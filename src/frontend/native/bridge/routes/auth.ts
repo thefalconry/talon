@@ -2,6 +2,7 @@ import type { RouteHost } from "./host.js";
 import type { BridgeRoutes } from "./table.js";
 import { describePrincipal } from "../credentials/principal.js";
 import { upgradeCredential } from "../credentials/upgrade.js";
+import { clientAddress } from "../client-address.js";
 
 export function authRoutes(
   host: RouteHost,
@@ -28,7 +29,7 @@ export function authRoutes(
         host.credentials,
         principal,
         body,
-        req.socket.remoteAddress ?? "unknown",
+        clientAddress(req),
       );
       res.setHeader("Cache-Control", "no-store");
       json(res, reply.status, reply.body);

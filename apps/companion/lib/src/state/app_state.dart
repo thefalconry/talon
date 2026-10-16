@@ -289,6 +289,8 @@ class AppState extends ChangeNotifier {
         // any pin left over from an earlier profile.
         fingerprint: discoveredPin,
         clearFingerprint: bridge.scheme != 'https' || discoveredPin == null,
+        // The daemon itself named its certificate: enforce it from the start.
+        pinObserved: discoveredPin != null,
         manageLocalDaemon: false,
       );
       AppLog.info(
@@ -444,7 +446,7 @@ class AppState extends ChangeNotifier {
     final cfg = effectiveConfig ?? config;
     // Keep the process-wide pin (Image.network et al.) in step with the
     // profile this attempt uses; TOFU below adopts one when none is set.
-    BridgeTrust.pin(cfg.tls ? cfg.fingerprint : null);
+    _pinProcessWide(cfg.tls ? cfg : null);
     BridgeTrust.useClientContext(cfg.tls ? cfg.clientSecurityContext() : null);
     final client = BridgeClient(cfg);
     // Claim our mesh identity on this stream (when one has been minted) so
@@ -595,21 +597,59 @@ class AppState extends ChangeNotifier {
   /// yet, adopt the certificate the handshake presented. Remote profiles
   /// persist the pin ([persist]); local-discovery ones re-read it from the
   /// daemon's discovery file every connect instead.
+  ///
+  /// Either way the bridge has now been seen presenting the pinned
+  /// certificate itself, so the pin becomes binding even for a CA-valid
+  /// certificate ([ConnectionConfig.pinObserved]). A pin that came from a
+  /// pair link is marked the same way the first time a handshake matches it.
   Future<void> _adoptFingerprint(
     ConnectionConfig cfg,
     BridgeClient client, {
     required bool persist,
   }) async {
+    if (!cfg.tls) return;
     final seen = client.seenFingerprint;
-    if (!cfg.tls || cfg.fingerprint != null || seen == null) return;
-    BridgeTrust.pin(seen);
-    client.config = cfg.copyWith(fingerprint: seen);
-    _activeConfig = client.config;
-    if (persist) {
-      config = config.copyWith(fingerprint: seen);
-      await prefs.setConnection(config);
-      AppLog.info('app_state', 'pinned bridge certificate $seen');
+    if (cfg.fingerprint == null) {
+      if (seen == null) return;
+      _applyPin(cfg.copyWith(fingerprint: seen, pinObserved: true), client);
+      if (persist) {
+        config = config.copyWith(fingerprint: seen, pinObserved: true);
+        await prefs.setConnection(config);
+        AppLog.info('app_state', 'pinned bridge certificate $seen');
+      }
+      return;
     }
+    if (cfg.pinObserved || !client.pinObserved) return;
+    _applyPin(cfg.copyWith(pinObserved: true), client);
+    if (persist && config.fingerprint == cfg.fingerprint) {
+      config = config.copyWith(pinObserved: true);
+      await prefs.setConnection(config);
+      AppLog.info('app_state', 'bridge certificate pin is now enforced');
+    }
+  }
+
+  /// Make [active] the profile [client] and the process-wide trust use.
+  void _applyPin(ConnectionConfig active, BridgeClient client) {
+    _pinProcessWide(active);
+    client.config = active;
+    _activeConfig = active;
+  }
+
+  /// The process-wide pin (Image.network, attachments) for [cfg]: binding
+  /// on the bridge's own address once [ConnectionConfig.enforcesPin], and
+  /// nowhere else.
+  static void _pinProcessWide(ConnectionConfig? cfg) {
+    final strict = cfg != null && cfg.enforcesPin;
+    // The address exactly as the URLs this profile builds will name it.
+    final base = strict ? Uri.tryParse(cfg.baseUrl) : null;
+    BridgeTrust.pin(
+      cfg?.fingerprint,
+      enforceOn: strict
+          ? (host: base?.host ?? cfg.host, port: base?.port ?? cfg.port)
+          : null,
+      strictContext:
+          strict ? cfg.clientSecurityContext(trustedRoots: false) : null,
+    );
   }
 
   /// Tear down a client from a superseded connection attempt without touching

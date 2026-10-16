@@ -26,6 +26,16 @@ class ConnectionConfig {
   /// platform trust store accepts those before the pin is consulted).
   final String? fingerprint;
 
+  /// True once this profile has seen the bridge present exactly the pinned
+  /// [fingerprint] (first-use adoption, a matching handshake, or the local
+  /// daemon's own discovery file). From then on the pin is enforced on
+  /// every certificate — including one that chains to a public CA, which a
+  /// hijacked DNS name can get issued in minutes. Until then (a fresh pair
+  /// link, a reverse proxy with a CA certificate that never shows the
+  /// bridge's own one) a CA-valid certificate is accepted as before. A
+  /// changed or cleared pin resets it.
+  final bool pinObserved;
+
   /// Client certificate for servers behind a reverse proxy that demands one
   /// (mutual TLS, the way Immich's app does it): the imported `.p12`/`.pfx`
   /// file as base64, and its password. Presented on every TLS handshake. It
@@ -57,6 +67,7 @@ class ConnectionConfig {
     this.token,
     this.tls = false,
     this.fingerprint,
+    this.pinObserved = false,
     this.clientP12,
     this.clientP12Password,
     this.localUrl,
@@ -68,15 +79,21 @@ class ConnectionConfig {
 
   bool get hasClientCert => clientP12?.isNotEmpty ?? false;
 
+  /// Whether every server certificate must match the pin, CA-valid or not
+  /// (see [pinObserved]). The HTTP client is then built without the
+  /// platform's trusted roots, so the pin check runs on every handshake.
+  bool get enforcesPin => tls && fingerprint != null && pinObserved;
+
   /// A TLS context presenting the imported client certificate, or null when
   /// there is none (or it no longer loads — the proxy's refusal is then the
-  /// error the user sees, which says what to fix).
-  SecurityContext? clientSecurityContext() {
+  /// error the user sees, which says what to fix). [trustedRoots] false
+  /// leaves out the platform's CA roots, for a profile that [enforcesPin].
+  SecurityContext? clientSecurityContext({bool trustedRoots = true}) {
     final p12 = clientP12;
     if (p12 == null || p12.isEmpty) return null;
     try {
       final bytes = base64.decode(p12);
-      return SecurityContext(withTrustedRoots: true)
+      return SecurityContext(withTrustedRoots: trustedRoots)
         ..useCertificateChainBytes(bytes, password: clientP12Password)
         ..usePrivateKeyBytes(bytes, password: clientP12Password);
     } catch (_) {
@@ -195,6 +212,7 @@ class ConnectionConfig {
     bool? tls,
     String? fingerprint,
     bool clearFingerprint = false,
+    bool? pinObserved,
     String? clientP12,
     String? clientP12Password,
     bool clearClientCert = false,
@@ -212,6 +230,12 @@ class ConnectionConfig {
         tls: tls ?? this.tls,
         fingerprint:
             clearFingerprint ? null : (fingerprint ?? this.fingerprint),
+        // An observation is of one certificate: a new or cleared pin has not
+        // been seen yet.
+        pinObserved: pinObserved ??
+            (!clearFingerprint &&
+                (fingerprint == null || fingerprint == this.fingerprint) &&
+                this.pinObserved),
         clientP12: clearClientCert ? null : (clientP12 ?? this.clientP12),
         clientP12Password: clearClientCert
             ? null
@@ -238,6 +262,7 @@ class ConnectionConfig {
         'token': token,
         'tls': tls,
         'fingerprint': fingerprint,
+        'pinObserved': pinObserved,
         'clientP12': clientP12,
         'clientP12Password': clientP12Password,
         'localUrl': localUrl,
@@ -253,6 +278,7 @@ class ConnectionConfig {
         token: j['token'] as String?,
         tls: (j['tls'] ?? false) as bool,
         fingerprint: normalizeFingerprint(j['fingerprint'] as String?),
+        pinObserved: j['pinObserved'] == true,
         clientP12: j['clientP12'] as String?,
         clientP12Password: j['clientP12Password'] as String?,
         localUrl: j['localUrl'] as String?,

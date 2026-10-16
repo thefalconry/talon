@@ -143,7 +143,7 @@ class _ChatViewState extends State<ChatView> {
       _followQueued = false;
       if (!mounted || !_scroll.hasClients) return;
       final pos = _scroll.position;
-      if (pos.maxScrollExtent - pos.pixels < 600) {
+      if (!_userScrolledAway && pos.maxScrollExtent - pos.pixels < 120) {
         _scroll.jumpTo(pos.maxScrollExtent);
       }
     });
@@ -173,17 +173,19 @@ class _ChatViewState extends State<ChatView> {
   void _onScrolled() {
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
-    final away = pos.maxScrollExtent - pos.pixels > 420;
+    final distanceFromBottom = pos.maxScrollExtent - pos.pixels;
+    final away = distanceFromBottom > 420;
     if (away != _awayFromBottom) setState(() => _awayFromBottom = away);
 
-    if (pos.userScrollDirection != ScrollDirection.idle) {
-      if (pos.maxScrollExtent - pos.pixels > 200) {
+    if (!_pendingJumpToBottom) {
+      if (distanceFromBottom > 60) {
         _userScrolledAway = true;
-      } else if (pos.maxScrollExtent - pos.pixels <= 60) {
+      } else if (distanceFromBottom <= 20) {
         _userScrolledAway = false;
       }
-    } else if (pos.maxScrollExtent - pos.pixels <= 30) {
-      _userScrolledAway = false;
+    } else if (pos.userScrollDirection != ScrollDirection.idle) {
+      _userScrolledAway = true;
+      _pendingJumpToBottom = false;
     }
 
     // Nearing the top of loaded scrollback → pull the previous page in.
@@ -328,6 +330,7 @@ class _ChatViewState extends State<ChatView> {
 
     _lastConnState = currentConn;
     _lastHistoryLoading = historyLoading;
+    final hadPreviousCount = _lastMessageCount > 0;
     _lastMessageCount = messageCount;
 
     final token = _settleToken;
@@ -338,7 +341,7 @@ class _ChatViewState extends State<ChatView> {
           if (!mounted || !_scroll.hasClients || _settleToken != token) return;
           final pos = _scroll.position;
           // If the user actively touches or scrolls during settle, yield to the gesture.
-          if (pos.userScrollDirection != ScrollDirection.idle) {
+          if (_userScrolledAway || pos.userScrollDirection != ScrollDirection.idle) {
             _userScrolledAway = true;
             _pendingJumpToBottom = false;
             return;
@@ -393,15 +396,18 @@ class _ChatViewState extends State<ChatView> {
         settle(0, -1.0, 0);
         return;
       }
-      final pos = _scroll.position;
-      // Otherwise follow live growth only when the user is already near the
-      // bottom, so we never yank them up while they're reading scrollback.
-      if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 600) {
-        _scroll.animateTo(
-          pos.maxScrollExtent,
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-        );
+
+      // Follow live growth only when new messages actually arrived while the user
+      // was already at the bottom, so reading scrollback is never interrupted.
+      if (messagesGrew && hadPreviousCount && !_userScrolledAway) {
+        final pos = _scroll.position;
+        if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 160) {
+          _scroll.animateTo(
+            pos.maxScrollExtent,
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+          );
+        }
       }
     });
   }
@@ -441,6 +447,7 @@ class _ChatViewState extends State<ChatView> {
                       _QueuedBar(state: widget.state, chatId: chat.id),
                       Composer(
                         onSend: (text, {attachments = const []}) {
+                          _userScrolledAway = false;
                           _pendingJumpToBottom = true;
                           _settleToken++;
                           return widget.state

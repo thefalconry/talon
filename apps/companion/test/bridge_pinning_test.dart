@@ -67,7 +67,11 @@ void main() {
         BridgeClient(config(server.port, fingerprint: fixtureFingerprint()));
     addTearDown(client.dispose);
 
+    expect(client.pinObserved, isFalse);
     expect(await client.health(), isNotNull);
+    // The bridge showed the pinned certificate itself: the caller now makes
+    // the pin binding even for CA-valid certificates.
+    expect(client.pinObserved, isTrue);
   });
 
   test('a mismatched pin refuses the handshake with a clear error', () async {

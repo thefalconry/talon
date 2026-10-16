@@ -5,14 +5,21 @@
  * module decides how a wrong one is answered so an internet-facing bridge
  * can't be hammered for free, and so the operator hears about it.
  *
- * Four layers. The first three key on the remote address (behind a reverse
- * proxy that is the proxy):
+ * Four layers. The first three key on the client address (client-address.ts:
+ * the socket peer, or the proxy's `X-Forwarded-For` hop when the peer is a
+ * reverse proxy on this host):
  *
  *   1. Progressive backoff: the first few wrong tokens from an address get an
  *      immediate 401; after that each 401 waits longer (base doubling to a
  *      cap). Only failures wait. A correct token is never delayed.
  *   2. Lockout: after `lockoutMaxFailures` wrong tokens in the window the
- *      address gets 429s (even with the right token) until the window lapses.
+ *      address gets 429s until the window lapses, even with the right
+ *      shared token. A valid per-device credential is never refused by an
+ *      address lockout: its secret is 256 random bits bound to one device,
+ *      layer 4 already slows guessing at it, and an address can be shared
+ *      (NAT, a proxy that doesn't say who its client was) by a device and
+ *      whoever is guessing, so locking the address would let anyone lock
+ *      the device out. Its success doesn't clear the address's count either.
  *   3. Global failure budget: if wrong tokens across ALL addresses exceed
  *      `globalMaxFailures` in `globalWindowMs`, that is distributed guessing
  *      dodging (1) and (2). The bridge enters a cooldown: wrong tokens get
@@ -198,14 +205,19 @@ export class AuthGuard {
    * Called once per request, before routing. `credentialId` is the id a
    * refused per-device credential named (null for the shared token or
    * anything malformed) — an identifier, never secret material.
+   * `deviceCredential` says an `ok` request authenticated with a valid
+   * per-device credential rather than the shared token: it is let through
+   * whatever its address's record (layer 2).
    */
   check(
     remote: string,
     auth: AuthState,
     credentialId: string | null = null,
+    deviceCredential = false,
   ): AuthVerdict {
     const now = this.now();
     this.refreshCooldown(now);
+    if (auth === "ok" && deviceCredential) return { kind: "allow" };
     const entry = this.failures.live(remote, now);
     if (entry && entry.count >= this.policy.lockoutMaxFailures) {
       return {

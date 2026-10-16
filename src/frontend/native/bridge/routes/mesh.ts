@@ -3,6 +3,7 @@ import type { BridgeRoutes } from "./table.js";
 import type { ServerResponse } from "node:http";
 import { deviceIdParam } from "./params.js";
 import { claimDevice } from "../credentials/claims.js";
+import { hasScope } from "../credentials/principal.js";
 import { credentialHint } from "../credentials/upgrade.js";
 import type { RouteContext } from "./table.js";
 
@@ -67,7 +68,8 @@ export function meshRoutes(
 
     // Registration is also the heartbeat, so its reply is where a device
     // learns it should trade the shared token for its own credential, or
-    // rotate the one it has (`credential.action`).
+    // rotate the one it has (`credential.action`), and the other ways it
+    // can reach this bridge when its usual URL stops working (`endpoints`).
     "POST /devices/register": async (ctx) => {
       const body = await readJson(ctx.req);
       const acting = actingDevice(host, ctx, body.id);
@@ -76,10 +78,15 @@ export function meshRoutes(
         withDevice(body, "id", acting.deviceId),
       );
       const hint = credentialHint(host.credentials, ctx.principal);
+      const endpoints =
+        ctx.principal && hasScope(ctx.principal, "device")
+          ? host.endpoints()
+          : undefined;
       json(ctx.res, 200, {
         ok: true,
         deviceId: device.id,
         ...(hint ? { credential: hint } : {}),
+        ...(endpoints ? { endpoints } : {}),
       });
     },
     "POST /location": async (ctx) => {

@@ -29,6 +29,7 @@ import {
   type Identity,
 } from "../connection/identity.js";
 import { saveInboundMedia, type SavedMedia } from "./media-store.js";
+import { attachmentNote, pastedLengthNote } from "./attachment-note.js";
 import { lookupByWaId, rememberMessage } from "./message-store.js";
 import { registerWhatsAppChat, type WhatsAppChatInfo } from "../registry.js";
 import type { WhatsAppRuntime } from "../runtime.js";
@@ -351,10 +352,10 @@ async function runInboundTurn(
 
   // The model addresses messages by numeric id (react/reply/edit), so the
   // id travels with the text the same way the other frontends do it.
-  const mediaNote = media
-    ? `\n[attached ${media.type}: ${media.filePath}]`
-    : "";
-  const prompt = `[${senderName}] msg_id:${msgId}: ${text}${mediaNote}`;
+  // Documents travel with their extracted text (attachment-note.ts), and
+  // long pastes with an exact word count.
+  const notes = (await attachmentNote(media)) + pastedLengthNote(text);
+  const prompt = `[${senderName}] msg_id:${msgId}: ${text}${notes}`;
 
   const runTurn = () =>
     execute({
