@@ -1,5 +1,18 @@
 # Changelog
 
+## [5.38.3](https://github.com/thefalconry/talon/compare/v5.38.2...v5.38.3) (2026-10-16)
+
+
+### Bug Fixes
+
+* **agents:** accept explicit chat_id on spawn_agent for background runs ([#1317](https://github.com/thefalconry/talon/issues/1317)) ([11eb97e](https://github.com/thefalconry/talon/commit/11eb97e52294e283a96248f57f909fcbb19d1a81))
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 4 updates ([#1316](https://github.com/thefalconry/talon/issues/1316)) ([16bc2ca](https://github.com/thefalconry/talon/commit/16bc2cab9a01b8a3706209e5662e1cd98197635c))
+* **deps:** Bump actions/setup-node from 7.0.0 to 7.1.0 ([#1307](https://github.com/thefalconry/talon/issues/1307)) ([d9e6c59](https://github.com/thefalconry/talon/commit/d9e6c59868741c533d55b033fb8f7b1abf5c853f))
+
 ## [5.38.2](https://github.com/thefalconry/talon/compare/v5.38.1...v5.38.2) (2026-10-14)
 
 
