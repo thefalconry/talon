@@ -1,5 +1,17 @@
 # Changelog
 
+## [5.39.0](https://github.com/thefalconry/talon/compare/v5.38.3...v5.39.0) (2026-10-16)
+
+
+### Features
+
+* **mesh:** tell devices when the daemon restarts so they come straight back ([#1292](https://github.com/thefalconry/talon/issues/1292)) ([241c929](https://github.com/thefalconry/talon/commit/241c929507f155864b98c51e3c9dd8000da6e698))
+
+
+### Bug Fixes
+
+* **mesh:** hold device commands across a reconnect instead of losing them ([#1291](https://github.com/thefalconry/talon/issues/1291)) ([7ed9545](https://github.com/thefalconry/talon/commit/7ed9545c039ef312e31a1d60839ba25e2ea21ee1))
+
 ## [5.38.3](https://github.com/thefalconry/talon/compare/v5.38.2...v5.38.3) (2026-10-16)
 
 
