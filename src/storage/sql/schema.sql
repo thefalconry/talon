@@ -460,3 +460,27 @@ CREATE TABLE IF NOT EXISTS agents (
   preflight        INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_agents_state ON agents(state, depth, created_at);
+
+-- Sub-agent blackboard: an append-only, per-chat-tree log the agents of one
+-- chat share (findings, claims, corrections, questions) plus advisory
+-- leases (kind='lease', topic = the resource). chat_id is the chat key the
+-- agent tree roots in, which is the whole visibility boundary. Leases are
+-- never deleted by release — released_at marks them dead — and a lease is
+-- live while released_at IS NULL and expires_at is in the future.
+CREATE TABLE IF NOT EXISTS agent_board (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id      TEXT    NOT NULL,
+  -- Agent id, or 'parent' for an entry the parent itself wrote.
+  author_id    TEXT    NOT NULL,
+  author_label TEXT    NOT NULL,
+  topic        TEXT    NOT NULL,
+  -- finding | claim | correction | question | lease
+  kind         TEXT    NOT NULL,
+  text         TEXT    NOT NULL,
+  created_at   INTEGER NOT NULL,
+  -- Leases only.
+  expires_at   INTEGER,
+  released_at  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_agent_board_chat ON agent_board(chat_id, id);
+CREATE INDEX IF NOT EXISTS idx_agent_board_author ON agent_board(author_id, kind);

@@ -15,7 +15,7 @@ import { mediaTools } from "./chat/media.js";
 import { stickerTools } from "./chat/stickers.js";
 import { schedulingTools } from "./ops/scheduling.js";
 import { triggerTools } from "./ops/triggers.js";
-import { agentTools, preflightTools } from "./ops/agents.js";
+import { agentTools, boardTools, preflightTools } from "./ops/agents.js";
 import { goalTools } from "./ops/goals.js";
 import { memoryTools } from "./content/memory.js";
 import { scriptTools } from "./ops/scripts.js";
@@ -59,6 +59,7 @@ export const ALL_TOOLS: readonly ToolDefinition[] = [
   ...backupTools,
   ...preflightTools,
   ...secretTools,
+  ...boardTools,
 ];
 
 /**

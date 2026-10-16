@@ -17,6 +17,13 @@
  */
 
 export { agentContextLabel, agentIdFromContextLabel } from "./context.js";
+export {
+  post as boardPost,
+  read as boardRead,
+  acquireLease as leaseAcquire,
+  listLeases as leaseList,
+  releaseLease as leaseRelease,
+} from "./board.js";
 export { AgentRegistry, agentRegistry } from "./registry.js";
 export {
   DEFAULT_AGENT_CAPS,
