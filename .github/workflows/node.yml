@@ -178,7 +178,10 @@ jobs:
           chmod +x talon-node-*-*
           for bin in talon-node-darwin-amd64 talon-node-darwin-arm64; do
             test -f "$bin" || { echo "::error::$bin missing from the build"; exit 1; }
-            codesign --force --sign "$IDENTITY" "${KEYCHAIN_ARGS[@]}" \
+            # ${a[@]+"${a[@]}"}: the runner's bash 3.2 treats an empty
+            # array as unbound under set -u, which is every run without
+            # the signing secret (Dependabot and fork PRs).
+            codesign --force --sign "$IDENTITY" ${KEYCHAIN_ARGS[@]+"${KEYCHAIN_ARGS[@]}"} \
               --identifier dev.talon.node "$bin"
             codesign --verify --strict "$bin"
             codesign --display --verbose=2 "$bin" 2>&1 | grep -E '^(Identifier|Authority|Signature|TeamIdentifier)='
