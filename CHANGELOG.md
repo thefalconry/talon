@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.39.1](https://github.com/thefalconry/talon/compare/v5.39.0...v5.39.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **node:** de-flake the restart-notice failover test; ad-hoc mac signing under set -u ([#1320](https://github.com/thefalconry/talon/issues/1320)) ([af44246](https://github.com/thefalconry/talon/commit/af4424658042f6174562d16d62c99b8d3e54d963))
+
 ## [5.39.0](https://github.com/thefalconry/talon/compare/v5.38.3...v5.39.0) (2026-10-16)
 
 
