@@ -37,6 +37,19 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { createOutputCapture } from "../../util/exec-output.js";
 import { expandFsPath as expandPath } from "../../util/fs-path.js";
 
+/**
+ * Hand the model the real failure. From 0.19 the SDK's default error
+ * function returns a fixed "An error occurred" line and drops the
+ * exception, so a missing file or a non-unique edit would read as a
+ * transient fault the model just retries. These are Talon's own local
+ * tools; their errors (ENOENT, "not unique", exit codes) are what the
+ * model needs to correct the call.
+ */
+function surfaceToolError(_context: unknown, error: unknown): string {
+  const details = error instanceof Error ? error.toString() : String(error);
+  return `An error occurred while running the tool. Please try again. Error: ${details}`;
+}
+
 // ── Read ────────────────────────────────────────────────────────────────────
 
 interface ReadInput {
@@ -46,6 +59,7 @@ interface ReadInput {
 }
 
 const readTool = tool({
+  errorFunction: surfaceToolError,
   name: "Read",
   description:
     "Read a text file from disk. Returns the file contents with " +
@@ -95,6 +109,7 @@ interface WriteInput {
 }
 
 const writeTool = tool({
+  errorFunction: surfaceToolError,
   name: "Write",
   description:
     "Write a string to a file, creating it (and any missing parent " +
@@ -135,6 +150,7 @@ interface EditInput {
 }
 
 const editTool = tool({
+  errorFunction: surfaceToolError,
   name: "Edit",
   description:
     "Replace text in a file. `old_string` must appear verbatim in " +
@@ -332,6 +348,7 @@ function killGroup(child: ChildProcess, detached: boolean): void {
 }
 
 const bashTool = tool({
+  errorFunction: surfaceToolError,
   name: "Bash",
   description:
     "Run a shell command. Uses PowerShell on Windows and `bash -lc` elsewhere. Returns combined stdout " +
@@ -382,6 +399,7 @@ interface GlobInput {
 }
 
 const globTool = tool({
+  errorFunction: surfaceToolError,
   name: "Glob",
   description:
     "List files matching a glob pattern (e.g. `**/*.ts`, " +
@@ -426,6 +444,7 @@ interface GrepInput {
 }
 
 const grepTool = tool({
+  errorFunction: surfaceToolError,
   name: "Grep",
   description:
     "Search for a regular expression in files using the system " +
