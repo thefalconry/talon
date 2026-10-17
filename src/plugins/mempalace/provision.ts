@@ -47,7 +47,7 @@ import { userHome } from "../../util/fs-path.js";
  * to. Bump deliberately, with the canary workflow green — see
  * .github/workflows/native-provision.yml.
  */
-export const MEMPALACE_PINNED_VERSION = "3.10.0";
+export const MEMPALACE_PINNED_VERSION = "3.11.0";
 
 /** Minimum python for the managed venv (matches mempalace's supported floor). */
 const PYTHON_MIN = { major: 3, minor: 10 };
