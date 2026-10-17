@@ -46,6 +46,7 @@ vi.mock("../core/engine/backend-router/index.js", () => ({
     reason: "no candidates",
     routed: false,
   })),
+  openBreaker: () => undefined,
   recordBackendRunUsage: vi.fn(),
   recordBackendRunFailure: vi.fn(),
   recordBackendRunSuccess: vi.fn(),
