@@ -128,6 +128,11 @@ export interface AgentSpawnSpec {
    */
   readonly timeoutMs?: number;
   /**
+   * Skip the headroom guard (`agents.minHeadroomPct`): spawn even when the
+   * target backend is nearly out of plan.
+   */
+  readonly force?: boolean;
+  /**
    * Append the pre-flight lane instruction (run `npm run preflight` before
    * every push) to the brief. Resolved by the spawn tool: explicit value,
    * else on when the brief mentions a PR.
@@ -170,4 +175,11 @@ export interface AgentCaps {
    * background capability. Enforced by `spawnAgent` on the final choice.
    */
   readonly allowedBackends?: readonly string[];
+  /**
+   * Refuse a spawn when the backend it would run on has less than this
+   * percentage of headroom left (measured readings only; an unmeasured
+   * backend is allowed). Applies to pinned backends and models too. 0
+   * disables the guard; a spawn with `force: true` bypasses it.
+   */
+  readonly minHeadroomPct: number;
 }

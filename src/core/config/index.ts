@@ -742,6 +742,12 @@ const configSchema = z.object({
    *   - `allowedBackends` — optional allowlist of backend ids sub-agents
    *     may run on. Unset = any backend with a background capability. A
    *     spawn that names (or inherits) a backend outside it is refused.
+   *   - `minHeadroomPct` — refuse a spawn when the backend it would run on
+   *     has less than this percent of measured plan headroom left (default
+   *     25; 0 disables). Checked on the final backend, so it also covers an
+   *     explicit backend or model, which skip routing. Unmeasured backends
+   *     (no plan API, no `backendBudgets` entry) are allowed. A spawn with
+   *     `force: true` bypasses it.
    */
   agents: z
     .object({
@@ -755,6 +761,7 @@ const configSchema = z.object({
         .min(0)
         .default(15 * 60 * 1000),
       allowedBackends: z.array(z.string().min(1)).optional(),
+      minHeadroomPct: z.number().min(0).max(100).default(25),
     })
     .optional(),
   /**
@@ -1104,6 +1111,16 @@ const configSchema = z.object({
   // own hands, so the cutover should be deliberate and observed (flip to true
   // and restart), with an instant rollback by flipping back to false.
   nativeTools: z.boolean().default(false),
+
+  // Claude backend — offer Claude Code's OWN in-process sub-agent tool
+  // (`Agent`, `Task` on older builds) to the model. Off by default: those
+  // sub-agents live inside one turn, die with it without reporting, and are
+  // invisible to Talon's agent caps and headroom guard, so a model that
+  // reaches for them instead of `spawn_agent` can spend a whole plan window
+  // for no output. When false the tools are dropped from the whitelist and
+  // added to the SDK's `disallowedTools` for chat turns, heartbeat, dream,
+  // cron/query jobs and sub-agents. Talon's own `spawn_agent` is unaffected.
+  allowNativeSubagents: z.boolean().default(false),
 
   // FUSE layer for the talon:// namespace (~/.talon/ns). "auto" mounts the
   // live views (proc/, plugins/) when the host can (Linux, /dev/fuse, the

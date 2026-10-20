@@ -639,14 +639,14 @@ export async function initBackendAndDispatcher(
   }
 
   // Configure the Claude SDK one-shot runner once we know mempalace state.
-  // Loaded unconditionally because dream/heartbeat may target the Claude SDK
-  // backend even when the chat backend is Kilo/OpenCode in some setups.
-  // For Kilo/OpenCode chat backends this is dead state — harmless.
+  // Loaded unconditionally: dream/heartbeat may target the Claude SDK backend
+  // even when the chat backend is Kilo/OpenCode (then it is harmless state).
   const { initClaudeOneShot } =
     await import("./backend/claude-sdk/one-shot.js");
   initClaudeOneShot({
     claudeBinary: config.claudeBinary,
     mempalace: mempalaceCfg,
+    allowNativeSubagents: config.allowNativeSubagents,
   });
 
   initRecurringAgents(config, frontends, Boolean(mempalaceCfg), {

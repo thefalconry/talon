@@ -301,7 +301,8 @@ the decision to talk to a human is made.
   "maxDepth": 2,
   "stallTimeoutMs": 900000,
   "maxTimeoutMs": 7200000,
-  "allowedBackends": ["claude", "codex"]
+  "allowedBackends": ["claude", "codex"],
+  "minHeadroomPct": 25
 }
 ```
 
@@ -320,6 +321,24 @@ the decision to talk to a human is made.
   run on. `spawn_agent` refuses a backend outside it, whether named or
   inherited, with an error naming the list; a routed choice outside it
   falls back to the inherited backend instead of failing.
+- `minHeadroomPct` (default 25, 0 = off) — the headroom guard. A spawn is
+  refused when the backend it would actually run on has less than this
+  percent of measured plan headroom left (the same reading `plan_usage`
+  and the router use; a backend whose credentials were rejected or whose
+  run breaker is open counts as 0%). The error states the headroom and the
+  window's reset time. It is checked on the final backend, so it covers an
+  explicit `backend` or `model` too — those skip routing, and without the
+  guard a model pinning `model: "opus"` on every spawn walks straight into
+  a nearly spent plan. A backend with no headroom signal at all (no plan
+  API, no `backendBudgets` entry) is allowed. `spawn_agent` takes
+  `force: true` to bypass it.
+
+On the Claude backend, Claude Code's own in-process sub-agent tool (`Agent`,
+`Task` on older builds) is disabled by default (`allowNativeSubagents:
+false` at the top level of the config). Those sub-agents live inside one
+turn and die with it without reporting, and none of the caps above apply to
+them; `spawn_agent` is the delegation mechanism. Set
+`"allowNativeSubagents": true` to give the model the built-in tool back.
 
 There is no on/off switch: a deployment that wants no fan-out sets
 `maxConcurrent: 1, maxDepth: 0`.
