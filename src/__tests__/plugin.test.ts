@@ -52,6 +52,7 @@ describe("plugin system", () => {
       plugins: [],
       botDisplayName: "Talon",
       nativeTools: false,
+      allowNativeSubagents: false,
       fuse: "off",
       teamsWebhookPort: 19878,
       teamsGraphPollMs: 10000,

@@ -41,6 +41,8 @@ import {
   ALLOWED_TOOLS_CHAT,
   CLAUDE_RETENTION_SETTINGS,
   EFFORT_MAP,
+  isNativeSubagentTool,
+  nativeSubagentDisallowedTools,
 } from "./constants.js";
 import {
   isGuestTurn,
@@ -431,11 +433,17 @@ export function buildSdkOptions(
   // Write/Skill live outside the hub, so the hub's guest scope can't hide
   // them — and only the plugin servers the guest scope allows.
   const guest = isGuestTurn(chatId);
+  // Claude Code's own `Agent` sub-agents die with the turn and report to
+  // no one; they are withheld unless the deployment opts back in.
+  const allowNativeSubagents = config.allowNativeSubagents === true;
   const builtinTools = guest
     ? []
-    : config.nativeTools
-      ? ALLOWED_TOOLS_CHAT.filter((t) => !NATIVE_REPLACED_BUILTINS.has(t))
-      : [...ALLOWED_TOOLS_CHAT];
+    : ALLOWED_TOOLS_CHAT.filter(
+        (t) =>
+          !(config.nativeTools && NATIVE_REPLACED_BUILTINS.has(t)) &&
+          (allowNativeSubagents || !isNativeSubagentTool(t)),
+      );
+  const disallowedTools = nativeSubagentDisallowedTools(allowNativeSubagents);
 
   const allServers = {
     ...buildMcpServers(chatId),
@@ -509,6 +517,9 @@ export function buildSdkOptions(
     // removed too — the owner prefers the native surface without nested
     // agents. Flip the flag back off to restore the built-ins instantly.
     tools: builtinTools,
+    // Explicit deny on top of the whitelist for Claude Code's own sub-agent
+    // tool (`Agent`, formerly `Task`) — unless `allowNativeSubagents`.
+    ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
     ...thinkingConfig,
     mcpServers,
     hooks: {

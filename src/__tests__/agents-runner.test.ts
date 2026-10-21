@@ -60,14 +60,49 @@ import { bus } from "../core/bus/index.js";
 // it and what it does with the answer; how it decides is
 // backend-router.test.ts's job.
 const chooseBackend = vi.hoisted(() =>
-  vi.fn(async (request: { chatBackendId: string }) => ({
-    backendId: request.chatBackendId,
-    reason: "no candidates",
-    routed: false,
-  })),
+  vi.fn(
+    async (request: {
+      chatBackendId: string;
+    }): Promise<{
+      backendId: string;
+      reason: string;
+      routed: boolean;
+      headroom?: unknown;
+    }> => ({
+      backendId: request.chatBackendId,
+      reason: "no candidates",
+      routed: false,
+    }),
+  ),
+);
+// Headroom reads, stubbed: unmeasured by default, so the guard only bites
+// in the tests that hand it a reading.
+const unmeasured = (id: string, label: string) => ({
+  id,
+  label,
+  headroom: 0,
+  source: "none" as const,
+  fetchedAt: 0,
+});
+const getBackendHeadroom = vi.hoisted(() =>
+  vi.fn(
+    async (
+      id: string,
+      label: string,
+    ): Promise<{
+      id: string;
+      label: string;
+      headroom: number;
+      source: "plan" | "ledger" | "none";
+      fetchedAt: number;
+      limiting?: { label: string; percent: number; resetsAt?: string };
+      unavailable?: string;
+    }> => ({ id, label, headroom: 0, source: "none", fetchedAt: 0 }),
+  ),
 );
 vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend,
+  getBackendHeadroom,
   recordBackendRunUsage: vi.fn(),
   recordBackendRunFailure: vi.fn(),
   recordBackendRunSuccess: vi.fn(),
@@ -180,6 +215,10 @@ beforeEach(async () => {
       routed: false,
     }),
   );
+  getBackendHeadroom.mockReset();
+  getBackendHeadroom.mockImplementation(async (id, label) =>
+    unmeasured(id, label),
+  );
   initAgents({ execute });
 });
 
@@ -288,6 +327,7 @@ function liveParent(backendId: string, model: string): AgentParent {
       maxDepth: 2,
       defaultTimeoutMs: 60_000,
       stallTimeoutMs: 0,
+      minHeadroomPct: 0,
     },
   );
   if (!parent.ok) throw new Error(parent.error);
@@ -622,6 +662,7 @@ describe("spawnAgent settlement", () => {
           maxDepth: 2,
           defaultTimeoutMs: 1000,
           stallTimeoutMs: 0,
+          minHeadroomPct: 0,
         },
       );
       if (child.ok) {
@@ -812,5 +853,144 @@ describe("private scratch dir", () => {
     // give the post-settle cleanup its chance to (wrongly) run
     await new Promise((r) => setTimeout(r, 50));
     expect(existsSync(join(dir, "evidence.log"))).toBe(true);
+  });
+});
+
+describe("spawnAgent headroom guard", () => {
+  /** A plan reading with `left` percent of headroom. */
+  function plan(id: string, left: number) {
+    return {
+      id,
+      label: id,
+      headroom: left / 100,
+      source: "plan" as const,
+      fetchedAt: 0,
+      limiting: {
+        label: "5h",
+        percent: 100 - left,
+        resetsAt: "2026-10-20T18:00:00Z",
+      },
+    };
+  }
+
+  it("refuses a pinned spawn below the floor, naming headroom, reset and force", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+    getBackendHeadroom.mockResolvedValue(plan("codex", 21));
+
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toContain("21% headroom");
+    expect(outcome.error).toContain("5h 79% used");
+    expect(outcome.error).toContain("2026-10-20T18:00:00Z");
+    expect(outcome.error).toContain("agents.minHeadroomPct");
+    expect(outcome.error).toContain("force: true");
+    expect(getBackendHeadroom).toHaveBeenCalledWith(
+      "codex",
+      "codex",
+      expect.anything(),
+    );
+    expect(run).not.toHaveBeenCalled();
+    // A refused spawn claims no slot.
+    expect(agentRegistry.listForChat("42")).toHaveLength(0);
+  });
+
+  it("refuses a model-pinned spawn the router passed through as pinned", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "pinned",
+      routed: false,
+    });
+    getBackendHeadroom.mockResolvedValue(plan("codex", 10));
+
+    const outcome = await spawn({ backendId: undefined, model: "sonnet" });
+    expect(outcome).toMatchObject({ ok: false });
+  });
+
+  it("uses the router's own reading of a routed backend", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "every backend is over the ceiling",
+      routed: true,
+      headroom: plan("codex", 5),
+    });
+
+    const outcome = await spawn({ backendId: undefined });
+    expect(outcome).toMatchObject({ ok: false });
+    expect(getBackendHeadroom).not.toHaveBeenCalled();
+  });
+
+  it("allows a spawn at exactly the floor", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+    getBackendHeadroom.mockResolvedValue(plan("codex", 25));
+
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true, backendId: "codex" });
+    if (outcome.ok) await settled(outcome.agentId);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("allows a spawn above the floor", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue(plan("codex", 80));
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true });
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("allows a spawn on an unmeasured backend", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true });
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("refuses a backend flagged unavailable even without a plan reading", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue({
+      ...unmeasured("codex", "codex"),
+      limiting: { label: "breaker open 5m — auth", percent: 100 },
+      unavailable: "breaker open 5m — auth",
+    });
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("unavailable");
+  });
+
+  it("force: true bypasses the guard", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+    getBackendHeadroom.mockResolvedValue(plan("codex", 3));
+
+    const outcome = await spawn({ force: true });
+    expect(outcome).toMatchObject({ ok: true });
+    expect(getBackendHeadroom).not.toHaveBeenCalled();
+    if (outcome.ok) await settled(outcome.agentId);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("minHeadroomPct: 0 disables the guard", async () => {
+    initAgents({ execute, caps: { minHeadroomPct: 0 } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue(plan("codex", 3));
+
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true });
+    expect(getBackendHeadroom).not.toHaveBeenCalled();
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("honours a configured floor", async () => {
+    initAgents({ execute, caps: { minHeadroomPct: 50 } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue(plan("codex", 40));
+
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("50% floor");
   });
 });

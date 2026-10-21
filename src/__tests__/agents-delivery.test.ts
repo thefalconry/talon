@@ -42,6 +42,7 @@ function live(parent: AgentParent, label = "probe"): AgentRecord {
       maxDepth: 3,
       defaultTimeoutMs: 1000,
       stallTimeoutMs: 0,
+      minHeadroomPct: 0,
     },
   );
   if (!outcome.ok) throw new Error(outcome.error);

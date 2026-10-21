@@ -56,7 +56,17 @@ one): an agent runs until it reports, is killed, or goes quiet. A no-progress
 watchdog pings an agent that has made no tool call or output for a while,
 then tells you, then kills it. A killed, timed-out or stalled agent's report
 still carries its last interim messages, progress notes and the files it
-changed, so its work is not lost.`;
+changed, so its work is not lost.
+
+The spawn is refused when the backend it would run on has less plan headroom
+left than the deployment's floor (agents.minHeadroomPct, default 25%) — an
+agent started then is likely to hit the limit and return nothing. The error
+gives the headroom and reset time; do the work yourself, wait, pick another
+backend, or pass force: true if it really must run now. This applies to an
+explicit backend or model too.
+
+This is the ONLY way to delegate that survives your turn. Don't use any
+in-turn subagent tool your harness may provide for work like this.`;
 
 export const agentTools: ToolDefinition[] = [
   {
@@ -107,6 +117,12 @@ export const agentTools: ToolDefinition[] = [
         .optional()
         .describe(
           "Tell the agent to run the pre-flight lane (`npm run preflight` / run_preflight) before every git push and push only on green. Default: on when the brief mentions a PR, off otherwise.",
+        ),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Spawn even when the target backend's plan headroom is below the deployment's floor (agents.minHeadroomPct). Default false. Only when the work cannot wait for the reset.",
         ),
       chat_id: agentChatId,
     },

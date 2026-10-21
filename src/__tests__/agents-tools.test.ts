@@ -59,6 +59,7 @@ function live(parent: AgentParent, label = "probe"): AgentRecord {
       maxDepth: 3,
       defaultTimeoutMs: 1000,
       stallTimeoutMs: 0,
+      minHeadroomPct: 0,
     },
   );
   if (!outcome.ok) throw new Error(outcome.error);
@@ -272,6 +273,23 @@ describe("chat-side actions", () => {
       preflight: "yes",
     });
     expect(badPreflight.error).toBe("preflight must be true or false");
+    const badForce = await asChat("spawn_agent", {
+      brief: "x",
+      label: "y",
+      force: "yes",
+    });
+    expect(badForce.error).toBe("force must be true or false");
+  });
+
+  it("spawn_agent exposes an optional boolean force param that names the guard", () => {
+    const spawnTool = agentTools.find((tool) => tool.name === "spawn_agent");
+    const param = spawnTool?.schema.force as z.ZodType | undefined;
+    expect(param).toBeDefined();
+    expect(param?.safeParse(undefined).success).toBe(true);
+    expect(param?.safeParse(true).success).toBe(true);
+    expect(param?.safeParse("yes").success).toBe(false);
+    expect(spawnTool?.description).toContain("force: true");
+    expect(spawnTool?.description).toContain("agents.minHeadroomPct");
   });
 
   it("spawn_agent exposes an optional boolean preflight param", () => {

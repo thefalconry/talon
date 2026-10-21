@@ -13,9 +13,10 @@ import { ALLOWED_TOOLS_CORE } from "../../core/constants.js";
  * Whitelist of built-in tools available to the main chat handler.
  *
  * Chat gets two extras on top of the core whitelist:
- * - `Agent`: sub-agent dispatch (Explore / Plan / etc.). Useful for
- *   focused subtasks like code-review or codebase audits; the heartbeat
- *   path keeps it out because nested agents complicate orphan tracking.
+ * - `Agent`: Claude Code's in-process sub-agent dispatch (Explore / Plan /
+ *   etc.). Only offered when `allowNativeSubagents` is on (off by default
+ *   — see NATIVE_SUBAGENT_TOOLS); the heartbeat path never offers it
+ *   because nested agents complicate orphan tracking.
  * - `Skill`: required for `/skill` commands and other skill-driven flows.
  *   The SDK auto-includes Skill when `skills` are passed via options, but
  *   we list it explicitly so the tool surface is unambiguous from a single
@@ -26,6 +27,41 @@ export const ALLOWED_TOOLS_CHAT = [
   "Agent",
   "Skill",
 ] as const;
+
+/**
+ * Claude Code's own in-process sub-agent tool. The SDK names it `Agent`;
+ * older Claude Code builds call the same tool `Task` (the SDK types still
+ * refer to "the Agent/Task tool"). Both names are listed so the block holds
+ * across SDK versions.
+ *
+ * These sub-agents live inside a single turn: when the turn ends they die
+ * with no report, yet every tool call they made is billed. A model that
+ * reaches for them instead of Talon's own `spawn_agent` (tracked, reported,
+ * headroom-guarded) can burn a whole plan window for nothing, so they are
+ * blocked by default — see `allowNativeSubagents` in the config.
+ */
+const NATIVE_SUBAGENT_TOOLS = ["Agent", "Task"] as const;
+
+const NATIVE_SUBAGENT_TOOL_SET: ReadonlySet<string> = new Set(
+  NATIVE_SUBAGENT_TOOLS,
+);
+
+/** True for a built-in tool name that is Claude Code's own sub-agent tool. */
+export function isNativeSubagentTool(name: string): boolean {
+  return NATIVE_SUBAGENT_TOOL_SET.has(name);
+}
+
+/**
+ * The SDK `disallowedTools` entry for a run: the native sub-agent tools
+ * unless the deployment opted back in. `disallowedTools` is applied on top
+ * of the `tools` whitelist and also blocks harness-internal dispatch, so
+ * it is the belt to the whitelist's braces.
+ */
+export function nativeSubagentDisallowedTools(
+  allowNativeSubagents: boolean | undefined,
+): string[] {
+  return allowNativeSubagents ? [] : [...NATIVE_SUBAGENT_TOOLS];
+}
 
 // ── Thinking / effort configuration ────────────────────────────────────────
 
