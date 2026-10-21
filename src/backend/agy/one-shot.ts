@@ -22,8 +22,8 @@ import { AGY_SYSTEM_PROMPT_SUFFIX } from "./constants.js";
 import { agyBinary, getState } from "./state.js";
 import { agyScopeSlug } from "./mcp/config.js";
 import { registerMcpForChat, unregisterMcpScope } from "./mcp/register.js";
-import { toAgyEffort } from "./effort.js";
-import { getDefaultModelId } from "./models.js";
+import { getCachedModels, getDefaultModelId } from "./models.js";
+import { selectAgyRun } from "./effort.js";
 import { isAgyAuthFailure, agyAuthError } from "./auth.js";
 import {
   agyUsageToTokens,
@@ -223,16 +223,33 @@ export async function runOneShotAgent(
     systemPrompt,
     AGY_SYSTEM_PROMPT_SUFFIX,
   );
-  const effort = toAgyEffort(reasoningEffort);
-  if (reasoningEffort && !effort) {
+  // Resolved the same way as a chat turn: agy >= 1.4 rejects a suffixed
+  // id paired with a different `--effort` ("--model gemini-3.8-flash-high
+  // conflicts with --effort=medium"), which killed every sub-agent spawned
+  // with an effort on this backend. Resolved against the cached catalog
+  // (init probes it) so a one-shot never waits on an `agy models` spawn;
+  // a cold cache only costs a conflicting level, never the run.
+  const {
+    model: activeModel,
+    effort,
+    dropped,
+  } = selectAgyRun(
+    model || getDefaultModelId(),
+    reasoningEffort,
+    getCachedModels(),
+  );
+  if (dropped) {
     logWarn(
       "agent",
-      `[${contextLabel}] agy one-shot: effort "${reasoningEffort}" has no ` +
-        `agy equivalent — using the model default`,
+      `[${contextLabel}] agy one-shot: effort "${dropped}" is not offered ` +
+        `by ${activeModel} — using the model default`,
     );
   }
-  const activeModel = model || getDefaultModelId();
-  log("agent", `[${contextLabel}] agy one-shot model: ${activeModel}`);
+  log(
+    "agent",
+    `[${contextLabel}] agy one-shot model: ${activeModel}` +
+      (effort ? ` (effort=${effort})` : ""),
+  );
 
   try {
     if (abortController.signal.aborted) {
