@@ -1,5 +1,12 @@
 # Changelog
 
+## [5.39.4](https://github.com/thefalconry/talon/compare/v5.39.3...v5.39.4) (2026-10-21)
+
+
+### Bug Fixes
+
+* **agy:** never pair a suffixed model id with a conflicting --effort ([#1335](https://github.com/thefalconry/talon/issues/1335)) ([9f7387f](https://github.com/thefalconry/talon/commit/9f7387ff1b7bd636422cf232305cbb3e42c9f5ed))
+
 ## [5.39.3](https://github.com/thefalconry/talon/compare/v5.39.2...v5.39.3) (2026-10-21)
 
 
