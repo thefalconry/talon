@@ -1,5 +1,13 @@
 # Changelog
 
+## [5.39.3](https://github.com/thefalconry/talon/compare/v5.39.2...v5.39.3) (2026-10-21)
+
+
+### Bug Fixes
+
+* **agents:** block Claude Code's in-turn subagents and guard spawns on headroom ([#1329](https://github.com/thefalconry/talon/issues/1329)) ([6b5704c](https://github.com/thefalconry/talon/commit/6b5704ca1c8cf5b60067cfb7ea9697f79c277392))
+* **deps:** bump follow-redirects to 1.16.1 and hono to 4.13.13 for new advisories ([#1336](https://github.com/thefalconry/talon/issues/1336)) ([b596077](https://github.com/thefalconry/talon/commit/b5960770152c0a8d18fee6ff0dd51f0d1a50678b))
+
 ## [5.39.2](https://github.com/thefalconry/talon/compare/v5.39.1...v5.39.2) (2026-10-16)
 
 
