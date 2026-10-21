@@ -246,6 +246,7 @@ export async function ensureBooted(args: EnsureBootedArgs = {}): Promise<void> {
     plugins: [],
     botDisplayName: "Talon (stub)",
     nativeTools: false,
+    allowNativeSubagents: false,
     fuse: "off",
     teamsWebhookPort: 19878,
     teamsGraphPollMs: 10_000,
