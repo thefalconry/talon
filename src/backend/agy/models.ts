@@ -24,7 +24,7 @@ import type {
   ModelPickerResult,
   ReasoningEffortLevel,
 } from "../../core/types.js";
-import { logWarn } from "../../util/log.js";
+import { logDebug, logWarn } from "../../util/log.js";
 import { agyBinary } from "./state.js";
 import { AGY_DEFAULT_MODEL } from "./constants.js";
 import { effortSuffixOf, modelIdStem } from "./effort.js";
@@ -177,16 +177,34 @@ export async function refreshModels(force = false): Promise<AgyModelInfo[]> {
         fetchedAt = Date.now();
       }
     } catch (err) {
-      logWarn(
-        "agent",
-        `agy models failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      // No `agy` on this host is a configuration fact, not a fault —
+      // every Talon install probes at init whether or not agy is used.
+      if (isMissingBinary(err)) logDebug("agent", `agy models skipped: ${msg}`);
+      else logWarn("agent", `agy models failed: ${msg}`);
     } finally {
       inFlight = null;
     }
     return [...catalog];
   })();
   return inFlight;
+}
+
+/** True when the error means the `agy` executable is not installed. */
+export function isMissingBinary(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === "ENOENT") return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /ENOENT|executable not found|command not found/i.test(msg);
+}
+
+/**
+ * The catalog a model/effort selection resolves against: cached when
+ * warm, probed when cold. Callers that must not wait on a spawn (the
+ * one-shot runner) read [getCachedModels] directly instead.
+ */
+export async function catalogForSelection(): Promise<AgyModelInfo[]> {
+  return effectiveModels();
 }
 
 /** Catalog for read paths: cached when warm, probed when cold. */

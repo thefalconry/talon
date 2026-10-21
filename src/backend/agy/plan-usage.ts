@@ -21,7 +21,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { logWarn } from "../../util/log.js";
+import { logDebug, logWarn } from "../../util/log.js";
+import { isMissingBinary } from "./models.js";
 import type {
   PlanUsage,
   PlanWindow,
@@ -188,7 +189,15 @@ export function runAgyUsage(
     proc.stderr?.on("data", (chunk: string) => {
       stderr = (stderr + chunk).slice(-500);
     });
-    proc.on("error", (err) => finish(undefined, err.message));
+    proc.on("error", (err) => {
+      // No `agy` installed: nothing to report, and nothing worth a warning.
+      if (isMissingBinary(err)) {
+        logDebug("agent", `agy usage skipped: ${err.message}`);
+        finish(undefined);
+        return;
+      }
+      finish(undefined, err.message);
+    });
     proc.on("close", (code) => {
       if (code !== 0) {
         const tail = stderr.trim().split("\n").pop() ?? "";
