@@ -1,5 +1,15 @@
 # Changelog
 
+## [5.39.5](https://github.com/thefalconry/talon/compare/v5.39.4...v5.39.5) (2026-10-22)
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 6 updates ([#1330](https://github.com/thefalconry/talon/issues/1330)) ([84fb467](https://github.com/thefalconry/talon/commit/84fb467a112b71a598eba9486d536c216f0918f7))
+* **deps:** Bump github/codeql-action/analyze from 4.38.3 to 4.39.0 ([#1331](https://github.com/thefalconry/talon/issues/1331)) ([14ab37e](https://github.com/thefalconry/talon/commit/14ab37e0339616bf22c085ccac3186b986d3a090))
+* **deps:** Bump github/codeql-action/init from 4.38.3 to 4.39.0 ([#1332](https://github.com/thefalconry/talon/issues/1332)) ([4acd3fd](https://github.com/thefalconry/talon/commit/4acd3fd37079cd096b2fe0ecad66811563bd383c))
+* **deps:** Bump the production-dependencies group across 1 directory with 9 updates ([#1339](https://github.com/thefalconry/talon/issues/1339)) ([ee3f072](https://github.com/thefalconry/talon/commit/ee3f072409f15e9669cacd15d444b9ac7aece465))
+
 ## [5.39.4](https://github.com/thefalconry/talon/compare/v5.39.3...v5.39.4) (2026-10-21)
 
 
