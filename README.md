@@ -14,6 +14,8 @@
 
 Multi-platform agentic AI harness. Runs on **Telegram**, **WhatsApp**, **Discord**, **Microsoft Teams**, the **Terminal**, and client applications via the **Native bridge** (such as [Talos](https://github.com/thefalconry/talos)), with a pluggable backend (**Claude Agent SDK**, **Kilo**, **OpenCode**, **Codex**, **Antigravity**, or **OpenAI Agents**) and full tool access through MCP.
 
+> **This repo is the server.** Talon is the daemon only — it ships no GUI client. The desktop and mobile app (Android, macOS, Windows, Linux) is **[Talos](https://github.com/thefalconry/talos)**: download it from [Talos releases](https://github.com/thefalconry/talos/releases) and pair it with your daemon's `native` bridge.
+
 ---
 
 ## Features
@@ -93,7 +95,7 @@ Verify a direct download against the release `SHA256SUMS`:
 [SECURITY.md](SECURITY.md#verifying-a-release)).
 
 **Server only, no Telegram?** Run the daemon with just the client bridge,
-reached by the companion app and talon-node: see
+reached by [Talos](https://github.com/thefalconry/talos) and talon-node: see
 [docs/server-install.md](docs/server-install.md).
 
 > The binary runs the full interactive/agent CLI (`setup`, `start`, `chat`,
@@ -158,7 +160,7 @@ index.ts                    Composition root
   |   +-- discord/          discord.js v14
   |   +-- teams/            Bot Framework + Graph API
   |   +-- terminal/         Readline CLI with tool call visibility
-  |   +-- native/           Client bridge (HTTP + SSE) for the companion app
+  |   +-- native/           Client bridge (HTTP + SSE) for GUI clients (Talos)
   |
   +-- native/               WASM + napi cores (blake3, strsim, textops, sqlguard,
   |                         htmlents, scheduler, fusefs, warden), each with a
@@ -257,8 +259,8 @@ The `native` frontend turns the daemon into a **client bridge** — a versioned 
 
 - **Local (desktop):** the app connects to a Talon on the same machine and launches one if needed (`TALON_FRONTEND_OVERRIDE=desktop`).
 - **Remote (mobile/LAN):** point the app at `host:port` + token; the bridge requires `Authorization: Bearer …` (or `?token=` on the SSE stream) whenever a token is set.
-- **Encryption:** off-loopback binds serve **HTTPS by default** with a persistent self-signed certificate (`~/.talon/keys/`); the companion pins its SHA-256 fingerprint on first connect and refuses any change afterwards. The daemon logs the fingerprint at startup and `/health` advertises it. Opt out (or in, on loopback) with `"tls": false` / `true` in the `native` section.
-- **From anywhere, certificate-only (Immich-style):** put your reverse proxy (Caddy, nginx, Traefik, Cloudflare Tunnel) in front with client-certificate auth; import the `.p12` in the companion, which also switches to your home-network address whenever it answers. Talon still authenticates with its token — see [docs/mtls.md](docs/mtls.md).
+- **Encryption:** off-loopback binds serve **HTTPS by default** with a persistent self-signed certificate (`~/.talon/keys/`); the client pins its SHA-256 fingerprint on first connect and refuses any change afterwards. The daemon logs the fingerprint at startup and `/health` advertises it. Opt out (or in, on loopback) with `"tls": false` / `true` in the `native` section.
+- **From anywhere, certificate-only (Immich-style):** put your reverse proxy (Caddy, nginx, Traefik, Cloudflare Tunnel) in front with client-certificate auth; import the `.p12` in the client, which also switches to your home-network address whenever it answers. Talon still authenticates with its token — see [docs/mtls.md](docs/mtls.md).
 
 The client provides multi-chat history, live streaming with reasoning + tool-call visibility, per-chat model/effort/reset, and **settings sync** — read and change the daemon's own config (default model, display name, timezone, pulse/heartbeat/dream) and restart it. For the client app, see **[Talos](https://github.com/thefalconry/talos)**.
 
