@@ -5,7 +5,10 @@
  */
 
 import type { Bot } from "grammy";
-import { markdownToTelegramHtml } from "../formatting.js";
+import {
+  markdownToTelegramHtml,
+  normalizeTelegramMarkdownLists,
+} from "../formatting.js";
 import { logWarn } from "../../../util/log.js";
 import { ambientThreadId, resolveThreadId } from "../topics.js";
 import { TELEGRAM_MAX_TEXT } from "./types.js";
@@ -99,12 +102,13 @@ export async function sendText(
   const opts: ExtraSendOptions = extra ?? {
     message_thread_id: ambientThreadId(chatId),
   };
+  const markdown = normalizeTelegramMarkdownLists(text);
 
   if (richMessagesAvailable()) {
     try {
       const sent = await bot.api.sendRichMessage(
         chatId,
-        { markdown: text },
+        { markdown },
         {
           reply_parameters: replyParamsFor(replyTo),
           reply_markup: replyMarkup,
@@ -118,7 +122,7 @@ export async function sendText(
     }
   }
 
-  const html = markdownToTelegramHtml(text);
+  const html = markdownToTelegramHtml(markdown);
   try {
     const sent = await bot.api.sendMessage(chatId, html, {
       parse_mode: "HTML",
@@ -133,7 +137,7 @@ export async function sendText(
       "bot",
       `Legacy HTML send failed; retrying as plain text (chat=${chatId}): ${err instanceof Error ? err.message : err}`,
     );
-    const sent = await bot.api.sendMessage(chatId, text, {
+    const sent = await bot.api.sendMessage(chatId, markdown, {
       reply_parameters: replyParamsFor(replyTo),
       reply_markup: replyMarkup,
       ...opts,
