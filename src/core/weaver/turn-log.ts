@@ -279,6 +279,7 @@ const REASON_CLASS: Record<TalonError["reason"], TurnErrorClass> = {
   auth: "auth",
   forbidden: "auth",
   context_length: "backend",
+  content_filter: "backend",
   session_expired: "backend",
   bad_request: "backend",
   telegram_api: "unknown",
