@@ -30,7 +30,8 @@
     "move",
     "install_apk",
     "upload_file",
-    "download_file"
+    "download_file",
+    "exec_job"
   ],
   "registration": {
     "id": "dev_node01",
