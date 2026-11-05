@@ -77,4 +77,23 @@ describe("ExecJobTracker", () => {
     expect(wake.mock.calls[0]![1]).toContain("outcome is unknown");
     vi.useRealTimers();
   });
+
+  it("reports a job the device no longer holds on the first answer", async () => {
+    vi.useFakeTimers();
+    const wake = vi.fn();
+    const tracker = new ExecJobTracker(10);
+    tracker.setWake(wake);
+    const poll = vi.fn().mockResolvedValue({
+      ok: false,
+      message:
+        "No such job: job_1 (it may have expired, or the node restarted).",
+    });
+    tracker.track({ ...base, wakeChatKey: 42, poll });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(poll).toHaveBeenCalledTimes(1);
+    expect(wake).toHaveBeenCalledTimes(1);
+    expect(wake.mock.calls[0]![1]).toContain("is gone");
+    expect(wake.mock.calls[0]![1]).not.toContain("may still be running");
+    vi.useRealTimers();
+  });
 });

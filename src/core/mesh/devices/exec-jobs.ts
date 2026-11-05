@@ -15,6 +15,8 @@ export const EXEC_JOB_MAX_POLL_FAILURES = 40;
 /** Matches the node's hard stop, plus time for a last poll. */
 const EXEC_JOB_MAX_WATCH_MS = 24 * 60 * 60_000 + 5 * 60_000;
 const TAIL_CHARS = 2_000;
+/** A device's answer for a job it doesn't hold, as opposed to no answer. */
+const LOST_JOB = /^no such job\b/i;
 
 export type ExecJobWake = (chatKey: string, prompt: string) => void;
 
@@ -109,6 +111,17 @@ export class ExecJobTracker {
     const answered = result?.data !== undefined && result.data !== null;
     if (answered && result?.data?.running !== true) {
       this.finish(input, chatKey, this.finishedPrompt(input, result!));
+      return;
+    }
+    // The device answered and no longer holds the job. Retrying can't change
+    // that, and "may still be running" would be wrong after a node restart.
+    if (!answered && LOST_JOB.test(result?.message ?? "")) {
+      this.finish(
+        input,
+        chatKey,
+        `Background job ${input.jobId} on ${input.deviceName} is gone (${input.cmd}): ${result?.message}. ` +
+          `Its exit code and output are lost. A node restart stops its jobs, so don't assume the command finished.`,
+      );
       return;
     }
     const nextFailures = answered ? 0 : failures + 1;
