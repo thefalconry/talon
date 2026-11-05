@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, afterEach, beforeAll } from "vitest";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -163,6 +163,7 @@ describe("native tools — local execution", () => {
         action: "native_bash",
         command: "echo streaming-head; sleep 30",
         timeout_sec: 1,
+        on_timeout: "kill",
       },
       1,
       undefined,
@@ -173,6 +174,37 @@ describe("native tools — local execution", () => {
     expect(res.text).toContain("streaming-head"); // partial output survives
     expect(res.text).toContain("background:true"); // self-correction hint
   }, 15_000);
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a command running past its budget and logs all its output",
+    async () => {
+      const marker = join(tmpdir(), `detach-${process.pid}-${Date.now()}`);
+      const res = await nativeHandlers.native_bash(
+        {
+          action: "native_bash",
+          command: `echo before; sleep 2; echo after; touch ${marker}`,
+          timeout_sec: 1,
+        },
+        1,
+        undefined,
+        "1",
+      );
+      expect(res.ok).toBe(true);
+      expect(res.text).toContain("not killed");
+      const logPath = (res.text ?? "").match(/→ (\S+\.log)/)?.[1] as string;
+      let logged = "";
+      for (let i = 0; i < 40 && !logged.includes("after"); i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        logged = await readFile(logPath, "utf8").catch(() => "");
+      }
+      expect(logged).toContain("before");
+      expect(logged).toContain("after");
+      // The command really ran to its end, not just its output.
+      await expect(readFile(marker, "utf8")).resolves.toBe("");
+      await rm(marker, { force: true });
+    },
+    20_000,
+  );
 
   // Background mode is POSIX-only (process groups, group kill, restart
   // survival) — the handler refuses on win32, so these run on POSIX legs.

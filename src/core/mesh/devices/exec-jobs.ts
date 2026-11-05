@@ -46,6 +46,18 @@ export class ExecJobTracker {
     this.wake = wake;
   }
 
+  /** Whether notify would reach a chat with this key. */
+  canNotify(chatKey: string): boolean {
+    return /^-?\d+$/.test(chatKey) && chatKey !== "0" && this.wake !== null;
+  }
+
+  /** Wake a chat directly, for a job the daemon watches itself. */
+  notify(chatKey: string, prompt: string): boolean {
+    if (!this.canNotify(chatKey)) return false;
+    this.wake?.(chatKey, prompt);
+    return true;
+  }
+
   /** Start watching. True when a chat will be woken at the end. */
   track(input: TrackInput): boolean {
     const chatKey =
@@ -53,7 +65,7 @@ export class ExecJobTracker {
       typeof input.wakeChatKey === "number"
         ? String(input.wakeChatKey)
         : "";
-    if (!/^-?\d+$/.test(chatKey) || chatKey === "0" || !this.wake) return false;
+    if (!this.canNotify(chatKey)) return false;
     this.schedule(input, chatKey, Date.now(), 0);
     return true;
   }
