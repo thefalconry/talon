@@ -199,8 +199,14 @@ describe("native tools — local execution", () => {
       }
       expect(logged).toContain("before");
       expect(logged).toContain("after");
-      // The command really ran to its end, not just its output.
-      await expect(readFile(marker, "utf8")).resolves.toBe("");
+      // The command really ran to its end, not just its output. `touch` runs
+      // after the final echo, so the log can show "after" before the marker exists.
+      let marked: string | undefined;
+      for (let i = 0; i < 40 && marked === undefined; i++) {
+        marked = await readFile(marker, "utf8").catch(() => undefined);
+        if (marked === undefined) await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(marked).toBe("");
       await rm(marker, { force: true });
     },
     20_000,
