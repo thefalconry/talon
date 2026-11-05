@@ -90,6 +90,7 @@ const ALL_TOOLS_ORDER = [
   "remove_device",
   "get_device_status",
   "device_exec",
+  "device_exec_job",
   "device_computer",
   "device_list_dir",
   "device_read_file",

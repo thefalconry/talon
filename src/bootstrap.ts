@@ -9,6 +9,7 @@
  * differ (index.ts selects dynamically, cli.ts always uses terminal).
  */
 
+import { getMeshService } from "./core/mesh/index.js";
 import { loadConfig, rebuildSystemPrompt } from "./core/config/index.js";
 import { initWorkspace } from "./core/vfs/workspace.js";
 import { loadSessions, resetSession } from "./storage/sessions.js";
@@ -37,7 +38,7 @@ import {
 import { initAgents } from "./core/agents/index.js";
 import { initDream, maybeStartDream } from "./core/background/dream/index.js";
 import { initHeartbeat } from "./core/background/heartbeat/index.js";
-import { log, logWarn, logDebug } from "./util/log.js";
+import { log, logWarn, logDebug, logError } from "./util/log.js";
 import { bootPhase } from "./core/daemon/boot-timer.js";
 import { mapConcurrent } from "./util/concurrency.js";
 import type { TalonConfig } from "./core/config/index.js";
@@ -735,6 +736,20 @@ function initWakeSubsystems(config: TalonConfig): void {
     execute: dispatcherExecute,
     ...(config.triggers ? { caps: config.triggers } : {}),
   });
+  // A device_exec that outlived its budget wakes its chat when the job ends.
+  getMeshService().execJobs.setWake((chatKey, prompt) => {
+    void dispatcherExecute({
+      chatId: chatKey,
+      numericChatId: Number(chatKey),
+      prompt,
+      senderName: "Device",
+      isGroup: false,
+      source: "agent",
+    }).catch((err: unknown) => {
+      logError("mesh", `exec job wake failed for chat ${chatKey}`, err);
+    });
+  });
+
   initAgents({
     execute: dispatcherExecute,
     ...(config.agents ? { caps: config.agents } : {}),
