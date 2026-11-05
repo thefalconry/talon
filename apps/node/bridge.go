@@ -66,6 +66,7 @@ var nodeCapabilities = []string{
 	"ring",
 	"status",
 	"exec",
+	"exec_job",
 	"read_file",
 	"write_file",
 	"list_dir",
@@ -376,6 +377,7 @@ func (n *Node) PostCommandResult(ctx context.Context, r commandResult) error {
 // Run is the forever loop: register, heartbeat, and consume the SSE stream,
 // reconnecting with capped exponential backoff until ctx is done.
 func (n *Node) Run(ctx context.Context) {
+	defer execJobs.killAll()
 	// Heartbeat runs independently of the event stream: registration is how
 	// presence works, and it must survive SSE reconnect churn.
 	go n.heartbeatLoop(ctx)

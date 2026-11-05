@@ -241,6 +241,8 @@ func auditTarget(name string, params map[string]any) string {
 		}
 		sum := sha256.Sum256([]byte(cmd))
 		return "sha256:" + hex.EncodeToString(sum[:])
+	case "exec_job":
+		return str("jobId")
 	case "computer":
 		// The action only: typed text and key presses can be secrets, and
 		// coordinates mean nothing without the screen they were aimed at.

@@ -5,6 +5,7 @@
     "ring",
     "status",
     "exec",
+    "exec_job",
     "read_file",
     "write_file",
     "list_dir",
@@ -41,6 +42,7 @@
       "ring",
       "status",
       "exec",
+      "exec_job",
       "read_file",
       "write_file",
       "list_dir",
@@ -111,6 +113,7 @@
       "ring",
       "status",
       "exec",
+      "exec_job",
       "read_file",
       "write_file",
       "list_dir",
@@ -190,6 +193,17 @@
           "cwd": "{{TMP}}",
           "timeoutMs": 30000
         }
+      }
+    },
+    {
+      "run": false,
+      "expectOk": true,
+      "dataKeys": ["jobId", "running", "stdout", "stderr", "runtimeMs"],
+      "command": {
+        "id": "cmd_exec_job",
+        "deviceId": "dev_node01",
+        "name": "exec_job",
+        "params": { "jobId": "job_0123456789abcdef", "action": "status" }
       }
     },
     {
