@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -38,9 +39,9 @@ class DeviceExec {
     MethodChannel? shizukuChannel,
     MethodChannel? rootChannel,
     bool Function()? isAndroid,
-  })  : _shizuku = shizukuChannel ?? const MethodChannel('talon/shizuku'),
-        _root = rootChannel ?? const MethodChannel('talon/root'),
-        _isAndroid = isAndroid ?? (() => !kIsWeb && Platform.isAndroid);
+  }) : _shizuku = shizukuChannel ?? const MethodChannel('talon/shizuku'),
+       _root = rootChannel ?? const MethodChannel('talon/root'),
+       _isAndroid = isAndroid ?? (() => !kIsWeb && Platform.isAndroid);
 
   final MethodChannel _shizuku;
   final MethodChannel _root;
@@ -123,6 +124,17 @@ class DeviceExec {
 
   static const int _maxChunkBytes = 256 * 1024;
 
+  /// Hard stop for a detached command; same as talon-node.
+  static const Duration maxExecJobLifetime = Duration(hours: 24);
+
+  /// What the mesh may leave running. Past it a timeout kills the command.
+  static const int maxRunningExecJobs = 16;
+
+  /// How long a finished job's result stays readable.
+  static const Duration finishedExecJobTtl = Duration(hours: 1);
+
+  final Map<String, _ExecJob> _execJobs = {};
+
   /// Default for the largest file a mesh write (write_file chunks,
   /// download_file) may produce on this device — the same 4 GiB as
   /// talon-node. The mesh points [writeLimit] at the user's setting.
@@ -143,6 +155,7 @@ class DeviceExec {
   /// exited. A backgrounded child holding the inherited pipes must not pin
   /// the exec call open past this.
   static const Duration _pipeDrainGrace = Duration(seconds: 2);
+
   /// Per-stream cap on exec output shipped back over the mesh. Head + tail
   /// (not head-only): the daemon's teleport wrapper prints its cwd marker at
   /// the very END of stdout, and losing it would break cwd tracking.
@@ -159,10 +172,9 @@ class DeviceExec {
   Future<Map<String, dynamic>?> rootStatus({bool probe = false}) async {
     if (!_isAndroid()) return null;
     try {
-      final status = await _root.invokeMapMethod<String, dynamic>(
-        'getStatus',
-        {'probe': probe},
-      );
+      final status = await _root.invokeMapMethod<String, dynamic>('getStatus', {
+        'probe': probe,
+      });
       if (status != null) {
         _lastRoot = status;
         AppLog.info(
@@ -207,11 +219,12 @@ class DeviceExec {
         DateTime.now().difference(probedAt) < _rootProbeTtl) {
       return cached['tier'] == 'root';
     }
-    final probe = _pendingRootProbe ??=
-        rootStatus(probe: true).whenComplete(() {
-      _pendingRootProbe = null;
-      _rootProbedAt = DateTime.now();
-    });
+    final probe = _pendingRootProbe ??= rootStatus(probe: true).whenComplete(
+      () {
+        _pendingRootProbe = null;
+        _rootProbedAt = DateTime.now();
+      },
+    );
     final status = await probe;
     return status?['tier'] == 'root';
   }
@@ -240,8 +253,9 @@ class DeviceExec {
   Future<bool> shizukuReady() async {
     if (!_isAndroid()) return false;
     try {
-      final status =
-          await _shizuku.invokeMapMethod<String, dynamic>('getStatus');
+      final status = await _shizuku.invokeMapMethod<String, dynamic>(
+        'getStatus',
+      );
       final state = status?['state'];
       if (state is String) _lastShizukuState = state;
       final ready = status?['ready'] == true;
@@ -370,6 +384,12 @@ class DeviceExec {
           _str(params['cmd']) ?? '',
           cwd: _str(params['cwd']),
           timeoutMs: _int(params['timeoutMs']),
+          detachOnTimeout: params['detachOnTimeout'] == true,
+        );
+      case 'exec_job':
+        return execJob(
+          _str(params['jobId']) ?? '',
+          action: _str(params['action']) ?? 'status',
         );
       case 'read_file':
         return readFile(
@@ -412,12 +432,14 @@ class DeviceExec {
     String cmd, {
     String? cwd,
     int? timeoutMs,
+    bool detachOnTimeout = false,
   }) async {
     if (cmd.trim().isEmpty) {
       return CommandOutcome.fail('No command given.');
     }
-    final budget =
-        Duration(milliseconds: (timeoutMs ?? 60000).clamp(1000, 300000));
+    final budget = Duration(
+      milliseconds: (timeoutMs ?? 60000).clamp(1000, 300000),
+    );
     // Root first — it is the only tier that reaches other apps' data, /data,
     // and the whole system, so anything the daemon asks for lands where the
     // operator expects rather than inside a scoped-storage view.
@@ -451,6 +473,7 @@ class DeviceExec {
           cmd,
           cwd: cwd,
           budget: budget,
+          detachOnTimeout: detachOnTimeout,
           privilegeWarning: 'Shizuku exec failed ($e); ran as app UID.',
         );
       }
@@ -459,11 +482,12 @@ class DeviceExec {
       cmd,
       cwd: cwd,
       budget: budget,
+      detachOnTimeout: detachOnTimeout,
       privilegeWarning: _isAndroid() && !allowElevation()
           ? 'Elevated access is off in the companion settings; ran as app UID.'
           : _isAndroid()
           ? 'Elevation not used (root=${_rootStateLabel() ?? 'unknown'}, '
-              'shizuku=${_lastShizukuState ?? 'unknown'}); ran as app UID.'
+                'shizuku=${_lastShizukuState ?? 'unknown'}); ran as app UID.'
           : null,
     );
   }
@@ -489,6 +513,7 @@ class DeviceExec {
     String cmd, {
     String? cwd,
     required Duration budget,
+    bool detachOnTimeout = false,
     String? privilegeWarning,
   }) async {
     final invocation = shellInvocation(cmd);
@@ -506,12 +531,38 @@ class DeviceExec {
       final outF = proc.stdout.transform(utf8.decoder).forEach(out.add);
       final errF = proc.stderr.transform(utf8.decoder).forEach(err.add);
       var timedOut = false;
-      final timer = Timer(budget, () {
-        timedOut = true;
-        proc.kill(ProcessSignal.sigkill);
-      });
+      Timer? timer;
+      if (detachOnTimeout) {
+        final early = await proc.exitCode
+            .then<int?>((c) => c)
+            .timeout(budget, onTimeout: () => null);
+        if (early == null) {
+          final job = _adoptJob(proc, out, err, outF, errF);
+          if (job != null) {
+            return CommandOutcome(
+              ok: true,
+              message: 'Command still running; detached as a job.',
+              data: {
+                'stdout': out.value(),
+                'stderr': err.value(),
+                'detached': true,
+                'jobId': job.id,
+                if (_isAndroid()) 'via': 'app',
+              },
+            );
+          }
+          // Job table full: the budget has lapsed, so kill as usual.
+          timedOut = true;
+          proc.kill(ProcessSignal.sigkill);
+        }
+      } else {
+        timer = Timer(budget, () {
+          timedOut = true;
+          proc.kill(ProcessSignal.sigkill);
+        });
+      }
       final code = await proc.exitCode;
-      timer.cancel();
+      timer?.cancel();
       // The shell has exited, but a backgrounded child (`long-running &`)
       // inherits the stdout/stderr pipes and can hold them open long after —
       // awaiting pipe closure unconditionally here used to hang the whole
@@ -519,8 +570,10 @@ class DeviceExec {
       // lingering writers a short grace to flush, then answer with whatever
       // arrived: redirect-to-file is the supported channel for persistent
       // streams (`cmd > /tmp/log 2>&1 &`, then read the file).
-      await Future.wait([outF, errF])
-          .timeout(_pipeDrainGrace, onTimeout: () => const []);
+      await Future.wait([
+        outF,
+        errF,
+      ]).timeout(_pipeDrainGrace, onTimeout: () => const []);
       final stdout = out.value();
       final stderr = err.value();
       return CommandOutcome(
@@ -543,6 +596,87 @@ class DeviceExec {
     } catch (e) {
       return CommandOutcome.fail('Failed to run command: $e');
     }
+  }
+
+  /// Registers a command that outlived its budget, or returns null when
+  /// [maxRunningExecJobs] are already running. Jobs live in memory, so an app
+  /// restart forgets them. Only the app-UID tier detaches: the root and
+  /// Shizuku bridges enforce their budget natively and still kill at it.
+  _ExecJob? _adoptJob(
+    Process proc,
+    _CappedOutput out,
+    _CappedOutput err,
+    Future<void> outF,
+    Future<void> errF,
+  ) {
+    final now = DateTime.now();
+    _execJobs.removeWhere(
+      (_, j) =>
+          j.finished != null &&
+          now.difference(j.finished!) > finishedExecJobTtl,
+    );
+    final running = _execJobs.values.where((j) => j.finished == null).length;
+    if (running >= maxRunningExecJobs) return null;
+    final rand = Random.secure();
+    final id =
+        'job_${List.generate(8, (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0')).join()}';
+    final job = _ExecJob(id, proc, out, err, now);
+    _execJobs[id] = job;
+    final lifetime = Timer(
+      maxExecJobLifetime,
+      () => proc.kill(ProcessSignal.sigkill),
+    );
+    job.done = proc.exitCode.then((code) async {
+      lifetime.cancel();
+      await Future.wait([
+        outF,
+        errF,
+      ]).timeout(_pipeDrainGrace, onTimeout: () => const []);
+      job.exitCode = code;
+      job.finished = DateTime.now();
+    });
+    return job;
+  }
+
+  /// Reads (action `status`) or kills a job left by a detached [exec].
+  Future<CommandOutcome> execJob(
+    String jobId, {
+    String action = 'status',
+  }) async {
+    if (jobId.isEmpty) return CommandOutcome.fail('No jobId.');
+    final job = _execJobs[jobId];
+    if (job == null) {
+      return CommandOutcome.fail(
+        'No such job: $jobId (it may have expired, or the app restarted).',
+      );
+    }
+    switch (action) {
+      case 'status':
+        break;
+      case 'kill':
+        job.proc.kill(ProcessSignal.sigkill);
+        try {
+          await job.done.timeout(const Duration(seconds: 5));
+        } on TimeoutException {
+          return CommandOutcome.fail('Job $jobId did not stop within 5s.');
+        }
+      default:
+        return CommandOutcome.fail('Unknown action: $action');
+    }
+    final finished = job.finished;
+    return CommandOutcome(
+      ok: true,
+      data: {
+        'jobId': job.id,
+        'running': finished == null,
+        'stdout': job.out.value(),
+        'stderr': job.err.value(),
+        if (finished != null) 'exitCode': job.exitCode,
+        'runtimeMs': (finished ?? DateTime.now())
+            .difference(job.started)
+            .inMilliseconds,
+      },
+    );
   }
 
   // ── self-update ─────────────────────────────────────────────────────────--
@@ -655,7 +789,8 @@ class DeviceExec {
     }
     return CommandOutcome(
       ok: true,
-      message: 'Update staged — installing in ${sleepSecs}s, then the app '
+      message:
+          'Update staged — installing in ${sleepSecs}s, then the app '
           'restarts and the mesh reconnects automatically.',
       data: {
         'staged': true,
@@ -748,8 +883,11 @@ class DeviceExec {
 
   // ── filesystem ────────────────────────────────────────────────────────────
 
-  Future<CommandOutcome> readFile(String path,
-      {required int offset, required int len}) async {
+  Future<CommandOutcome> readFile(
+    String path, {
+    required int offset,
+    required int len,
+  }) async {
     if (path.isEmpty) return CommandOutcome.fail('No path.');
     try {
       final file = File(path);
@@ -844,8 +982,9 @@ class DeviceExec {
           'mtime': stat.modified.millisecondsSinceEpoch,
         });
       }
-      entries
-          .sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+      entries.sort(
+        (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+      );
       return CommandOutcome.okData({'entries': entries});
     } catch (e) {
       return CommandOutcome.fail('list_dir failed: $e');
@@ -943,6 +1082,19 @@ class CommandOutcome {
 /// Bounded exec-output collector: keeps the head and a rolling tail, counts
 /// what it elides. The tail is load-bearing — the daemon's teleport wrapper
 /// emits its cwd marker as the LAST bytes of stdout.
+class _ExecJob {
+  _ExecJob(this.id, this.proc, this.out, this.err, this.started);
+
+  final String id;
+  final Process proc;
+  final _CappedOutput out;
+  final _CappedOutput err;
+  final DateTime started;
+  late final Future<void> done;
+  int? exitCode;
+  DateTime? finished;
+}
+
 class _CappedOutput {
   final StringBuffer _head = StringBuffer();
   String _tail = '';
