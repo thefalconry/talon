@@ -807,13 +807,9 @@ export class MeshService {
       return { ok: false, text: "No command given to run on the device." };
     }
     const budgetMs = clampExecTimeout(timeoutSec);
-    await this.load();
-    const resolved = this.resolveDevice(query);
     // Only a device that can answer exec_job may be asked to detach; anything
     // else keeps the old kill-at-budget behaviour.
-    const canDetach =
-      !("error" in resolved) &&
-      resolved.target.capabilities?.includes("exec_job") === true;
+    const canDetach = await this.canDetachExec(query);
     const dispatched = await this.dispatchCommand(
       query,
       "exec",
@@ -826,37 +822,64 @@ export class MeshService {
       budgetMs + 5_000, // let the device's own timeout fire first
     );
     if ("error" in dispatched) return { ok: false, text: dispatched.error };
-    const jobId = dispatched.result.data?.jobId;
-    if (
-      dispatched.result.data?.detached === true &&
-      typeof jobId === "string"
-    ) {
-      const { target, result } = dispatched;
-      const wakes = this.execJobs.track({
-        jobId,
-        deviceId: target.id,
-        deviceName: target.name,
-        cmd: command,
-        wakeChatKey,
-        poll: (params) =>
-          this.sendCommand(target, "exec_job", params, FS_COMMAND_TIMEOUT_MS),
-      });
-      return {
-        ok: true,
-        text: formatDetachedExec(
-          target.name,
-          jobId,
-          budgetMs,
-          wakes,
-          String(result.data?.stdout ?? ""),
-          String(result.data?.stderr ?? ""),
-        ),
-      };
-    }
+    const detached = this.adoptDetachedExec(
+      dispatched.target,
+      dispatched.result,
+      command,
+      budgetMs,
+      wakeChatKey,
+    );
+    if (detached !== null) return { ok: true, text: detached };
     return {
       ok: dispatched.result.ok,
       text: formatExecResult(dispatched.target, dispatched.result),
     };
+  }
+
+  /** Whether this device can keep a command running past its exec budget. */
+  async canDetachExec(query: unknown): Promise<boolean> {
+    await this.load();
+    const resolved = this.resolveDevice(query);
+    return (
+      !("error" in resolved) &&
+      resolved.target.capabilities?.includes("exec_job") === true
+    );
+  }
+
+  /**
+   * If the device moved a command to a background job, watch that job and
+   * return the text to show the caller. Null means it ran to its end as usual.
+   */
+  adoptDetachedExec(
+    target: DeviceInfo,
+    result: DeviceCommandResult,
+    cmd: string,
+    budgetMs: number,
+    wakeChatKey: unknown,
+    cleanOutput: (text: string) => string = (text) => text,
+  ): string | null {
+    const jobId = result.data?.jobId;
+    if (result.data?.detached !== true || typeof jobId !== "string") {
+      return null;
+    }
+    const wakes = this.execJobs.track({
+      jobId,
+      deviceId: target.id,
+      deviceName: target.name,
+      cmd,
+      wakeChatKey,
+      cleanOutput,
+      poll: (params) =>
+        this.sendCommand(target, "exec_job", params, FS_COMMAND_TIMEOUT_MS),
+    });
+    return formatDetachedExec(
+      target.name,
+      jobId,
+      budgetMs,
+      wakes,
+      cleanOutput(String(result.data?.stdout ?? "")),
+      String(result.data?.stderr ?? ""),
+    );
   }
 
   /** `device_exec_job`: read or kill a command that outlived its budget. */

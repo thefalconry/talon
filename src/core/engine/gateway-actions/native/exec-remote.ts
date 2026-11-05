@@ -22,12 +22,21 @@ const TELEPORT_TIMEOUT_HINT =
 const CWD_OPEN = "__TALON_CWD__";
 const CWD_CLOSE = "__TALON_CWD_END__";
 
+function stripCwdMarker(stdout: string): string {
+  const open = stdout.lastIndexOf(CWD_OPEN);
+  return open === -1 ? stdout : stdout.slice(0, open);
+}
+
 export async function bashTeleported(
   chatId: number,
   deviceId: string,
   cmd: string,
   timeoutMs: number,
+  /** Keep the command running past its budget, on devices that can. */
+  detachAtBudget = false,
 ): Promise<Result> {
+  const mesh = getMeshService();
+  const detach = detachAtBudget && (await mesh.canDetachExec(deviceId));
   const active = await getTeleport(chatId);
   const cwd = active?.cwd;
   // Wrap so the resulting working dir is reported back and persists across
@@ -37,14 +46,28 @@ export async function bashTeleported(
     `${cwd ? `cd ${shellQuote(cwd)} 2>/dev/null; ` : ""}` +
     `{ ${cmd}\n}; __talon_rc=$?; ` +
     `printf '${CWD_OPEN}%s${CWD_CLOSE}' "$(pwd 2>/dev/null)"; exit $__talon_rc`;
-  const dispatched = await getMeshService().dispatchCommand(
+  const dispatched = await mesh.dispatchCommand(
     deviceId,
     "exec",
-    { cmd: wrapped, timeoutMs },
+    { cmd: wrapped, timeoutMs, ...(detach ? { detachOnTimeout: true } : {}) },
     timeoutMs + 5_000,
   );
   if ("error" in dispatched) return { ok: false, text: dispatched.error };
   const { target, result } = dispatched;
+  const detached = mesh.adoptDetachedExec(
+    target,
+    result,
+    cmd,
+    timeoutMs,
+    String(chatId),
+    stripCwdMarker,
+  );
+  if (detached !== null) {
+    return {
+      ok: true,
+      text: `${detached}\nA cd inside this command won't carry over to later calls.`,
+    };
+  }
   const data = result.data ?? {};
   let stdout = typeof data.stdout === "string" ? data.stdout : "";
   const stderr = typeof data.stderr === "string" ? data.stderr : "";

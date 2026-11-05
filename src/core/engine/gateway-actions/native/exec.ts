@@ -82,7 +82,15 @@ async function bash(
     }
     return bashBackground(cmd, dir);
   }
-  if (active) return bashTeleported(chatId, active.deviceId, cmd, timeoutMs);
+  if (active) {
+    return bashTeleported(
+      chatId,
+      active.deviceId,
+      cmd,
+      timeoutMs,
+      onTimeout !== "kill",
+    );
+  }
   return bashLocal(cmd, dir, timeoutMs, chatId, onTimeout !== "kill");
 }
 

@@ -634,6 +634,80 @@ describe("native tools — local execution", () => {
 });
 
 describe("native tools — teleport routing", () => {
+  it("detaches a teleported run only when the device can and the caller allows it", async () => {
+    const service = freshMesh();
+    setMeshService(service);
+    await service.register({
+      id: "phone",
+      name: "Pixel 9",
+      platform: "android",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    const sent: Array<Record<string, unknown>> = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          sent.push(cmd.params);
+          const detach = cmd.params.detachOnTimeout === true;
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data: detach
+              ? {
+                  detached: true,
+                  jobId: "job-1",
+                  stdout: "partial\n__TALON_CWD__/x__TALON_CWD_END__",
+                  stderr: "",
+                }
+              : {
+                  stdout: "done\n__TALON_CWD__/x__TALON_CWD_END__",
+                  stderr: "",
+                  exitCode: 0,
+                },
+          });
+        }),
+    });
+    await nativeHandlers.teleport(
+      { action: "teleport", device: "phone" },
+      1,
+      undefined,
+      "1",
+    );
+
+    const res = await nativeHandlers.native_bash(
+      { action: "native_bash", command: "sleep 999" },
+      1,
+      undefined,
+      "1",
+    );
+    expect(sent[0]?.detachOnTimeout).toBe(true);
+    expect(res.ok).toBe(true);
+    expect(res.text).toContain("job-1");
+    expect(res.text).toContain("partial");
+    expect(res.text).not.toContain("__TALON_CWD__");
+
+    const killed = await nativeHandlers.native_bash(
+      { action: "native_bash", command: "sleep 999", on_timeout: "kill" },
+      1,
+      undefined,
+      "1",
+    );
+    expect(sent[1]?.detachOnTimeout).toBeUndefined();
+    expect(killed.text).toContain("exit 0");
+
+    // glob/search parse the output inline, so they never detach.
+    await nativeHandlers.native_glob(
+      { action: "native_glob", pattern: "*.txt" },
+      1,
+      undefined,
+      "1",
+    );
+    expect(sent[2]?.detachOnTimeout).toBeUndefined();
+  });
+
   it("teleports onto a device, routes bash through the mesh, and tracks cwd", async () => {
     const service = freshMesh();
     setMeshService(service);

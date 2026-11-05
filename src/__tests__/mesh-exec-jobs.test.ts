@@ -33,6 +33,28 @@ describe("ExecJobTracker", () => {
     vi.useRealTimers();
   });
 
+  it("cleans wrapper output out of the wake-up", async () => {
+    const tracker = new ExecJobTracker(1);
+    const wake = vi.fn();
+    tracker.setWake(wake);
+    const poll = vi.fn(async () => ({
+      commandId: "c",
+      deviceId: "d",
+      ok: true,
+      data: { running: false, exitCode: 0, stdout: "real\nMARKER" },
+    }));
+    tracker.track({
+      ...base,
+      wakeChatKey: "42",
+      poll,
+      cleanOutput: (text) => text.replace("MARKER", ""),
+    });
+    await vi.waitFor(() => expect(wake).toHaveBeenCalledTimes(1));
+    expect(wake.mock.calls[0]![1]).toContain("real");
+    expect(wake.mock.calls[0]![1]).not.toContain("MARKER");
+    tracker.stop();
+  });
+
   it("does not watch without a numeric chat to wake", () => {
     const tracker = new ExecJobTracker(10);
     tracker.setWake(vi.fn());

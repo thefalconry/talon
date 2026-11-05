@@ -25,6 +25,8 @@ type TrackInput = {
   cmd: string;
   /** The chat that ran the command; absent or non-numeric means nobody to wake. */
   wakeChatKey: unknown;
+  /** Strips wrapper output the chat shouldn't see, e.g. teleport's cwd marker. */
+  cleanOutput?: (text: string) => string;
   poll: (params: Record<string, unknown>) => Promise<DeviceCommandResult>;
 };
 
@@ -133,7 +135,8 @@ export class ExecJobTracker {
     const parts = [
       `Background job ${input.jobId} on ${input.deviceName} finished, exit ${String(d.exitCode ?? "?")}: ${input.cmd}`,
     ];
-    const stdout = tail(String(d.stdout ?? ""));
+    const rawStdout = String(d.stdout ?? "");
+    const stdout = tail(input.cleanOutput?.(rawStdout) ?? rawStdout);
     const stderr = tail(String(d.stderr ?? ""));
     if (stdout) parts.push(`--- stdout tail ---\n${stdout}`);
     if (stderr) parts.push(`--- stderr tail ---\n${stderr}`);
