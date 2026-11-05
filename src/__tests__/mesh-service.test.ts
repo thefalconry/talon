@@ -698,6 +698,37 @@ describe("MeshService exec + filesystem channel", () => {
     expect(res.text).not.toContain("/tmp/x");
   });
 
+  it("keeps a job's own output that merely contains the cwd marker", async () => {
+    const service = await tempService();
+    await service.register({
+      id: "node",
+      name: "Node",
+      platform: "linux",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data: {
+              running: false,
+              exitCode: 0,
+              stdout: "grep hit: __TALON_CWD__ in cwd-marker.ts\nline after\n",
+              stderr: "",
+            },
+          });
+        }),
+    });
+
+    const res = await service.execJobOnDevice("node", "job_1");
+    expect(res.text).toContain("line after");
+  });
+
   it("reassembles a chunked file read off the device", async () => {
     const service = await tempService();
     await service.register({
