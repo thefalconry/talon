@@ -723,6 +723,14 @@ class DeviceExec {
   /// Exit code of [elevatedJobReadScript] for an unknown job directory.
   static const int _jobMissing = 76;
 
+  /// Shell function: is the process in `\$2` still the worker of job dir `\$1`?
+  /// Job directories outlive a reboot and pids get reused, so a live pid alone
+  /// proves nothing, and signalling it could hit an unrelated process group
+  /// with root's rights. The worker carries its directory as an argument.
+  static const String _jobAliveFn =
+      'job_alive() { [ -n "\$2" ] && [ -r "/proc/\$2/cmdline" ] && '
+      'tr \'\\000\' \'\\n\' <"/proc/\$2/cmdline" 2>/dev/null | grep -qxF "\$1"; }; ';
+
   /// Starts a job in a private directory, printing the directory's suffix.
   /// The root and Shizuku bridges kill what they run at the budget, so a
   /// command that may outlive it has to be launched from the start in its own
@@ -734,15 +742,17 @@ class DeviceExec {
     final worker =
         'echo \$\$ >"\$1/pid"; sh -c ${_shQuote(cmd)} >"\$1/out" 2>"\$1/err" </dev/null; '
         'echo \$? >"\$1/exit.tmp"; mv "\$1/exit.tmp" "\$1/exit"';
-    return 'umask 077; r=${_shQuote(root)}; running=0; '
+    return '${_jobAliveFn}umask 077; r=${_shQuote(root)}; running=0; '
         'for j in "\$r"/talon-job.*; do [ -d "\$j" ] || continue; '
         'if [ -f "\$j/exit" ]; then '
         '[ -n "\$(find "\$j/exit" -mmin +60 2>/dev/null)" ] && rm -rf "\$j"; '
         'else p=\$(cat "\$j/pid" 2>/dev/null); '
-        'if [ -n "\$p" ] && kill -0 "\$p" 2>/dev/null; then '
+        'if job_alive "\$j" "\$p"; then '
         'if [ -n "\$(find "\$j/pid" -mmin +1440 2>/dev/null)" ]; then '
         'kill -9 -"\$p" 2>/dev/null; echo 137 >"\$j/exit"; '
-        'else running=\$((running+1)); fi; fi; fi; done; '
+        'else running=\$((running+1)); fi; '
+        // Lost to a reboot or a kill: give it an exit file so it ages out.
+        'elif [ -n "\$p" ]; then echo -1 >"\$j/exit"; fi; fi; done; '
         '[ "\$running" -ge $maxRunningExecJobs ] && exit $_jobNotStarted; '
         'd=\$(mktemp -d "\$r/talon-job.XXXXXXXXXX") || exit $_jobNotStarted; '
         'setsid sh -c ${_shQuote(worker)} talon-job "\$d" >/dev/null 2>&1 </dev/null & '
@@ -756,7 +766,7 @@ class DeviceExec {
   static String elevatedJobReadScript(String root, String suffix) {
     const head = _execOutputHeadBytes;
     const tail = _execOutputTailBytes;
-    return 'd=${_shQuote('$root/talon-job.$suffix')}; '
+    return '${_jobAliveFn}d=${_shQuote('$root/talon-job.$suffix')}; '
         '[ -d "\$d" ] || exit $_jobMissing; '
         'show() { [ -f "\$1" ] || return 0; n=\$(wc -c <"\$1"); '
         'if [ "\$n" -le ${head + tail} ]; then cat "\$1"; else '
@@ -764,7 +774,7 @@ class DeviceExec {
         'tail -c $tail "\$1"; fi; }; '
         'p=\$(cat "\$d/pid" 2>/dev/null); '
         'if [ -f "\$d/exit" ]; then echo "F \$(cat "\$d/exit")"; '
-        'elif [ -z "\$p" ] || kill -0 "\$p" 2>/dev/null; then echo R; '
+        'elif [ -z "\$p" ] || job_alive "\$d" "\$p"; then echo R; '
         // Checked again: the worker may have finished since the first look.
         'elif [ -f "\$d/exit" ]; then echo "F \$(cat "\$d/exit")"; '
         'else echo "F -1"; fi; '
@@ -774,11 +784,11 @@ class DeviceExec {
   /// Kills the job's whole session and records 137 unless it already ended.
   @visibleForTesting
   static String elevatedJobKillScript(String root, String suffix) {
-    return 'd=${_shQuote('$root/talon-job.$suffix')}; '
+    return '${_jobAliveFn}d=${_shQuote('$root/talon-job.$suffix')}; '
         '[ -d "\$d" ] || exit $_jobMissing; '
         '[ -f "\$d/exit" ] && exit 0; '
         'p=\$(cat "\$d/pid" 2>/dev/null); '
-        '[ -n "\$p" ] && kill -9 -"\$p" 2>/dev/null; '
+        'job_alive "\$d" "\$p" && kill -9 -"\$p" 2>/dev/null; '
         'echo 137 >"\$d/exit"';
   }
 

@@ -147,6 +147,35 @@ void main() {
     expect(read.data!['exitCode'], -1);
   });
 
+  test('a reused pid is neither reported as the job nor killed', () async {
+    // A live, unrelated process group holding the pid a dead job recorded.
+    final started = await Process.run('sh', [
+      '-c',
+      r'setsid sleep 60 >/dev/null 2>&1 </dev/null & echo $!',
+    ]);
+    final otherPid = int.parse((started.stdout as String).trim());
+    addTearDown(() => Process.killPid(otherPid, ProcessSignal.sigkill));
+    final dir = Directory('${tmp.path}/talon-job.reused')..createSync();
+    File('${dir.path}/pid').writeAsStringSync('$otherPid\n');
+
+    final exec = shizukuExec('reused');
+    final read = await exec.execJob('ejob_shizuku_reused');
+    expect(read.ok, isTrue);
+    expect(read.data?['running'], isFalse);
+    expect(read.data?['exitCode'], -1);
+
+    File('${dir.path}/pid').writeAsStringSync('$otherPid\n');
+    await exec.execJob('ejob_shizuku_reused', action: 'kill');
+    expect(await alive('$otherPid'), isTrue);
+
+    // The sweep at the next job start leaves it alone too, and retires the job.
+    File('${dir.path}/exit').deleteSync();
+    await Process.run('touch', ['-d', '2 days ago', '${dir.path}/pid']);
+    await exec.exec('true', timeoutMs: 5000, detachOnTimeout: true);
+    expect(await alive('$otherPid'), isTrue);
+    expect(File('${dir.path}/exit').readAsStringSync().trim(), '-1');
+  });
+
   test('ids that could reach the shell are refused unrun', () async {
     final scripts = <String>[];
     final exec = shizukuExec('inject', onExec: scripts.add);
@@ -172,9 +201,13 @@ void main() {
       }
     });
     for (var i = 0; i < DeviceExec.maxRunningExecJobs; i++) {
-      final p = await Process.start('sleep', ['30']);
-      sleepers.add(p);
       final d = Directory('${tmp.path}/talon-job.full$i')..createSync();
+      // Shaped like a real worker: its job directory is an argument.
+      final p = await Process.start(
+        'sh',
+        ['-c', 'sleep 30; true', 'talon-job', d.path],
+      );
+      sleepers.add(p);
       File('${d.path}/pid').writeAsStringSync('${p.pid}\n');
     }
     final r = await exec.exec(
