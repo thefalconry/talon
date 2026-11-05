@@ -665,6 +665,39 @@ describe("MeshService exec + filesystem channel", () => {
     service.execJobs.stop();
   });
 
+  it("hides teleport's cwd marker when a job's output is read back", async () => {
+    const service = await tempService({ commandTimeoutMs: 2_000 });
+    await service.register({
+      id: "node",
+      name: "Mini",
+      platform: "macos",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data: {
+              running: false,
+              exitCode: 0,
+              stdout: "built\n__TALON_CWD__/tmp/x__TALON_CWD_END__",
+              stderr: "",
+            },
+          });
+        }),
+    });
+
+    const res = await service.execJobOnDevice("node", "job_1");
+    expect(res.text).toContain("built");
+    expect(res.text).not.toContain("__TALON_CWD");
+    expect(res.text).not.toContain("/tmp/x");
+  });
+
   it("reassembles a chunked file read off the device", async () => {
     const service = await tempService();
     await service.register({

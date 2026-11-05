@@ -9,6 +9,11 @@
  */
 
 import { getMeshService } from "../../../mesh/index.js";
+import {
+  CWD_CLOSE,
+  CWD_OPEN,
+  stripCwdMarker,
+} from "../../../mesh/devices/cwd-marker.js";
 import { getTeleport, setTeleportCwd } from "../../../mesh/devices/teleport.js";
 import { renderExec, type Result } from "./results.js";
 import { shellQuote } from "./shell.js";
@@ -18,14 +23,6 @@ const TELEPORT_TIMEOUT_HINT =
   "(Streaming/never-ending commands can't ride a teleported foreground call — " +
   "background it in-shell instead: `cmd > /tmp/out.log 2>&1 &`, then poll the log " +
   "with read, or bound the command itself: `logcat -d`, `timeout 30 …`, `head -n 200`.)";
-/** Markers used to recover the post-command working dir from a teleport shell. */
-const CWD_OPEN = "__TALON_CWD__";
-const CWD_CLOSE = "__TALON_CWD_END__";
-
-function stripCwdMarker(stdout: string): string {
-  const open = stdout.lastIndexOf(CWD_OPEN);
-  return open === -1 ? stdout : stdout.slice(0, open);
-}
 
 export async function bashTeleported(
   chatId: number,

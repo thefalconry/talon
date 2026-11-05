@@ -33,6 +33,7 @@
  * {@link BridgeLinks} (node provisioning, companion pairing, reachability).
  */
 
+import { stripCwdMarker } from "./cwd-marker.js";
 import { ExecJobTracker } from "./exec-jobs.js";
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
@@ -899,7 +900,19 @@ export class MeshService {
       FS_COMMAND_TIMEOUT_MS,
     );
     if ("error" in dispatched) return { ok: false, text: dispatched.error };
-    const { target, result } = dispatched;
+    const { target } = dispatched;
+    // A job started from a teleported bash ends with its cwd marker. Strip it
+    // here rather than per watch, so this still works after a daemon restart.
+    const result =
+      typeof dispatched.result.data?.stdout === "string"
+        ? {
+            ...dispatched.result,
+            data: {
+              ...dispatched.result.data,
+              stdout: stripCwdMarker(dispatched.result.data.stdout),
+            },
+          }
+        : dispatched.result;
     if (!result.ok && !result.data) {
       return {
         ok: false,
