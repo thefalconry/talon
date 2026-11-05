@@ -8,7 +8,7 @@
  * filesystem/process behavior. Real disk operations run against a
  * per-test temp directory to avoid coupling to the project layout.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -283,18 +283,22 @@ describe.skipIf(isWindows)("openai-agents / builtins / run context", () => {
       cwd: workdir,
       env: { TALON_TEST_SCOPE: "scoped-env" },
     });
+    // Not PATH: Bash runs `bash -lc`, and macOS's /etc/profile (path_helper)
+    // reorders PATH, so the daemon's value is not a substring of the child's.
+    vi.stubEnv("TALON_TEST_INHERITED", "inherited-env");
     const out = await getTool("Bash").invoke(
       ctx,
       JSON.stringify({
-        command: 'pwd; echo "$TALON_TEST_SCOPE"; echo "$PATH"',
+        command: 'pwd; echo "$TALON_TEST_SCOPE"; echo "$TALON_TEST_INHERITED"',
       }),
     );
+    vi.unstubAllEnvs();
     const text = String(out);
     // basename: macOS reports the realpath (/private/var/…) of a tmp dir.
     expect(text).toContain(basename(workdir));
     expect(text).toContain("scoped-env");
     // Layered over the daemon's environment, not replacing it.
-    expect(text).toContain(process.env.PATH ?? "");
+    expect(text).toContain("inherited-env");
   });
 
   it("defaults Glob to the run context's cwd when no path is given", async () => {
