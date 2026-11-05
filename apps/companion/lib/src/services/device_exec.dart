@@ -716,6 +716,9 @@ class DeviceExec {
     r'^ejob_(root|shizuku)_([A-Za-z0-9]{1,32})$',
   );
 
+  /// Per-stream bytes of job output that trigger a trim on the device's disk.
+  static const int _jobOutputDiskBytes = 1024 * 1024;
+
   /// Exit code of [elevatedJobStartScript] when nothing was launched and the
   /// command should run the ordinary way, killed at its budget.
   static const int _jobNotStarted = 75;
@@ -736,12 +739,22 @@ class DeviceExec {
   /// command that may outlive it has to be launched from the start in its own
   /// session, with output in files. Finished jobs older than an hour are
   /// removed here, and jobs over a day old are killed; both happen only when
-  /// a new job starts. Output files have no size cap.
+  /// a new job starts. Once a second, a stream over [_jobOutputDiskBytes] is cut
+  /// to its first and last bytes, so a fast writer can overshoot between cuts
+  /// and bytes written during a cut can be lost.
   @visibleForTesting
   static String elevatedJobStartScript(String root, String cmd) {
-    final worker =
-        'echo \$\$ >"\$1/pid"; sh -c ${_shQuote(cmd)} >"\$1/out" 2>"\$1/err" </dev/null; '
-        'echo \$? >"\$1/exit.tmp"; mv "\$1/exit.tmp" "\$1/exit"';
+    final worker = 'echo \$\$ >"\$1/pid"; : >"\$1/out"; : >"\$1/err"; '
+        'trim() { for f in "\$1/out" "\$1/err"; do '
+        '[ "\$(wc -c <"\$f")" -gt $_jobOutputDiskBytes ] || continue; '
+        '[ -f "\$f.head" ] || head -c $_execOutputHeadBytes "\$f" >"\$f.head"; '
+        'tail -c $_execOutputTailBytes "\$f" >"\$f.t"; cat "\$f.t" >"\$f"; rm -f "\$f.t"; '
+        'done; }; '
+        '{ while sleep 1; do trim "\$1"; done; } & w=\$!; '
+        // Appending, so a writer carries on at the new end after a trim.
+        'sh -c ${_shQuote(cmd)} >>"\$1/out" 2>>"\$1/err" </dev/null; c=\$?; '
+        'kill \$w 2>/dev/null; trim "\$1"; '
+        'echo \$c >"\$1/exit.tmp"; mv "\$1/exit.tmp" "\$1/exit"';
     return '${_jobAliveFn}umask 077; r=${_shQuote(root)}; running=0; '
         'for j in "\$r"/talon-job.*; do [ -d "\$j" ] || continue; '
         'if [ -f "\$j/exit" ]; then '
@@ -768,7 +781,9 @@ class DeviceExec {
     const tail = _execOutputTailBytes;
     return '${_jobAliveFn}d=${_shQuote('$root/talon-job.$suffix')}; '
         '[ -d "\$d" ] || exit $_jobMissing; '
-        'show() { [ -f "\$1" ] || return 0; n=\$(wc -c <"\$1"); '
+        'show() { [ -f "\$1" ] || return 0; '
+        'if [ -s "\$1.head" ]; then cat "\$1.head"; '
+        'printf \'\\n…[job output trimmed]…\\n\'; fi; n=\$(wc -c <"\$1"); '
         'if [ "\$n" -le ${head + tail} ]; then cat "\$1"; else '
         'head -c $head "\$1"; printf \'\\n…[%s bytes truncated]…\\n\' \$((n-${head + tail})); '
         'tail -c $tail "\$1"; fi; }; '

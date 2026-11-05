@@ -176,6 +176,40 @@ void main() {
     expect(File('${dir.path}/exit').readAsStringSync().trim(), '-1');
   });
 
+  int jobDiskBytes() => tmp
+      .listSync()
+      .whereType<Directory>()
+      .firstWhere((d) => d.path.contains('talon-job.'))
+      .listSync()
+      .whereType<File>()
+      .fold<int>(0, (sum, f) => sum + f.lengthSync());
+
+  test('a noisy job is trimmed while running and keeps its ends', () async {
+    final exec = shizukuExec('noisy');
+    final r = await exec.exec(
+      'echo first; head -c 5000000 /dev/zero | tr "\\000" x; echo; '
+      'sleep 4; echo last; echo errlast >&2; exit 4',
+      timeoutMs: 1000,
+      detachOnTimeout: true,
+    );
+    expect(r.data!['detached'], isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 2500));
+    expect(jobDiskBytes(), lessThan(1024 * 1024));
+    final jobId = r.data!['jobId'] as String;
+    Map<String, dynamic> job = {};
+    for (var i = 0; i < 40; i++) {
+      job = (await exec.execJob(jobId)).data!;
+      if (job['running'] != true) break;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+    expect(job['exitCode'], 4);
+    final stdout = job['stdout'] as String;
+    expect(stdout, startsWith('first\n'));
+    expect(stdout, contains('truncated'));
+    expect(stdout, endsWith('last\n'));
+    expect(job['stderr'], 'errlast\n');
+  });
+
   test('ids that could reach the shell are refused unrun', () async {
     final scripts = <String>[];
     final exec = shizukuExec('inject', onExec: scripts.add);
