@@ -3,7 +3,8 @@
  * End-to-end smoke of a real daemon process: boot from source with a
  * throwaway TALON_HOME (native bridge on localhost, stub Claude binary, no
  * external frontends), check bridge auth, drive a scripted device through
- * credential upgrade, registration and device_exec, restart, check it all again.
+ * credential upgrade, registration and device_exec, pair a second device from
+ * a one-time link, restart, check it all again.
  * The device answers commands itself, so this covers the daemon's half of the
  * protocol, not talon-node's executor.
  * Any failed step exits non-zero. The daemon log is left at $E2E_LOG.
@@ -27,6 +28,7 @@ const TOKEN = "e2e-throwaway-token-not-a-secret-0000000000000";
 const BASE = `http://127.0.0.1:${PORT}`;
 const GATEWAY = "http://127.0.0.1:19876";
 const DEVICE = "e2e-device";
+const PAIRED = "e2e-paired";
 const root = mkdtempSync(join(tmpdir(), "talon-e2e-"));
 const home = join(root, "talon");
 const log = process.env.E2E_LOG ?? join(root, "daemon.log");
@@ -159,6 +161,49 @@ async function checkDevice(label, token) {
   await checkExec(label, token);
 }
 
+/**
+ * Pair the way a phone does: an agent mints a link, the holder of the link
+ * collects the credential with no bearer token, and the link is then spent.
+ */
+async function pairDevice() {
+  const minted = await action({
+    action: "make_companion_pair_link",
+    bridge_url: BASE,
+    label: "e2e",
+  });
+  const grant = /\/pair\?grant=([\w-]+)/.exec(String(minted.text))?.[1];
+  if (!minted.ok || !grant) fail("mint pair link", JSON.stringify(minted));
+  console.log("ok pair: link minted");
+  const bogus = await get("/pair?grant=not-a-grant&format=json");
+  expectStatus("pair: unknown grant", bogus.status, 404);
+  const claimed = await get(`/pair?grant=${grant}&format=json`);
+  expectStatus("pair: claim grant without a bearer token", claimed.status, 200);
+  const payload = await claimed.json();
+  if (payload.url !== BASE || !payload.token || payload.token === TOKEN) {
+    fail("pair: payload", `url ${payload.url}, own token ${!!payload.token}`);
+  }
+  const again = await get(`/pair?grant=${grant}&format=json`);
+  expectStatus("pair: second claim of the same grant", again.status, 404);
+  return payload.token;
+}
+
+/** The paired credential binds to the first device that registers with it. */
+async function checkPaired(label, token) {
+  const self = await post("/devices/register", token, {
+    id: PAIRED,
+    name: PAIRED,
+    platform: "android",
+    capabilities: ["status"],
+  });
+  expectStatus(`${label}: paired device registers`, self.status, 200);
+  const other = await post("/devices/register", token, {
+    id: DEVICE,
+    name: "x",
+    platform: "android",
+  });
+  expectStatus(`${label}: paired token as another device`, other.status, 403);
+}
+
 async function gatewayTaken() {
   try {
     await fetch("http://127.0.0.1:19876/health", {
@@ -259,10 +304,13 @@ expectStatus("upgrade shared token", upgrade.status, 200);
 const { token: deviceToken } = await upgrade.json();
 if (!deviceToken || deviceToken === TOKEN) fail("upgrade", "no new token");
 await checkDevice("first boot", deviceToken);
+const pairedToken = await pairDevice();
+await checkPaired("first boot", pairedToken);
 await stop();
 boot();
 await checkBridge("after restart");
 await checkDevice("after restart", deviceToken);
+await checkPaired("after restart", pairedToken);
 await stop();
 console.log("e2e-daemon passed");
 process.exit(0);
