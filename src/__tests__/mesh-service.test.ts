@@ -2288,3 +2288,76 @@ describe("waitForDevice", () => {
     expect(r).toMatchObject({ ok: true });
   });
 });
+
+describe("watchDevice", () => {
+  const CHAT = "d_native_chat";
+  async function setup() {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    const wakes: Array<[string, string]> = [];
+    service.execJobs.setWake((chat, prompt) => wakes.push([chat, prompt]));
+    return { service, wakes };
+  }
+  const settle = (ms = 40) => new Promise((r) => setTimeout(r, ms));
+
+  it("starts no watch when the state already holds", async () => {
+    const { service, wakes } = await setup();
+    const r = await service.watchDevice("phone", "online", 5, CHAT);
+    expect(r.text).toContain("already online");
+    await settle();
+    expect(wakes).toEqual([]);
+  });
+
+  it("wakes the calling chat once when the state is reached", async () => {
+    const { service, wakes } = await setup();
+    const r = await service.watchDevice("phone", "offline", 5, CHAT);
+    expect(r.text).toContain("Watching");
+    await settle();
+    expect(wakes).toEqual([]);
+    const now = Date.now();
+    const spy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => now + 86_400_000);
+    await settle();
+    spy.mockRestore();
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]![0]).toBe(CHAT);
+    expect(wakes[0]![1]).toContain("is now offline");
+    await settle();
+    expect(wakes).toHaveLength(1);
+  });
+
+  it("wakes with the current state when time runs out", async () => {
+    const { service, wakes } = await setup();
+    await service.watchDevice("phone", "offline", 0.02, CHAT);
+    await settle(80);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]![1]).toContain("did not go offline");
+    expect(wakes[0]![1]).toContain("it is online");
+  });
+
+  it("wakes when the device is removed", async () => {
+    const { service, wakes } = await setup();
+    await service.watchDevice("phone", "offline", 5, CHAT);
+    await service.removeDevice("phone");
+    await settle();
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]![1]).toContain("removed");
+  });
+
+  it("does not stack a duplicate watch", async () => {
+    const { service, wakes } = await setup();
+    await service.watchDevice("phone", "offline", 0.02, CHAT);
+    const r = await service.watchDevice("phone", "offline", 0.02, CHAT);
+    expect(r.text).toContain("already watching");
+    await settle(80);
+    expect(wakes).toHaveLength(1);
+  });
+
+  it("refuses a run with no chat to wake", async () => {
+    const { service } = await setup();
+    const r = await service.watchDevice("phone", "offline", 5, "heartbeat");
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("Nothing is being watched");
+  });
+});

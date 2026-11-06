@@ -93,6 +93,9 @@ export type MeshTransport = {
 /** Outcome of pinging one device (see {@link MeshService.pingAll}). */
 const WAIT_FOR_DEVICE_DEFAULT_SEC = 60;
 const WAIT_FOR_DEVICE_MAX_SEC = 300;
+const WATCH_DEVICE_DEFAULT_SEC = 6 * 60 * 60;
+const WATCH_DEVICE_MAX_SEC = 24 * 60 * 60;
+const WATCH_DEVICE_MAX_ACTIVE = 32;
 
 export type MeshPingResult = {
   device: DeviceInfo;
@@ -214,6 +217,11 @@ export class MeshService {
   private legacySharedToken = true;
   /** Commands that outlived their exec budget and are being watched. */
   readonly execJobs = new ExecJobTracker();
+  /** Active `watch_device` timers, keyed by chat, device id and state. */
+  private readonly deviceWatches = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   constructor(
     private readonly registry = new MeshRegistry(),
@@ -687,6 +695,87 @@ export class MeshService {
         setTimeout(r, Math.min(this.deviceWaitPollMs, remaining)),
       );
     }
+  }
+
+  /**
+   * `watch_device`: return now and wake the calling chat when a device reaches
+   * a presence state, is removed, or the time runs out. Watches live in memory,
+   * so a daemon restart drops them without a wake.
+   */
+  async watchDevice(
+    query: unknown,
+    state: unknown = "online",
+    timeoutSec?: unknown,
+    chatId?: unknown,
+  ): Promise<MeshToolResult> {
+    await this.load();
+    if (typeof query !== "string" || !query.trim()) {
+      return { ok: false, text: "watch_device needs a device id or name." };
+    }
+    if (state !== "online" && state !== "offline") {
+      return { ok: false, text: 'state must be "online" or "offline".' };
+    }
+    const chatKey = chatId === undefined ? "" : String(chatId);
+    if (!this.execJobs.canNotify(chatKey)) {
+      return {
+        ok: false,
+        text: "watch_device needs a chat to wake, and this run has none. Nothing is being watched.",
+      };
+    }
+    const resolved = this.resolveDevice(query);
+    if ("error" in resolved) return { ok: false, text: resolved.error };
+    const { id, name } = resolved.target;
+    if (resolved.target.online === (state === "online")) {
+      return {
+        ok: true,
+        text: `${name} is already ${state}; no watch started.`,
+      };
+    }
+    const key = `${chatKey}\0${id}\0${state}`;
+    if (this.deviceWatches.has(key)) {
+      return {
+        ok: true,
+        text: `This chat is already watching for ${name} to go ${state}.`,
+      };
+    }
+    if (this.deviceWatches.size >= WATCH_DEVICE_MAX_ACTIVE) {
+      return {
+        ok: false,
+        text: `Too many device watches are active (${WATCH_DEVICE_MAX_ACTIVE}). Nothing new is being watched.`,
+      };
+    }
+    const seconds =
+      typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+        ? Math.min(Math.max(timeoutSec, 0), WATCH_DEVICE_MAX_SEC)
+        : WATCH_DEVICE_DEFAULT_SEC;
+    const deadline = Date.now() + seconds * 1000;
+    const finish = (prompt: string): void => {
+      this.deviceWatches.delete(key);
+      this.execJobs.notify(chatKey, `[device watch] ${prompt}`);
+    };
+    const tick = (): void => {
+      const current = this.registry.list().devices.find((d) => d.id === id);
+      if (!current) {
+        finish(`${name} was removed from the mesh during the watch.`);
+      } else if (current.online === (state === "online")) {
+        finish(`${name} is now ${state}.`);
+      } else if (Date.now() >= deadline) {
+        finish(
+          `${name} did not go ${state} within ${seconds}s; it is ${current.online ? "online" : "offline"}, last seen ${age(Date.now() - current.lastSeen)}. The watch has ended.`,
+        );
+      } else {
+        const timer = setTimeout(tick, this.deviceWaitPollMs);
+        timer.unref?.();
+        this.deviceWatches.set(key, timer);
+      }
+    };
+    const first = setTimeout(tick, this.deviceWaitPollMs);
+    first.unref?.();
+    this.deviceWatches.set(key, first);
+    return {
+      ok: true,
+      text: `Watching ${name}; this chat will be woken when it goes ${state}, or after ${seconds}s. A daemon restart drops the watch without a wake.`,
+    };
   }
 
   /** `list_devices`: every mesh device with presence, battery, last-known

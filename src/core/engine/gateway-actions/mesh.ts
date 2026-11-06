@@ -32,6 +32,13 @@ export const meshHandlers: SharedActionHandlers = {
       body.state,
       body.timeout_sec,
     ),
+  watch_device: (body) =>
+    getMeshService().watchDevice(
+      body.device ?? body.deviceId,
+      body.state,
+      body.timeout_sec,
+      body._chatId,
+    ),
   // Exec + filesystem surface — the substrate teleport routes through.
   device_exec: (body) =>
     getMeshService().execOnDevice(
@@ -135,6 +142,7 @@ export const chatFreeActions: ReadonlySet<string> = new Set([
   "remove_device",
   "get_device_status",
   "wait_for_device",
+  "watch_device",
   "device_exec",
   "device_exec_job",
   "device_computer",
