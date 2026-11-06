@@ -91,6 +91,12 @@ export type MeshTransport = {
 };
 
 /** Outcome of pinging one device (see {@link MeshService.pingAll}). */
+const WAIT_FOR_DEVICE_DEFAULT_SEC = 60;
+const WAIT_FOR_DEVICE_MAX_SEC = 300;
+const WATCH_DEVICE_DEFAULT_SEC = 6 * 60 * 60;
+const WATCH_DEVICE_MAX_SEC = 24 * 60 * 60;
+const WATCH_DEVICE_MAX_ACTIVE = 32;
+
 export type MeshPingResult = {
   device: DeviceInfo;
   /** True when the device answered the probe (offline devices are false). */
@@ -110,6 +116,8 @@ export type MeshServiceOptions = {
   commandTimeoutMs?: number;
   /** How often a long command re-checks that its device is still present. */
   presenceWatchIntervalMs?: number;
+  /** How often `waitForDevice` re-reads presence. */
+  deviceWaitPollMs?: number;
   /**
    * How long an undelivered command (no transport has a live connection to
    * its device) waits for the device to reconnect before failing. Default
@@ -198,6 +206,7 @@ export class MeshService {
   private readonly pollIntervalMs: number;
   private readonly commandTimeoutMs: number;
   private readonly presenceWatchIntervalMs: number;
+  private readonly deviceWaitPollMs: number;
   private commandHoldMs: number;
   private loading: Promise<void> | null = null;
   /** Per-device credentials (null = shared-token-only mesh). */
@@ -208,6 +217,11 @@ export class MeshService {
   private legacySharedToken = true;
   /** Commands that outlived their exec budget and are being watched. */
   readonly execJobs = new ExecJobTracker();
+  /** Active `watch_device` timers, keyed by chat, device id and state. */
+  private readonly deviceWatches = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
 
   constructor(
     private readonly registry = new MeshRegistry(),
@@ -220,6 +234,7 @@ export class MeshService {
       options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.presenceWatchIntervalMs =
       options.presenceWatchIntervalMs ?? PRESENCE_WATCH_INTERVAL_MS;
+    this.deviceWaitPollMs = options.deviceWaitPollMs ?? 2_000;
     this.commandHoldMs = options.commandHoldMs ?? DEFAULT_COMMAND_HOLD_MS;
     this.resolveNode = options.nodeBinaryResolver ?? resolveNodeBinary;
     this.files = new DeviceFiles({
@@ -627,6 +642,141 @@ export class MeshService {
   }
 
   // ── Model-facing tool surface ──────────────────────────────────────────────
+
+  /**
+   * `wait_for_device`: block until a device reaches a presence state, or the
+   * budget runs out. Presence comes from heartbeats, so "offline" lands one
+   * grace period after the device goes quiet. Requires an explicit target:
+   * waiting on a defaulted device could report success about the wrong one.
+   * The device is pinned by id at the start, so a name that later resolves
+   * elsewhere can't satisfy the wait.
+   */
+  async waitForDevice(
+    query: unknown,
+    state: unknown = "online",
+    timeoutSec?: unknown,
+  ): Promise<MeshToolResult> {
+    await this.load();
+    if (typeof query !== "string" || !query.trim()) {
+      return { ok: false, text: "wait_for_device needs a device id or name." };
+    }
+    if (state !== "online" && state !== "offline") {
+      return { ok: false, text: 'state must be "online" or "offline".' };
+    }
+    const resolved = this.resolveDevice(query);
+    if ("error" in resolved) return { ok: false, text: resolved.error };
+    const { id, name } = resolved.target;
+    const seconds =
+      typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+        ? Math.min(Math.max(timeoutSec, 0), WAIT_FOR_DEVICE_MAX_SEC)
+        : WAIT_FOR_DEVICE_DEFAULT_SEC;
+    const startedAt = Date.now();
+    const deadline = startedAt + seconds * 1000;
+    for (;;) {
+      const current = this.registry.list().devices.find((d) => d.id === id);
+      if (!current) {
+        return {
+          ok: false,
+          text: `${name} was removed from the mesh during the wait.`,
+        };
+      }
+      const waited = Math.round((Date.now() - startedAt) / 1000);
+      if (current.online === (state === "online")) {
+        return { ok: true, text: `${name} is ${state} (waited ${waited}s).` };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return {
+          ok: false,
+          text: `${name} did not go ${state} within ${seconds}s; it is ${current.online ? "online" : "offline"}, last seen ${age(Date.now() - current.lastSeen)}.`,
+        };
+      }
+      await new Promise((r) =>
+        setTimeout(r, Math.min(this.deviceWaitPollMs, remaining)),
+      );
+    }
+  }
+
+  /**
+   * `watch_device`: return now and wake the calling chat when a device reaches
+   * a presence state, is removed, or the time runs out. Watches live in memory,
+   * so a daemon restart drops them without a wake.
+   */
+  async watchDevice(
+    query: unknown,
+    state: unknown = "online",
+    timeoutSec?: unknown,
+    chatId?: unknown,
+  ): Promise<MeshToolResult> {
+    await this.load();
+    if (typeof query !== "string" || !query.trim()) {
+      return { ok: false, text: "watch_device needs a device id or name." };
+    }
+    if (state !== "online" && state !== "offline") {
+      return { ok: false, text: 'state must be "online" or "offline".' };
+    }
+    const chatKey = chatId === undefined ? "" : String(chatId);
+    if (!this.execJobs.canNotify(chatKey)) {
+      return {
+        ok: false,
+        text: "watch_device needs a chat to wake, and this run has none. Nothing is being watched.",
+      };
+    }
+    const resolved = this.resolveDevice(query);
+    if ("error" in resolved) return { ok: false, text: resolved.error };
+    const { id, name } = resolved.target;
+    if (resolved.target.online === (state === "online")) {
+      return {
+        ok: true,
+        text: `${name} is already ${state}; no watch started.`,
+      };
+    }
+    const key = `${chatKey}\0${id}\0${state}`;
+    if (this.deviceWatches.has(key)) {
+      return {
+        ok: true,
+        text: `This chat is already watching for ${name} to go ${state}.`,
+      };
+    }
+    if (this.deviceWatches.size >= WATCH_DEVICE_MAX_ACTIVE) {
+      return {
+        ok: false,
+        text: `Too many device watches are active (${WATCH_DEVICE_MAX_ACTIVE}). Nothing new is being watched.`,
+      };
+    }
+    const seconds =
+      typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+        ? Math.min(Math.max(timeoutSec, 0), WATCH_DEVICE_MAX_SEC)
+        : WATCH_DEVICE_DEFAULT_SEC;
+    const deadline = Date.now() + seconds * 1000;
+    const finish = (prompt: string): void => {
+      this.deviceWatches.delete(key);
+      this.execJobs.notify(chatKey, `[device watch] ${prompt}`);
+    };
+    const tick = (): void => {
+      const current = this.registry.list().devices.find((d) => d.id === id);
+      if (!current) {
+        finish(`${name} was removed from the mesh during the watch.`);
+      } else if (current.online === (state === "online")) {
+        finish(`${name} is now ${state}.`);
+      } else if (Date.now() >= deadline) {
+        finish(
+          `${name} did not go ${state} within ${seconds}s; it is ${current.online ? "online" : "offline"}, last seen ${age(Date.now() - current.lastSeen)}. The watch has ended.`,
+        );
+      } else {
+        const timer = setTimeout(tick, this.deviceWaitPollMs);
+        timer.unref?.();
+        this.deviceWatches.set(key, timer);
+      }
+    };
+    const first = setTimeout(tick, this.deviceWaitPollMs);
+    first.unref?.();
+    this.deviceWatches.set(key, first);
+    return {
+      ok: true,
+      text: `Watching ${name}; this chat will be woken when it goes ${state}, or after ${seconds}s. A daemon restart drops the watch without a wake.`,
+    };
+  }
 
   /** `list_devices`: every mesh device with presence, battery, last-known
    *  position, and capabilities — the model's full view of the mesh. */
