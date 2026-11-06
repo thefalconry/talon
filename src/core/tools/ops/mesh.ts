@@ -12,7 +12,7 @@ const deviceParam = z
   .string()
   .optional()
   .describe(
-    "Device id, exact name, or unique name fragment (case/separator-insensitive; see list_devices). A fragment matching several devices errors unless exactly one is online — prefer the id when duplicates exist. Defaults to the most recently seen mobile mesh device.",
+    "Device id, exact name, unique name fragment (case/separator-insensitive; see list_devices), or tag:<name>. A fragment or tag matching several devices errors unless exactly one is online — prefer the id when duplicates exist. Defaults to the most recently seen mobile mesh device.",
   );
 
 export const meshTools: ToolDefinition[] = [
@@ -72,6 +72,19 @@ export const meshTools: ToolDefinition[] = [
         ),
     },
     execute: (params, bridge) => bridge("remove_device", params),
+    tag: "mesh",
+  },
+  {
+    name: "set_device_tags",
+    description:
+      'Replace a device\'s operator-assigned tags (e.g. "gpu", "build"); an empty list clears them. Any device parameter then accepts "tag:<name>". Several devices with one tag error unless exactly one is online. Devices cannot set their own tags.',
+    schema: {
+      device: z
+        .string()
+        .describe("Device id or name to tag (see list_devices)."),
+      tags: z.array(z.string()).describe("The complete new tag list."),
+    },
+    execute: (params, bridge) => bridge("set_device_tags", params),
     tag: "mesh",
   },
   {

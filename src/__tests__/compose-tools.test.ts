@@ -88,6 +88,7 @@ const ALL_TOOLS_ORDER = [
   "get_device_history",
   "ring_device",
   "remove_device",
+  "set_device_tags",
   "get_device_status",
   "device_exec",
   "device_computer",
