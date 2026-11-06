@@ -63,7 +63,21 @@ describe("agent context reaching chat-free actions", () => {
     g.clearContext(4242);
   });
 
-  it("leaves a number with no active turn as it is", async () => {
+  it("still hands over the string id once the chat's turn has ended", async () => {
+    const g = new Gateway();
+    g.setContext(4343, "d_ended_turn");
+    g.clearContext(4343);
+    await (
+      g as unknown as {
+        handleAction: (b: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).handleAction({ action: "list_devices", _chatId: "4343" });
+    expect(h.chatFree).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _chatId: "d_ended_turn" }),
+    );
+  });
+
+  it("leaves a number from a chat never seen as it is", async () => {
     const g = new Gateway();
     await (
       g as unknown as {

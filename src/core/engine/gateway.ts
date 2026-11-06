@@ -291,7 +291,7 @@ export class Gateway {
   private canonicalChatKey(rawChatId: string): string {
     const numericId = Number(rawChatId);
     if (rawChatId === "" || isNaN(numericId)) return rawChatId;
-    return this.loom.stringIdForNumeric(numericId) ?? rawChatId;
+    return this.loom.lastStringIdForNumeric(numericId) ?? rawChatId;
   }
 
   /**
