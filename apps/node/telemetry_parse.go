@@ -54,3 +54,22 @@ func parseUint64(raw string) (uint64, bool) {
 	}
 	return binary.LittleEndian.Uint64(sysctlPad(raw, 8)), true
 }
+
+// formatMemory and formatDisk build the Windows fields. They live here so
+// that their checks run on every platform. A zero total, or more free than
+// total, means the probe returned garbage, so the field is dropped.
+func formatMemory(free, total uint64) (string, bool) {
+	if total == 0 || free > total {
+		return "", false
+	}
+	return fmt.Sprintf("%s free of %s", formatBytes(free), formatBytes(total)), true
+}
+
+func formatDisk(free, total uint64, mount string) (string, bool) {
+	if total == 0 || free > total {
+		return "", false
+	}
+	return fmt.Sprintf(
+		"%s free of %s on %s", formatBytes(free), formatBytes(total), mount,
+	), true
+}
