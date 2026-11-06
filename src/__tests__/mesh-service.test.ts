@@ -2099,3 +2099,81 @@ describe("MeshService command hold across a reconnect", () => {
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
+
+describe("waitForDevice", () => {
+  /** Backdate a device past the presence grace period. */
+  function quiet() {
+    const now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now + 86_400_000);
+    return () => vi.restoreAllMocks();
+  }
+
+  it("returns at once when the state already holds", async () => {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    const r = await service.waitForDevice("phone", "online", 5);
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain("Pixel 9 is online");
+  });
+
+  it("wakes when a device comes back during the wait", async () => {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    const restore = quiet();
+    const waiting = service.waitForDevice("phone", "online", 5);
+    await new Promise((r) => setTimeout(r, 30));
+    restore();
+    await registerPhone(service);
+    const r = await waiting;
+    expect(r.ok).toBe(true);
+  });
+
+  it("times out with the current state, not success", async () => {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    const r = await service.waitForDevice("phone", "offline", 0.05);
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("did not go offline");
+    expect(r.text).toContain("it is online");
+  });
+
+  it("sees a device go offline", async () => {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    const restore = quiet();
+    const r = await service.waitForDevice("phone", "offline", 5);
+    restore();
+    expect(r.ok).toBe(true);
+  });
+
+  it("refuses a missing target and a bad state", async () => {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    expect((await service.waitForDevice(undefined)).ok).toBe(false);
+    expect((await service.waitForDevice("phone", "asleep")).ok).toBe(false);
+  });
+
+  it("stops when the device is removed mid-wait", async () => {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    const waiting = service.waitForDevice("phone", "offline", 5);
+    await new Promise((r) => setTimeout(r, 20));
+    await service.removeDevice("phone");
+    const r = await waiting;
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain("removed");
+  });
+
+  it("is reachable through the shared gateway action", async () => {
+    const service = await tempService({ deviceWaitPollMs: 5 });
+    await registerPhone(service);
+    setMeshService(service);
+    const r = await meshHandlers.wait_for_device!(
+      { action: "wait_for_device", device: "phone", timeout_sec: 1 },
+      1,
+      undefined,
+      "1",
+    );
+    expect(r).toMatchObject({ ok: true });
+  });
+});
