@@ -89,6 +89,9 @@ export type MeshTransport = {
 };
 
 /** Outcome of pinging one device (see {@link MeshService.pingAll}). */
+const WAIT_FOR_DEVICE_DEFAULT_SEC = 60;
+const WAIT_FOR_DEVICE_MAX_SEC = 300;
+
 export type MeshPingResult = {
   device: DeviceInfo;
   /** True when the device answered the probe (offline devices are false). */
@@ -108,6 +111,8 @@ export type MeshServiceOptions = {
   commandTimeoutMs?: number;
   /** How often a long command re-checks that its device is still present. */
   presenceWatchIntervalMs?: number;
+  /** How often `waitForDevice` re-reads presence. */
+  deviceWaitPollMs?: number;
   /**
    * How long an undelivered command (no transport has a live connection to
    * its device) waits for the device to reconnect before failing. Default
@@ -196,6 +201,7 @@ export class MeshService {
   private readonly pollIntervalMs: number;
   private readonly commandTimeoutMs: number;
   private readonly presenceWatchIntervalMs: number;
+  private readonly deviceWaitPollMs: number;
   private commandHoldMs: number;
   private loading: Promise<void> | null = null;
   /** Per-device credentials (null = shared-token-only mesh). */
@@ -216,6 +222,7 @@ export class MeshService {
       options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.presenceWatchIntervalMs =
       options.presenceWatchIntervalMs ?? PRESENCE_WATCH_INTERVAL_MS;
+    this.deviceWaitPollMs = options.deviceWaitPollMs ?? 2_000;
     this.commandHoldMs = options.commandHoldMs ?? DEFAULT_COMMAND_HOLD_MS;
     this.resolveNode = options.nodeBinaryResolver ?? resolveNodeBinary;
     this.files = new DeviceFiles({
@@ -623,6 +630,60 @@ export class MeshService {
   }
 
   // ── Model-facing tool surface ──────────────────────────────────────────────
+
+  /**
+   * `wait_for_device`: block until a device reaches a presence state, or the
+   * budget runs out. Presence comes from heartbeats, so "offline" lands one
+   * grace period after the device goes quiet. Requires an explicit target:
+   * waiting on a defaulted device could report success about the wrong one.
+   * The device is pinned by id at the start, so a name that later resolves
+   * elsewhere can't satisfy the wait.
+   */
+  async waitForDevice(
+    query: unknown,
+    state: unknown = "online",
+    timeoutSec?: unknown,
+  ): Promise<MeshToolResult> {
+    await this.load();
+    if (typeof query !== "string" || !query.trim()) {
+      return { ok: false, text: "wait_for_device needs a device id or name." };
+    }
+    if (state !== "online" && state !== "offline") {
+      return { ok: false, text: 'state must be "online" or "offline".' };
+    }
+    const resolved = this.resolveDevice(query);
+    if ("error" in resolved) return { ok: false, text: resolved.error };
+    const { id, name } = resolved.target;
+    const seconds =
+      typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+        ? Math.min(Math.max(timeoutSec, 0), WAIT_FOR_DEVICE_MAX_SEC)
+        : WAIT_FOR_DEVICE_DEFAULT_SEC;
+    const startedAt = Date.now();
+    const deadline = startedAt + seconds * 1000;
+    for (;;) {
+      const current = this.registry.list().devices.find((d) => d.id === id);
+      if (!current) {
+        return {
+          ok: false,
+          text: `${name} was removed from the mesh during the wait.`,
+        };
+      }
+      const waited = Math.round((Date.now() - startedAt) / 1000);
+      if (current.online === (state === "online")) {
+        return { ok: true, text: `${name} is ${state} (waited ${waited}s).` };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return {
+          ok: false,
+          text: `${name} did not go ${state} within ${seconds}s; it is ${current.online ? "online" : "offline"}, last seen ${age(Date.now() - current.lastSeen)}.`,
+        };
+      }
+      await new Promise((r) =>
+        setTimeout(r, Math.min(this.deviceWaitPollMs, remaining)),
+      );
+    }
+  }
 
   /** `list_devices`: every mesh device with presence, battery, last-known
    *  position, and capabilities — the model's full view of the mesh. */
