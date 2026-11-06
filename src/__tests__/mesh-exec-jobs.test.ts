@@ -93,6 +93,7 @@ describe("ExecJobTracker", () => {
     expect(poll).toHaveBeenCalledTimes(1);
     expect(wake).toHaveBeenCalledTimes(1);
     expect(wake.mock.calls[0]![1]).toContain("is gone");
+    expect(wake.mock.calls[0]![1]).not.toContain("..");
     expect(wake.mock.calls[0]![1]).not.toContain("may still be running");
     vi.useRealTimers();
   });

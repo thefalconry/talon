@@ -119,7 +119,7 @@ export class ExecJobTracker {
       this.finish(
         input,
         chatKey,
-        `Background job ${input.jobId} on ${input.deviceName} is gone (${input.cmd}): ${result?.message}. ` +
+        `Background job ${input.jobId} on ${input.deviceName} is gone (${input.cmd}): ${(result?.message ?? "").replace(/\.+$/, "")}. ` +
           `Its exit code and output are lost. A node restart stops its jobs, so don't assume the command finished.`,
       );
       return;
