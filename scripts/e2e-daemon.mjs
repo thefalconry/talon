@@ -193,6 +193,7 @@ async function checkPaired(label, token) {
     id: PAIRED,
     name: PAIRED,
     platform: "android",
+    appVersion: "0.0.0-e2e",
     capabilities: ["status"],
   });
   expectStatus(`${label}: paired device registers`, self.status, 200);
