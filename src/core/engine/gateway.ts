@@ -287,6 +287,13 @@ export class Gateway {
 
   // ── Action dispatch ────────────────────────────────────────────────────────
 
+  /** The bridge may carry a derived numeric id; a stored wake needs the string one. */
+  private canonicalChatKey(rawChatId: string): string {
+    const numericId = Number(rawChatId);
+    if (rawChatId === "" || isNaN(numericId)) return rawChatId;
+    return this.loom.stringIdForNumeric(numericId) ?? rawChatId;
+  }
+
   /**
    * Dispatch the actions that resolve without a chat, or `null` when the
    * request needs one after all.
@@ -306,13 +313,6 @@ export class Gateway {
    *     sub-agent calls still routes by an explicit `chat_id`, exactly as a
    *     heartbeat run does.
    */
-  /** The bridge may carry a derived numeric id; a stored wake needs the string one. */
-  private canonicalChatKey(rawChatId: string): string {
-    const numericId = Number(rawChatId);
-    if (rawChatId === "" || isNaN(numericId)) return rawChatId;
-    return this.loom.stringIdForNumeric(numericId) ?? rawChatId;
-  }
-
   private async dispatchWithoutChat(
     body: Record<string, unknown>,
     rawChatId: string,

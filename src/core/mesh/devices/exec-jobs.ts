@@ -25,7 +25,7 @@ type TrackInput = {
   deviceId: string;
   deviceName: string;
   cmd: string;
-  /** The chat that ran the command; absent or non-numeric means nobody to wake. */
+  /** The chat that ran the command; absent or not a chat id means nobody to wake. */
   wakeChatKey: unknown;
   /** Strips wrapper output the chat shouldn't see, e.g. teleport's cwd marker. */
   cleanOutput?: (text: string) => string;
