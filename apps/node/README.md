@@ -244,6 +244,20 @@ changes.
 On Unix, `SIGHUP` also reloads the node into whatever binary is on disk —
 handy for `systemctl reload`-style restarts after an out-of-band swap.
 
+## Long-running commands (`detachOnTimeout`, `exec_job`)
+
+`exec` with `detachOnTimeout: true` is not killed when `timeoutMs` lapses. It
+answers with `detached: true`, a `jobId` and the output so far, and keeps
+running. `exec_job` with that `jobId` returns its state and output (`action:
+"status"`, the default) or stops it (`action: "kill"`). Without the flag `exec`
+still kills at its budget.
+
+Jobs are held in memory: stopping the node kills them, and a job's result stays
+readable for an hour after it ends. At most 16 run at once (past that, a timeout
+kills as usual) and each stops after 24 hours. Output keeps the same head and
+tail cap as `exec`. A `disableExec` policy covers `exec_job` too. A self-update
+re-exec does not stop running jobs, and the new process cannot see them.
+
 ## Capabilities vs. the companion app
 
 Headless nodes do not advertise `locate` (no GPS) or `install_apk`

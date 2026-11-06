@@ -479,6 +479,29 @@ describe("loom context registry", () => {
     expect(loom.stringIdForNumeric(456)).toBeNull();
   });
 
+  it("remembers a chat's string id after its turn, without reporting it active", () => {
+    const loom = new Loom();
+    expect(loom.lastStringIdForNumeric(456)).toBeNull();
+
+    loom.acquireContext(456, "d_abc");
+    loom.releaseContext(456);
+
+    expect(loom.lastStringIdForNumeric(456)).toBe("d_abc");
+    expect(loom.stringIdForNumeric(456)).toBeNull();
+    expect(loom.hasActiveContext(456)).toBe(false);
+  });
+
+  it("drops the oldest remembered chat id at the bound", () => {
+    const loom = new Loom();
+    for (let i = 1; i <= 1025; i++) {
+      loom.acquireContext(i, `d_${i}`);
+      loom.releaseContext(i);
+    }
+    expect(loom.lastStringIdForNumeric(1)).toBeNull();
+    expect(loom.lastStringIdForNumeric(2)).toBe("d_2");
+    expect(loom.lastStringIdForNumeric(1025)).toBe("d_1025");
+  });
+
   it("resolves to the same Thread the Weaver serializes the turn on", () => {
     const loom = new Loom();
     const serial = loom.thread("chat:abc"); // runTurn keys here (params.chatId)

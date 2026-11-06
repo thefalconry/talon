@@ -9,6 +9,8 @@
  * differ (index.ts selects dynamically, cli.ts always uses terminal).
  */
 
+import { getMeshService } from "./core/mesh/index.js";
+import { makeExecJobWake } from "./core/mesh/devices/exec-job-wake.js";
 import { loadConfig, rebuildSystemPrompt } from "./core/config/index.js";
 import { initWorkspace } from "./core/vfs/workspace.js";
 import { loadSessions, resetSession } from "./storage/sessions.js";
@@ -735,6 +737,9 @@ function initWakeSubsystems(config: TalonConfig): void {
     execute: dispatcherExecute,
     ...(config.triggers ? { caps: config.triggers } : {}),
   });
+  // A device_exec that outlived its budget wakes its chat when the job ends.
+  getMeshService().execJobs.setWake(makeExecJobWake(dispatcherExecute));
+
   initAgents({
     execute: dispatcherExecute,
     ...(config.agents ? { caps: config.agents } : {}),

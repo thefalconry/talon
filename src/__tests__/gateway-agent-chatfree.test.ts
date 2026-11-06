@@ -48,4 +48,44 @@ describe("agent context reaching chat-free actions", () => {
     ).handleAction({ action: "send_message", _chatId: "agent:abc" });
     expect(r).toEqual({ ok: false, error: "No active chat context" });
   });
+
+  it("hands a chat-free action the chat's string id, not the derived number", async () => {
+    const g = new Gateway();
+    g.setContext(4242, "d_native_chat");
+    await (
+      g as unknown as {
+        handleAction: (b: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).handleAction({ action: "list_devices", _chatId: "4242" });
+    expect(h.chatFree).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _chatId: "d_native_chat" }),
+    );
+    g.clearContext(4242);
+  });
+
+  it("still hands over the string id once the chat's turn has ended", async () => {
+    const g = new Gateway();
+    g.setContext(4343, "d_ended_turn");
+    g.clearContext(4343);
+    await (
+      g as unknown as {
+        handleAction: (b: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).handleAction({ action: "list_devices", _chatId: "4343" });
+    expect(h.chatFree).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _chatId: "d_ended_turn" }),
+    );
+  });
+
+  it("leaves a number from a chat never seen as it is", async () => {
+    const g = new Gateway();
+    await (
+      g as unknown as {
+        handleAction: (b: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).handleAction({ action: "list_devices", _chatId: "352042062" });
+    expect(h.chatFree).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _chatId: "352042062" }),
+    );
+  });
 });

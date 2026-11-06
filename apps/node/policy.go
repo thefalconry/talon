@@ -68,7 +68,7 @@ func (p Policy) maxWriteBytes() int64 {
 func (p Policy) capabilities() []string {
 	out := make([]string, 0, len(nodeCapabilities)+len(platformCapabilities))
 	for _, c := range allCapabilities() {
-		if (c == "exec" && p.DisableExec) ||
+		if ((c == "exec" || c == "exec_job") && p.DisableExec) ||
 			(c == "update_node" && p.DisableUpdate) ||
 			(c == "computer" && p.DisableComputer) {
 			continue
@@ -110,7 +110,7 @@ var errPolicy = errors.New("refused by this host's talon-node policy")
 // mesh may never write (the node's config directory and binary).
 func (p Policy) check(name string, params map[string]any, protected []string) error {
 	switch name {
-	case "exec":
+	case "exec", "exec_job":
 		if p.DisableExec {
 			return fmt.Errorf("%w: exec is disabled", errPolicy)
 		}

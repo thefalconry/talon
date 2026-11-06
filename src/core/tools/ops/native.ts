@@ -50,7 +50,7 @@ export const nativeTools: ToolDefinition[] = [
     name: "bash",
     description:
       "Run a shell command. Runs on the daemon host, or ON the active teleport device if one is engaged. On a teleported device, `cd` persists across calls (a real working-directory session). " +
-      "Foreground runs are killed at timeout_sec — for streaming/never-ending commands (adb logcat, tail -f, dev servers, watchers) set background:true instead: the command is launched detached in its own process group with stdout+stderr captured to a log file, and the tool returns immediately with the pid + log path so you can poll the log and kill it when done. " +
+      'A foreground run still going at timeout_sec keeps running as a watched job, and the chat gets a wake-up when it ends (on_timeout:"kill" kills it instead; Windows hosts and devices without exec_job always kill). Locally its output moves to a log file; on a teleported device use device_exec_job to read or kill it. For streaming/never-ending commands (adb logcat, tail -f, dev servers, watchers) set background:true instead: the command is launched detached in its own process group with stdout+stderr captured to a log file, and the tool returns immediately with the pid + log path so you can poll the log and kill it when done. ' +
       `${NAMESPACE_DOC} Reach them by real path, e.g. \`ls ~/.talon/ns/home\` or \`cat ~/.talon/ns/proc/events | jq\` (proc/ and plugins/ need the FUSE layer mounted).`,
     schema: {
       command: z.string().describe("The shell command to run."),
@@ -64,7 +64,13 @@ export const nativeTools: ToolDefinition[] = [
         .number()
         .optional()
         .describe(
-          "Max seconds before a foreground command is killed (default 60, max 300). Ignored with background:true.",
+          "Seconds a foreground command may hold this call (default 60, max 300). Ignored with background:true.",
+        ),
+      on_timeout: z
+        .enum(["detach", "kill"])
+        .optional()
+        .describe(
+          "What happens to a foreground command at timeout_sec. detach (default) keeps it running as a watched job; kill ends it and returns the partial output.",
         ),
       background: z
         .boolean()

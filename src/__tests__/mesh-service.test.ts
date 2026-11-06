@@ -62,6 +62,7 @@ describe("mesh tool availability", () => {
         "ring_device",
         "get_device_status",
         "device_exec",
+        "device_exec_job",
         "device_list_dir",
         "device_read_file",
         "device_write_file",
@@ -616,6 +617,116 @@ describe("MeshService exec + filesystem channel", () => {
     expect(res.text).toContain("[Pixel 9 via shizuku] exit 0");
     expect(res.text).toContain("hello world");
     expect(seen[0]).toMatchObject({ cmd: "echo hello world", cwd: "/sdcard" });
+  });
+
+  it("asks only exec_job devices to detach, and reports the job", async () => {
+    const service = await tempService({ commandTimeoutMs: 2_000 });
+    await service.register({
+      id: "node",
+      name: "Mini",
+      platform: "macos",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    await service.register({
+      id: "phone",
+      name: "Pixel 9",
+      platform: "android",
+      appVersion: "1.0.0",
+      capabilities: ["exec"],
+    });
+    const seen: Array<Record<string, unknown>> = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          seen.push(cmd.params);
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data:
+              cmd.deviceId === "node"
+                ? { detached: true, jobId: "job_1", stdout: "partial\n" }
+                : { stdout: "", stderr: "", exitCode: 0 },
+          });
+        }),
+    });
+
+    const res = await service.execOnDevice("node", "sleep 999", undefined, 1);
+    expect(seen[0]).toMatchObject({ detachOnTimeout: true });
+    expect(res.ok).toBe(true);
+    expect(res.text).toContain("background job job_1");
+    expect(res.text).toContain("partial");
+    expect(res.text).toContain("No chat to wake");
+
+    await service.execOnDevice("phone", "true");
+    expect(seen[1]).not.toHaveProperty("detachOnTimeout");
+    service.execJobs.stop();
+  });
+
+  it("hides teleport's cwd marker when a job's output is read back", async () => {
+    const service = await tempService({ commandTimeoutMs: 2_000 });
+    await service.register({
+      id: "node",
+      name: "Mini",
+      platform: "macos",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data: {
+              running: false,
+              exitCode: 0,
+              stdout: "built\n__TALON_CWD__/tmp/x__TALON_CWD_END__",
+              stderr: "",
+            },
+          });
+        }),
+    });
+
+    const res = await service.execJobOnDevice("node", "job_1");
+    expect(res.text).toContain("built");
+    expect(res.text).not.toContain("__TALON_CWD");
+    expect(res.text).not.toContain("/tmp/x");
+  });
+
+  it("keeps a job's own output that merely contains the cwd marker", async () => {
+    const service = await tempService();
+    await service.register({
+      id: "node",
+      name: "Node",
+      platform: "linux",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data: {
+              running: false,
+              exitCode: 0,
+              stdout: "grep hit: __TALON_CWD__ in cwd-marker.ts\nline after\n",
+              stderr: "",
+            },
+          });
+        }),
+    });
+
+    const res = await service.execJobOnDevice("node", "job_1");
+    expect(res.text).toContain("line after");
   });
 
   it("reassembles a chunked file read off the device", async () => {

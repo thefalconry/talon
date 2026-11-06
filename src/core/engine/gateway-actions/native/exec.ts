@@ -13,6 +13,7 @@ import { stat as fsStat } from "node:fs/promises";
 import { getTeleport } from "../../../mesh/devices/teleport.js";
 import { createOutputCapture } from "../../../../util/exec-output.js";
 import { bashBackground } from "./exec-background.js";
+import { detachLocalRun } from "./exec-detach.js";
 import { bashTeleported } from "./exec-remote.js";
 import { resolvePathParam } from "./params.js";
 import { renderExec, type Result } from "./results.js";
@@ -30,16 +31,26 @@ const TIMEOUT_HINT =
   "`timeout 30 …`, `head -n 200`.)";
 
 export const execHandlers: SharedActionHandlers = {
-  native_bash: (body, chatId) =>
-    bash(chatId, body.command, body.cwd, body.timeout_sec, body.background),
+  native_bash: (body, chatId, _backend, chatKey) =>
+    bash(
+      chatId,
+      chatKey,
+      body.command,
+      body.cwd,
+      body.timeout_sec,
+      body.background,
+      body.on_timeout,
+    ),
 };
 
 async function bash(
   chatId: number,
+  chatKey: string,
   command: unknown,
   cwd: unknown,
   timeoutSec: unknown,
   background?: unknown,
+  onTimeout?: unknown,
 ): Promise<Result> {
   const cmd = typeof command === "string" ? command : "";
   if (!cmd.trim()) return { ok: false, text: "No command given." };
@@ -73,14 +84,25 @@ async function bash(
     }
     return bashBackground(cmd, dir);
   }
-  if (active) return bashTeleported(chatId, active.deviceId, cmd, timeoutMs);
-  return bashLocal(cmd, dir, timeoutMs);
+  if (active) {
+    return bashTeleported(
+      chatId,
+      active.deviceId,
+      cmd,
+      timeoutMs,
+      onTimeout !== "kill",
+      chatKey,
+    );
+  }
+  return bashLocal(cmd, dir, timeoutMs, chatKey, onTimeout !== "kill");
 }
 
 function bashLocal(
   cmd: string,
   cwd: string | undefined,
   timeoutMs: number,
+  chatKey: string,
+  detachAtBudget: boolean,
 ): Promise<Result> {
   return new Promise((resolvePromise) => {
     // detached → own process group on POSIX, so a timeout can kill the whole
@@ -133,6 +155,31 @@ function bashLocal(
       return { ok: false, text: `${body}\n${TIMEOUT_HINT}` };
     };
     const timer = setTimeout(() => {
+      // Windows has no process group to stop the job with later, so it keeps
+      // the kill.
+      if (detachAtBudget && detached && child.pid) {
+        child.stdout.off("data", stdout.push);
+        child.stderr.off("data", stderr.push);
+        try {
+          finish(
+            detachLocalRun({
+              child: child as typeof child & { pid: number },
+              cmd,
+              chatKey,
+              budgetMs: timeoutMs,
+              stdoutSoFar: stdout.value(),
+              stderrSoFar: stderr.value(),
+              killTree,
+            }),
+          );
+          return;
+        } catch {
+          // Can't set up the log: fall through to the kill rather than leave
+          // a command running that nothing can see.
+          child.stdout.on("data", stdout.push);
+          child.stderr.on("data", stderr.push);
+        }
+      }
       killed = true;
       killTree("SIGTERM");
       killTimer = setTimeout(() => killTree("SIGKILL"), KILL_GRACE_MS);
@@ -152,6 +199,7 @@ function bashLocal(
       finish({ ok: false, text: `Failed to run: ${err.message}` });
     });
     child.on("close", (code) => {
+      if (settled) return;
       if (killed) {
         finish(timedOutResult());
         return;

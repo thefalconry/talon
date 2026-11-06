@@ -80,6 +80,11 @@ class MeshService {
     'download_file',
   ];
 
+  /// Reads or kills a command that already passed the approval gate as `exec`.
+  /// It runs nothing new, and the daemon polls it every 15s, so it stays out
+  /// of [needsApproval]: gating it would prompt the user on every poll.
+  static const String execJobCapability = 'exec_job';
+
   /// Whether device control (exec/fs + streamed transfers) is live: the
   /// user's switch, AND not a Flatpak build. Inside the sandbox those commands
   /// would only ever reach the sandbox itself — never the host the daemon
@@ -97,6 +102,7 @@ class MeshService {
     if (deviceControlAllowed(prefs, sandboxed: sandboxed)) ...[
       ...DeviceExec.capabilities,
       ...transferCapabilities,
+      execJobCapability,
     ],
   ];
 
