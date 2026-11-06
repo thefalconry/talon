@@ -54,7 +54,7 @@ import {
   computerCommandParams,
   formatComputerResult,
 } from "./computer.js";
-import { MeshRegistry } from "./registry.js";
+import { MeshRegistry, normalizeTags } from "./registry.js";
 import {
   auditErrorText,
   auditIssuer,
@@ -706,6 +706,33 @@ export class MeshService {
    * location + history). Destructive, so it requires an explicit target —
    * no "default to the most recent device" like the read tools.
    */
+  async setDeviceTags(query: unknown, tags: unknown): Promise<MeshToolResult> {
+    await this.load();
+    if (typeof query !== "string" || !query.trim()) {
+      return {
+        ok: false,
+        text: "set_device_tags needs an explicit device id or name. See list_devices.",
+      };
+    }
+    const normalized = normalizeTags(tags);
+    if (!normalized) {
+      return {
+        ok: false,
+        text: "tags must be a list of up to 16 labels of at most 32 characters: letters, digits, '-' or '_', starting with a letter or digit.",
+      };
+    }
+    const resolved = this.resolveDevice(query);
+    if ("error" in resolved) return { ok: false, text: resolved.error };
+    const updated = await this.registry.setTags(resolved.target.id, normalized);
+    if (!updated) return { ok: false, text: this.noSuchDevice(query).text };
+    return {
+      ok: true,
+      text: normalized.length
+        ? `${updated.name} [id: ${updated.id}] tags: ${normalized.join(", ")}. Address with "tag:<name>".`
+        : `Cleared the tags on ${updated.name} [id: ${updated.id}].`,
+    };
+  }
+
   async removeDevice(query?: unknown): Promise<MeshToolResult> {
     await this.load();
     if (typeof query !== "string" || !query.trim()) {
@@ -1171,6 +1198,15 @@ export class MeshService {
         return undefined;
       };
 
+      if (q.startsWith("tag:")) {
+        const tag = q.slice(4).trim();
+        return (
+          pick(devices.filter((d) => d.tags?.includes(tag))) ?? {
+            error: `No device has the tag "${tag}". See list_devices.`,
+          }
+        );
+      }
+
       const exactMatch = pick(devices.filter((d) => fold(d.name) === folded));
       if (exactMatch) return exactMatch;
 
@@ -1219,6 +1255,7 @@ export class MeshService {
       `${device.name} [id: ${device.id}] (${device.platform}${device.arch ? `/${device.arch}` : ""})`,
       device.online ? "online" : "offline",
       `last seen ${age(Date.now() - device.lastSeen)}`,
+      ...(device.tags?.length ? [`tags: ${device.tags.join(", ")}`] : []),
     ];
     if (typeof device.battery === "number") {
       parts.push(`${device.battery}%${device.charging ? " charging" : ""}`);
