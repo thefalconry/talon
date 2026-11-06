@@ -2,7 +2,10 @@
 /**
  * End-to-end smoke of a real daemon process: boot from source with a
  * throwaway TALON_HOME (native bridge on localhost, stub Claude binary, no
- * external frontends), check bridge auth, restart it, check it again.
+ * external frontends), check bridge auth, drive a scripted device through
+ * credential upgrade, registration and device_exec, restart, check it all again.
+ * The device answers commands itself, so this covers the daemon's half of the
+ * protocol, not talon-node's executor.
  * Any failed step exits non-zero. The daemon log is left at $E2E_LOG.
  *
  * Refuses to run where a daemon already holds the gateway port: the
@@ -13,6 +16,7 @@ import {
   createWriteStream,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +25,8 @@ import { join, resolve } from "node:path";
 const PORT = 19899;
 const TOKEN = "e2e-throwaway-token-not-a-secret-0000000000000";
 const BASE = `http://127.0.0.1:${PORT}`;
+const GATEWAY = "http://127.0.0.1:19876";
+const DEVICE = "e2e-device";
 const root = mkdtempSync(join(tmpdir(), "talon-e2e-"));
 const home = join(root, "talon");
 const log = process.env.E2E_LOG ?? join(root, "daemon.log");
@@ -35,6 +41,122 @@ function fail(step, detail) {
 async function get(path, token) {
   const headers = token ? { Authorization: `Bearer ${token}` } : {};
   return fetch(BASE + path, { headers, signal: AbortSignal.timeout(3000) });
+}
+
+async function post(path, token, body) {
+  return fetch(BASE + path, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(5000),
+  });
+}
+
+function expectStatus(step, got, want) {
+  if (got !== want) fail(step, `got ${got}, want ${want}`);
+  console.log(`ok ${step} -> ${got}`);
+}
+
+/** Call an agent tool's action the way the MCP tool server does. */
+async function action(body) {
+  const token = readFileSync(
+    join(home, "keys", "gateway-token"),
+    "utf8",
+  ).trim();
+  const res = await fetch(`${GATEWAY}/action`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(40_000),
+  });
+  if (!res.ok) fail(`action ${body.action}`, `HTTP ${res.status}`);
+  return res.json();
+}
+
+async function registerDevice(label, token) {
+  const res = await post("/devices/register", token, {
+    id: DEVICE,
+    name: DEVICE,
+    platform: "linux",
+    arch: "amd64",
+    appVersion: "0.0.0-e2e",
+    capabilities: ["status", "exec"],
+  });
+  expectStatus(`${label}: register as itself`, res.status, 200);
+}
+
+/** Hold the device's event stream open, answering each exec with its cmd. */
+async function connectDevice(token) {
+  const abort = new AbortController();
+  const res = await fetch(`${BASE}/events?deviceId=${DEVICE}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: abort.signal,
+  });
+  if (!res.ok) fail("device stream", `HTTP ${res.status}`);
+  const done = (async () => {
+    let buffer = "";
+    const decoder = new TextDecoder();
+    for await (const chunk of res.body) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop();
+      for (const frame of frames) {
+        if (!frame.startsWith("data: ")) continue;
+        const event = JSON.parse(frame.slice(6));
+        if (event.kind !== "device_command") continue;
+        await post("/devices/command-result", token, {
+          commandId: event.id,
+          deviceId: DEVICE,
+          ok: true,
+          data: { exitCode: 0, stdout: event.params.cmd, stderr: "" },
+        });
+      }
+    }
+  })().catch(() => {});
+  return async () => {
+    abort.abort();
+    await done;
+  };
+}
+
+async function checkExec(label, token) {
+  const disconnect = await connectDevice(token);
+  const nonce = `nonce-${label.replace(/\W/g, "")}-${Date.now()}`;
+  const ran = await action({
+    action: "device_exec",
+    device: DEVICE,
+    cmd: nonce,
+    timeout_sec: 20,
+  });
+  if (!ran.ok || !String(ran.text).includes(nonce)) {
+    fail(`${label}: device_exec`, JSON.stringify(ran));
+  }
+  console.log(`ok ${label}: device_exec round trip`);
+  await disconnect();
+}
+
+async function checkDevice(label, token) {
+  await registerDevice(label, token);
+  const other = await post("/devices/register", token, {
+    id: "someone-else",
+    name: "x",
+    platform: "linux",
+  });
+  expectStatus(`${label}: register as another device`, other.status, 403);
+  const fleet = await get("/devices", token);
+  expectStatus(`${label}: device token on /devices`, fleet.status, 403);
+  const listed = await (await get("/devices", TOKEN)).json();
+  if (!JSON.stringify(listed).includes(DEVICE)) {
+    fail(`${label}: fleet`, JSON.stringify(listed));
+  }
+  console.log(`ok ${label}: device in fleet`);
+  await checkExec(label, token);
 }
 
 async function gatewayTaken() {
@@ -129,9 +251,18 @@ writeFileSync(
 
 boot();
 await checkBridge("first boot");
+const upgrade = await post("/auth/upgrade", TOKEN, {
+  deviceId: DEVICE,
+  client: "node",
+});
+expectStatus("upgrade shared token", upgrade.status, 200);
+const { token: deviceToken } = await upgrade.json();
+if (!deviceToken || deviceToken === TOKEN) fail("upgrade", "no new token");
+await checkDevice("first boot", deviceToken);
 await stop();
 boot();
 await checkBridge("after restart");
+await checkDevice("after restart", deviceToken);
 await stop();
 console.log("e2e-daemon passed");
 process.exit(0);
