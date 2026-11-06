@@ -55,14 +55,27 @@ describe("ExecJobTracker", () => {
     tracker.stop();
   });
 
-  it("does not watch without a numeric chat to wake", () => {
+  it("does not watch without a chat to wake", () => {
     const tracker = new ExecJobTracker(10);
     tracker.setWake(vi.fn());
     const poll = vi.fn();
-    for (const key of [undefined, "0", "agent:abc"]) {
+    for (const key of [undefined, "0", "", "agent:abc", "heartbeat", "dream"]) {
       expect(tracker.track({ ...base, wakeChatKey: key, poll })).toBe(false);
     }
     expect(poll).not.toHaveBeenCalled();
+  });
+
+  it("wakes a chat on any frontend under its string id", () => {
+    const tracker = new ExecJobTracker(10);
+    tracker.setWake(vi.fn());
+    for (const key of [
+      "d_17_x",
+      "wa_dm_353",
+      "teams_chat_19:a",
+      "discord_dm_1",
+    ]) {
+      expect(tracker.canNotify(key)).toBe(true);
+    }
   });
 
   it("says the outcome is unknown after repeated failed polls", async () => {

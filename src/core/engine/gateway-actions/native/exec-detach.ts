@@ -26,7 +26,8 @@ const TAIL_CHARS = 2_000;
 type DetachInput = {
   child: ChildProcess & { pid: number };
   cmd: string;
-  chatId: number;
+  /** The dispatcher string id, so the wake lands in the chat that ran it. */
+  chatKey: string;
   budgetMs: number;
   /** Everything captured before the budget ran out. */
   stdoutSoFar: string;
@@ -87,7 +88,7 @@ export function detachLocalRun(input: DetachInput): Result {
       : `finished, exit ${code ?? signal ?? "?"}`;
     const trimmed = tail.trimEnd();
     getMeshService().execJobs.notify(
-      String(input.chatId),
+      input.chatKey,
       [
         `Background bash pid ${child.pid} ${outcome}: ${cmd}`,
         ...(trimmed ? [`--- output tail ---\n${trimmed}`] : []),
@@ -102,7 +103,7 @@ export function detachLocalRun(input: DetachInput): Result {
     (stream as unknown as { unref?: () => void } | null)?.unref?.();
   }
 
-  const woken = getMeshService().execJobs.canNotify(String(input.chatId));
+  const woken = getMeshService().execJobs.canNotify(input.chatKey);
   return {
     ok: true,
     text: [

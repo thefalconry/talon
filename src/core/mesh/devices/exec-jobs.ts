@@ -39,6 +39,13 @@ function tail(text: string): string {
     : trimmed;
 }
 
+/**
+ * Chat ids of the frontends. Listed, not "anything but agent:", because a
+ * background run's label (heartbeat, dream, agent:...) is not a chat and a
+ * wake sent to one would start a session nobody reads.
+ */
+const WAKEABLE_CHAT_KEY = /^(-?\d+$|d_|wa_dm_|wa_group_|teams_|discord_|t_)/;
+
 export class ExecJobTracker {
   private wake: ExecJobWake | null = null;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -52,7 +59,9 @@ export class ExecJobTracker {
 
   /** Whether notify would reach a chat with this key. */
   canNotify(chatKey: string): boolean {
-    return /^-?\d+$/.test(chatKey) && chatKey !== "0" && this.wake !== null;
+    return (
+      WAKEABLE_CHAT_KEY.test(chatKey) && chatKey !== "0" && this.wake !== null
+    );
   }
 
   /** Wake a chat directly, for a job the daemon watches itself. */

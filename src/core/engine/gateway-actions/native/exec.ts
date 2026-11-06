@@ -31,9 +31,10 @@ const TIMEOUT_HINT =
   "`timeout 30 …`, `head -n 200`.)";
 
 export const execHandlers: SharedActionHandlers = {
-  native_bash: (body, chatId) =>
+  native_bash: (body, chatId, _backend, chatKey) =>
     bash(
       chatId,
+      chatKey,
       body.command,
       body.cwd,
       body.timeout_sec,
@@ -44,6 +45,7 @@ export const execHandlers: SharedActionHandlers = {
 
 async function bash(
   chatId: number,
+  chatKey: string,
   command: unknown,
   cwd: unknown,
   timeoutSec: unknown,
@@ -89,16 +91,17 @@ async function bash(
       cmd,
       timeoutMs,
       onTimeout !== "kill",
+      chatKey,
     );
   }
-  return bashLocal(cmd, dir, timeoutMs, chatId, onTimeout !== "kill");
+  return bashLocal(cmd, dir, timeoutMs, chatKey, onTimeout !== "kill");
 }
 
 function bashLocal(
   cmd: string,
   cwd: string | undefined,
   timeoutMs: number,
-  chatId: number,
+  chatKey: string,
   detachAtBudget: boolean,
 ): Promise<Result> {
   return new Promise((resolvePromise) => {
@@ -162,7 +165,7 @@ function bashLocal(
             detachLocalRun({
               child: child as typeof child & { pid: number },
               cmd,
-              chatId,
+              chatKey,
               budgetMs: timeoutMs,
               stdoutSoFar: stdout.value(),
               stderrSoFar: stderr.value(),

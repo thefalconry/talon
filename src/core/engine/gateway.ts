@@ -306,6 +306,13 @@ export class Gateway {
    *     sub-agent calls still routes by an explicit `chat_id`, exactly as a
    *     heartbeat run does.
    */
+  /** The bridge may carry a derived numeric id; a stored wake needs the string one. */
+  private canonicalChatKey(rawChatId: string): string {
+    const numericId = Number(rawChatId);
+    if (rawChatId === "" || isNaN(numericId)) return rawChatId;
+    return this.loom.stringIdForNumeric(numericId) ?? rawChatId;
+  }
+
   private async dispatchWithoutChat(
     body: Record<string, unknown>,
     rawChatId: string,
@@ -324,7 +331,10 @@ export class Gateway {
       let result = agentContext
         ? ((await handleAgentContextAction(body, rawChatId)) ??
           (isChatFreeAction(action) ? await handleChatFreeAction(body) : null))
-        : await handleChatFreeAction(body);
+        : await handleChatFreeAction({
+            ...body,
+            _chatId: this.canonicalChatKey(rawChatId),
+          });
       if (result) {
         logDebug("gateway", `${action} ${where} ${Date.now() - t0}ms`);
         if (agentContext && typeof result === "object") {

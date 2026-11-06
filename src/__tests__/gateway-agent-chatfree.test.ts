@@ -48,4 +48,30 @@ describe("agent context reaching chat-free actions", () => {
     ).handleAction({ action: "send_message", _chatId: "agent:abc" });
     expect(r).toEqual({ ok: false, error: "No active chat context" });
   });
+
+  it("hands a chat-free action the chat's string id, not the derived number", async () => {
+    const g = new Gateway();
+    g.setContext(4242, "d_native_chat");
+    await (
+      g as unknown as {
+        handleAction: (b: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).handleAction({ action: "list_devices", _chatId: "4242" });
+    expect(h.chatFree).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _chatId: "d_native_chat" }),
+    );
+    g.clearContext(4242);
+  });
+
+  it("leaves a number with no active turn as it is", async () => {
+    const g = new Gateway();
+    await (
+      g as unknown as {
+        handleAction: (b: Record<string, unknown>) => Promise<unknown>;
+      }
+    ).handleAction({ action: "list_devices", _chatId: "352042062" });
+    expect(h.chatFree).toHaveBeenLastCalledWith(
+      expect.objectContaining({ _chatId: "352042062" }),
+    );
+  });
 });

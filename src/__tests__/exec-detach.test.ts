@@ -30,7 +30,7 @@ describe.skipIf(process.platform === "win32")("detachLocalRun", () => {
     const res = detachLocalRun({
       child,
       cmd: "the-command",
-      chatId: 42,
+      chatKey: "42",
       budgetMs: 1000,
       stdoutSoFar: "early-line\n",
       stderrSoFar: "",
@@ -55,7 +55,7 @@ describe.skipIf(process.platform === "win32")("detachLocalRun", () => {
     const res = detachLocalRun({
       child,
       cmd: "x",
-      chatId: 0,
+      chatKey: "0",
       budgetMs: 1000,
       stdoutSoFar: "",
       stderrSoFar: "",
@@ -72,7 +72,7 @@ describe.skipIf(process.platform === "win32")("detachLocalRun", () => {
     detachLocalRun({
       child,
       cmd: "spam",
-      chatId: 42,
+      chatKey: "42",
       budgetMs: 1000,
       stdoutSoFar: "",
       stderrSoFar: "",
@@ -90,7 +90,7 @@ describe.skipIf(process.platform === "win32")("detachLocalRun", () => {
     detachLocalRun({
       child,
       cmd: "sleeper",
-      chatId: 42,
+      chatKey: "42",
       budgetMs: 1000,
       stdoutSoFar: "",
       stderrSoFar: "",

@@ -23,6 +23,7 @@ import {
   initDispatcher,
   execute as dispatcherExecute,
 } from "./core/engine/dispatcher.js";
+import { numericChatIdFor } from "./core/frontend-runtime/chat-id.js";
 import { bus } from "./core/bus/index.js";
 import { appendToJournal } from "./storage/journal.js";
 import { initPulse, resetPulseTimer } from "./core/background/pulse/pulse.js";
@@ -740,7 +741,7 @@ function initWakeSubsystems(config: TalonConfig): void {
   getMeshService().execJobs.setWake((chatKey, prompt) => {
     void dispatcherExecute({
       chatId: chatKey,
-      numericChatId: Number(chatKey),
+      numericChatId: numericChatIdFor(chatKey),
       prompt,
       senderName: "Device",
       isGroup: false,

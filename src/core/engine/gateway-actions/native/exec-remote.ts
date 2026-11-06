@@ -31,6 +31,8 @@ export async function bashTeleported(
   timeoutMs: number,
   /** Keep the command running past its budget, on devices that can. */
   detachAtBudget = false,
+  /** The chat to wake when a detached job ends. */
+  chatKey = String(chatId),
 ): Promise<Result> {
   const mesh = getMeshService();
   const detach = detachAtBudget && (await mesh.canDetachExec(deviceId));
@@ -56,7 +58,7 @@ export async function bashTeleported(
     result,
     cmd,
     timeoutMs,
-    String(chatId),
+    chatKey,
     stripCwdMarker,
   );
   if (detached !== null) {
