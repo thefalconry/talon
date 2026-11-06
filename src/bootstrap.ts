@@ -10,6 +10,7 @@
  */
 
 import { getMeshService } from "./core/mesh/index.js";
+import { makeExecJobWake } from "./core/mesh/devices/exec-job-wake.js";
 import { loadConfig, rebuildSystemPrompt } from "./core/config/index.js";
 import { initWorkspace } from "./core/vfs/workspace.js";
 import { loadSessions, resetSession } from "./storage/sessions.js";
@@ -23,7 +24,6 @@ import {
   initDispatcher,
   execute as dispatcherExecute,
 } from "./core/engine/dispatcher.js";
-import { numericChatIdFor } from "./core/frontend-runtime/chat-id.js";
 import { bus } from "./core/bus/index.js";
 import { appendToJournal } from "./storage/journal.js";
 import { initPulse, resetPulseTimer } from "./core/background/pulse/pulse.js";
@@ -39,7 +39,7 @@ import {
 import { initAgents } from "./core/agents/index.js";
 import { initDream, maybeStartDream } from "./core/background/dream/index.js";
 import { initHeartbeat } from "./core/background/heartbeat/index.js";
-import { log, logWarn, logDebug, logError } from "./util/log.js";
+import { log, logWarn, logDebug } from "./util/log.js";
 import { bootPhase } from "./core/daemon/boot-timer.js";
 import { mapConcurrent } from "./util/concurrency.js";
 import type { TalonConfig } from "./core/config/index.js";
@@ -738,18 +738,7 @@ function initWakeSubsystems(config: TalonConfig): void {
     ...(config.triggers ? { caps: config.triggers } : {}),
   });
   // A device_exec that outlived its budget wakes its chat when the job ends.
-  getMeshService().execJobs.setWake((chatKey, prompt) => {
-    void dispatcherExecute({
-      chatId: chatKey,
-      numericChatId: numericChatIdFor(chatKey),
-      prompt,
-      senderName: "Device",
-      isGroup: false,
-      source: "agent",
-    }).catch((err: unknown) => {
-      logError("mesh", `exec job wake failed for chat ${chatKey}`, err);
-    });
-  });
+  getMeshService().execJobs.setWake(makeExecJobWake(dispatcherExecute));
 
   initAgents({
     execute: dispatcherExecute,
