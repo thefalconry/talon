@@ -7,15 +7,15 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { getSession } from "../../storage/sessions.js";
-import { log, logWarn } from "../../util/log.js";
-import { getConfig } from "./state.js";
-import { buildSdkOptions } from "./options.js";
-import { prepareSystemPrompt } from "../runtime/index.js";
+import { getSession } from "../../../storage/sessions.js";
+import { log, logWarn } from "../../../util/log.js";
+import { getConfig } from "../state.js";
+import { buildSdkOptions } from "../options.js";
+import { prepareSystemPrompt } from "../../runtime/index.js";
 import {
   DEFAULT_CLAUDE_ACCOUNT,
   type ClaudeRunAccount,
-} from "./accounts/account.js";
+} from "../accounts/account.js";
 
 export async function warmSession(
   chatId: string,

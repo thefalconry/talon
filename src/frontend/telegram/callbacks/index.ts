@@ -13,6 +13,8 @@
  *   - `whatsapp` — `whatsapp:*` (WhatsApp link panel, admin only)
  *   - `backup`   — `backup:*` (the /backup panel + restore confirmation, admin only)
  *   - `usage-reset` — `ureset:*` (spend a banked limit reset, admin DM only)
+ *   - inline choice — `ichoice:*` (a core question, e.g. idle compaction's
+ *     wait-or-abort; core/engine/inline-choice.ts)
  *
  * `registerCallbacks` installs one `callback_query:data` listener that
  * dispatches on the data prefix, preserving the original order and the
@@ -33,6 +35,11 @@ import { handleAuthCallback } from "./auth.js";
 import { handleWhatsAppCallback } from "./whatsapp.js";
 import { handleBackupCallback } from "./backup.js";
 import { handleUsageResetCallback } from "./usage-reset.js";
+import { answerCallbackQuerySafe } from "./query.js";
+import {
+  INLINE_CHOICE_PREFIX,
+  resolveInlineChoice,
+} from "../../../core/engine/inline-choice.js";
 
 export { answerCallbackQuerySafe } from "./query.js";
 
@@ -46,6 +53,16 @@ export function registerCallbacks(
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
     const cid = String(ctx.chat?.id ?? ctx.from?.id);
+
+    // A core question's button (never a turn: the click IS the answer).
+    if (data.startsWith(INLINE_CHOICE_PREFIX)) {
+      const answered = resolveInlineChoice(data);
+      await answerCallbackQuerySafe(
+        ctx,
+        answered ? undefined : { text: "To pytanie jest już nieaktualne." },
+      );
+      return;
+    }
 
     // Handle /settings callbacks (effort, pulse, done). Model selection
     // is intentionally NOT here — that lives entirely under /model now.
