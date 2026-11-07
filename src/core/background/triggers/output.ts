@@ -10,6 +10,7 @@ import {
   FIRE_PAYLOAD_MAX_BYTES,
 } from "../../../storage/triggers.js";
 import { logError } from "../../../util/log.js";
+import { dispatchIsolatedWake, isIsolated } from "./isolated.js";
 import {
   depsHolder,
   logStreams,
@@ -113,6 +114,17 @@ export async function fireWake(
   // model — show "signalled" so downstream handling can't mistake a mid-run
   // event for terminal completion.
   const promptStatus = terminal ? status : "signalled";
+
+  // Isolated mode: hand the wake to a one-shot job instead of resuming the
+  // chat session. The lane coalesces bursts; failures are noticed there.
+  if (isIsolated(t)) {
+    await dispatchIsolatedWake(t, {
+      status: promptStatus,
+      payload: trimmed,
+      at: Date.now(),
+    });
+    return;
+  }
 
   const header = `[Trigger "${t.name}" (${t.id}) ${promptStatus}]`;
   const body = trimmed ? `${header}\n\n${trimmed}` : `${header}\n\n(no output)`;

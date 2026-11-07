@@ -57,6 +57,20 @@ shutdown/crash are respawned (not ones that exited on their own), the
 script must be safe to re-run from scratch, and timeout_seconds is ignored
 (persistent triggers run until cancelled or until Talon shuts down).
 
+Wake mode. By default (mode="chat") every wake-up resumes THIS chat's session,
+so the handling turn sees the whole conversation — and pays to re-read it.
+For frequent, mechanical events set mode="isolated": each wake then runs as an
+isolated one-shot job (like a cron "query" job) — its own session, NO chat
+history, the event payload as the task and "instructions" as its system brief
+(e.g. "Follow skill X. Message the user only if Y."). The isolated run reaches
+the chat only by calling the messaging tools with this chat's chat_id; if it
+sends nothing, the chat sees nothing. It may run on a cheaper model or another
+provider (model/provider, same rules as create_cron_job). One run per trigger
+at a time: fires that arrive during a run are coalesced into one follow-up run
+(duplicates collapsed, at most 20 queued). A skipped/failed run posts one
+short notice to the chat (at most every 30 min). Use chat mode when the wake
+needs conversation context; isolated when the instructions are self-contained.
+
 Per-chat cap on active triggers (default 5; config triggers.maxActivePerChat,
 with an optional separate triggers.maxPersistentPerChat budget).`;
 
@@ -106,7 +120,35 @@ export const triggerTools: ToolDefinition[] = [
         .string()
         .optional()
         .describe(
-          "Optional model override for the wake-up turn. Unset = this chat's model (preferred). Set only when the wake-up handling is mechanical (e.g. 'check what broke and act') and a cheaper model from the SAME backend suffices; the wake-up still resumes this chat's session (same backend = session continuity preserved). Must be a valid, selectable model id on this chat's backend — call list_models to see valid ids; cross-backend ids are rejected.",
+          "Optional model override for the wake-up turn. Unset = this chat's model (preferred). mode=\"chat\": set only when the wake-up handling is mechanical and a cheaper model from the SAME backend suffices; the wake-up still resumes this chat's session, so it must be a selectable model id on this chat's backend (cross-backend ids are rejected). mode=\"isolated\": any model valid on the run's backend (this chat's, or 'provider' when set). Call list_models to see valid ids.",
+        ),
+      mode: z
+        .enum(["chat", "isolated"])
+        .optional()
+        .describe(
+          'Where wake-ups run. "chat" (default) resumes this chat\'s session with full history. "isolated" runs each wake as a one-shot job with no chat history (cheap for frequent events); it delivers only via messaging tools with an explicit chat_id.',
+        ),
+      instructions: z
+        .string()
+        .max(4000)
+        .optional()
+        .describe(
+          'mode="isolated" only: system brief for every wake run — what to do with an event and when to message the user (e.g. "Follow skill szufla-wake."). The run has no chat history, so make it self-contained.',
+        ),
+      provider: z
+        .string()
+        .optional()
+        .describe(
+          "mode=\"isolated\" only: backend/provider id to run wakes on (requires 'model'). Unset = this chat's backend, possibly routed to one with more plan headroom. Call list_backends to see ids.",
+        ),
+      wake_timeout_seconds: z
+        .number()
+        .int()
+        .min(30)
+        .max(3600)
+        .optional()
+        .describe(
+          'mode="isolated" only: hard time limit per wake run, in seconds (30-3600). Default 600.',
         ),
     },
     execute: (params, bridge) => bridge("trigger_create", params),

@@ -10,6 +10,14 @@ import { getDatabase } from "../db.js";
 import { triggersSql } from "../sql/statements.generated.js";
 export type TriggerLanguage = "bash" | "python" | "node" | "lua";
 
+/**
+ * Where a trigger's wake-ups run.
+ *   - "chat"     — resume the chat session (default; sees full history).
+ *   - "isolated" — a fresh one-shot job per wake (cron `query` executor):
+ *                  own session, no chat history, optional brief/provider.
+ */
+type TriggerWakeMode = "chat" | "isolated";
+
 export type TriggerStatus =
   | "pending" // created, not yet spawned (transient)
   | "running" // child process alive
@@ -67,6 +75,14 @@ export type Trigger = {
    * continuity is preserved).
    */
   model?: string;
+  /** Wake routing; unset = "chat". See {@link TriggerWakeMode}. */
+  wakeMode?: TriggerWakeMode;
+  /** Isolated mode: system brief for each wake run (e.g. "follow skill X"). */
+  instructions?: string;
+  /** Isolated mode: backend/provider override (requires `model`). */
+  provider?: string;
+  /** Isolated mode: hard limit per wake run, in ms. Unset = 10 min. */
+  wakeTimeoutMs?: number;
 };
 
 type Row = {
@@ -92,6 +108,10 @@ type Row = {
   last_error: string | null;
   persistent: number;
   model: string | null;
+  wake_mode: string | null;
+  wake_instructions: string | null;
+  wake_provider: string | null;
+  wake_timeout_ms: number | null;
 };
 
 function rowToTrigger(row: Row): Trigger {
@@ -118,6 +138,10 @@ function rowToTrigger(row: Row): Trigger {
     lastError: row.last_error ?? undefined,
     persistent: row.persistent === 1 ? true : undefined,
     model: row.model ?? undefined,
+    wakeMode: row.wake_mode === "isolated" ? "isolated" : undefined,
+    instructions: row.wake_instructions ?? undefined,
+    provider: row.wake_provider ?? undefined,
+    wakeTimeoutMs: row.wake_timeout_ms ?? undefined,
   };
 }
 
@@ -147,6 +171,10 @@ export function upsert(t: Trigger): void {
       t.lastError ?? null,
       t.persistent ? 1 : 0,
       t.model ?? null,
+      t.wakeMode === "isolated" ? "isolated" : null,
+      t.instructions ?? null,
+      t.provider ?? null,
+      t.wakeTimeoutMs ?? null,
     );
 }
 
