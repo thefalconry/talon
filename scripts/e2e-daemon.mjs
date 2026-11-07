@@ -3,8 +3,8 @@
  * End-to-end smoke of a real daemon process: boot from source with a
  * throwaway TALON_HOME (native bridge on localhost, stub Claude binary, no
  * external frontends), check bridge auth, drive a scripted device through
- * credential upgrade, registration and device_exec, pair a second device from
- * a one-time link, restart, check it all again.
+ * credential upgrade, registration, device_exec and streamed file transfer,
+ * pair a second device from a one-time link, restart, check it all again.
  * The device answers commands itself, so this covers the daemon's half of the
  * protocol, not talon-node's executor.
  * Any failed step exits non-zero. The daemon log is left at $E2E_LOG.
@@ -13,9 +13,11 @@
  * single-daemon guard would stop the boot anyway, and this is a CI job.
  */
 import { spawn } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import {
   createWriteStream,
   mkdirSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   writeFileSync,
@@ -29,6 +31,8 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const GATEWAY = "http://127.0.0.1:19876";
 const DEVICE = "e2e-device";
 const PAIRED = "e2e-paired";
+const LYING_PATH = "/e2e/lies-about-its-digest.bin";
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const root = mkdtempSync(join(tmpdir(), "talon-e2e-"));
 const home = join(root, "talon");
 const log = process.env.E2E_LOG ?? join(root, "daemon.log");
@@ -88,13 +92,38 @@ async function registerDevice(label, token) {
     platform: "linux",
     arch: "amd64",
     appVersion: "0.0.0-e2e",
-    capabilities: ["status", "exec"],
+    capabilities: ["status", "exec", "upload_file", "download_file"],
   });
   expectStatus(`${label}: register as itself`, res.status, 200);
 }
 
-/** Hold the device's event stream open, answering each exec with its cmd. */
-async function connectDevice(token) {
+/** Do a command's transfer over HTTP; returns the data for its result. */
+async function runTransfer(event, token, disk, used) {
+  const { token: transfer, path, sha256: expected } = event.params;
+  const url = `${BASE}/devices/file?deviceId=${DEVICE}&transfer=${transfer}`;
+  const headers = { Authorization: `Bearer ${token}` };
+  used.push({ name: event.name, url, headers });
+  if (event.name === "download_file") {
+    const res = await fetch(url, { headers });
+    if (!res.ok) fail("device download", `HTTP ${res.status}`);
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (expected && expected !== sha256(bytes)) {
+      fail("device download", "bytes differ from the announced sha256");
+    }
+    disk.set(path, bytes);
+    return { bytesWritten: bytes.length, sha256: sha256(bytes) };
+  }
+  const bytes = disk.get(path);
+  const res = await fetch(url, { method: "POST", headers, body: bytes });
+  if (!res.ok) fail("device upload", `HTTP ${res.status}`);
+  return { sha256: path === LYING_PATH ? "0".repeat(64) : sha256(bytes) };
+}
+
+/**
+ * Hold the device's event stream open, doing each file transfer against
+ * `disk` and answering any other command with its cmd.
+ */
+async function connectDevice(token, disk = new Map(), used = []) {
   const abort = new AbortController();
   const res = await fetch(`${BASE}/events?deviceId=${DEVICE}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -112,11 +141,14 @@ async function connectDevice(token) {
         if (!frame.startsWith("data: ")) continue;
         const event = JSON.parse(frame.slice(6));
         if (event.kind !== "device_command") continue;
+        const data = ["upload_file", "download_file"].includes(event.name)
+          ? await runTransfer(event, token, disk, used)
+          : { exitCode: 0, stdout: event.params.cmd, stderr: "" };
         await post("/devices/command-result", token, {
           commandId: event.id,
           deviceId: DEVICE,
           ok: true,
-          data: { exitCode: 0, stdout: event.params.cmd, stderr: "" },
+          data,
         });
       }
     }
@@ -143,6 +175,66 @@ async function checkExec(label, token) {
   await disconnect();
 }
 
+/** A transfer token is good for one request. */
+async function checkSpent(label, { name, url, headers }, want) {
+  const res = await (name === "download_file"
+    ? fetch(url, { headers })
+    : fetch(url, { method: "POST", headers, body: "replay" }));
+  expectStatus(`${label}: replay ${name} token`, res.status, want);
+}
+
+async function checkFiles(label, token) {
+  const disk = new Map();
+  const used = [];
+  const disconnect = await connectDevice(token, disk, used);
+  const workspace = join(home, "workspace");
+  mkdirSync(workspace, { recursive: true });
+  // Bigger than a stream chunk, so a truncated copy can't pass.
+  const pushed = randomBytes(300_000);
+  writeFileSync(join(workspace, "e2e-push.bin"), pushed);
+  const push = await action({
+    action: "device_push_file",
+    device: DEVICE,
+    local_path: "e2e-push.bin",
+    remote_path: "/e2e/pushed.bin",
+  });
+  if (!push.ok) fail(`${label}: push`, JSON.stringify(push));
+  if (sha256(disk.get("/e2e/pushed.bin") ?? "") !== sha256(pushed)) {
+    fail(`${label}: push`, "device holds different bytes");
+  }
+  console.log(`ok ${label}: device_push_file bytes match`);
+  await checkSpent(label, used.at(-1), 404);
+
+  const held = randomBytes(300_000);
+  disk.set("/e2e/held.bin", held);
+  const pull = await action({
+    action: "device_pull_file",
+    device: DEVICE,
+    remote_path: "/e2e/held.bin",
+    local_path: "e2e-pull.bin",
+  });
+  if (!pull.ok) fail(`${label}: pull`, JSON.stringify(pull));
+  const landed = readFileSync(join(workspace, "e2e-pull.bin"));
+  if (sha256(landed) !== sha256(held)) {
+    fail(`${label}: pull`, "daemon holds different bytes");
+  }
+  console.log(`ok ${label}: device_pull_file bytes match`);
+  await checkSpent(label, used.at(-1), 409);
+
+  disk.set(LYING_PATH, randomBytes(1000));
+  const lied = await action({
+    action: "device_pull_file",
+    device: DEVICE,
+    remote_path: LYING_PATH,
+    local_path: "e2e-lied.bin",
+  });
+  if (lied.ok || existsSync(join(workspace, "e2e-lied.bin"))) {
+    fail(`${label}: wrong digest`, JSON.stringify(lied));
+  }
+  console.log(`ok ${label}: pull with a wrong digest refused and discarded`);
+  await disconnect();
+}
+
 async function checkDevice(label, token) {
   await registerDevice(label, token);
   const other = await post("/devices/register", token, {
@@ -159,6 +251,7 @@ async function checkDevice(label, token) {
   }
   console.log(`ok ${label}: device in fleet`);
   await checkExec(label, token);
+  await checkFiles(label, token);
 }
 
 /**
