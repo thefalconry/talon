@@ -1,14 +1,12 @@
 name: E2E daemon
 
+# Runs when the script or this file changes. Main, nightly and `full-ci`
+# runs are the e2e-daemon job in ci.yml.
 on:
-  push:
-    branches: [main]
   pull_request:
     paths:
       - scripts/e2e-daemon.mjs
       - .github/workflows/e2e-daemon.yml
-  schedule:
-    - cron: "30 3 * * *"
   workflow_dispatch:
 
 permissions:
