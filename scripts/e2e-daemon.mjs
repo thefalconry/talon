@@ -5,6 +5,7 @@
  * external frontends), check bridge auth, drive a scripted device through
  * credential upgrade, registration, device_exec and streamed file transfer,
  * pair a second device from a one-time link, restart, check it all again.
+ * A sub-agent spawned before the restart must resume after it and report.
  * The device answers commands itself, so this covers the daemon's half of the
  * protocol, not talon-node's executor.
  * Any failed step exits non-zero. The daemon log is left at $E2E_LOG.
@@ -32,10 +33,13 @@ const GATEWAY = "http://127.0.0.1:19876";
 const DEVICE = "e2e-device";
 const PAIRED = "e2e-paired";
 const LYING_PATH = "/e2e/lies-about-its-digest.bin";
+const AGENT_CHAT = 777;
+const AGENT_LABEL = "e2e-resume";
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const root = mkdtempSync(join(tmpdir(), "talon-e2e-"));
 const home = join(root, "talon");
 const log = process.env.E2E_LOG ?? join(root, "daemon.log");
+const stubScript = join(root, "stub-script.json");
 let child = null;
 
 function fail(step, detail) {
@@ -312,7 +316,13 @@ async function gatewayTaken() {
 function boot() {
   const out = createWriteStream(log, { flags: "a" });
   child = spawn("npx", ["tsx", "src/index.ts"], {
-    env: { ...process.env, TALON_HOME: home, HOME: root },
+    env: {
+      ...process.env,
+      TALON_HOME: home,
+      HOME: root,
+      STUB_CLAUDE_SCRIPT: stubScript,
+      STUB_CLAUDE_TIMEOUT_MS: "600000",
+    },
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
   });
@@ -368,6 +378,93 @@ async function checkBridge(label) {
   }
 }
 
+/** Ask about an agent as the chat that spawned it. */
+async function agentStatus(id) {
+  const status = await action({
+    action: "agent_status",
+    agent_id: id,
+    chat_id: AGENT_CHAT,
+    _chatId: String(AGENT_CHAT),
+  });
+  if (!status.ok) fail("agent_status", JSON.stringify(status));
+  return String(status.text);
+}
+
+/** Spawn an agent whose run stays open: the stub's turn never finishes. */
+async function spawnHeldAgent() {
+  writeFileSync(stubScript, JSON.stringify({ turns: [{ emit: [] }] }));
+  const spawned = await action({
+    action: "spawn_agent",
+    brief: "e2e: stay running across a daemon restart",
+    label: AGENT_LABEL,
+    force: true,
+    chat_id: AGENT_CHAT,
+    _chatId: String(AGENT_CHAT),
+  });
+  if (!spawned.ok) fail("spawn_agent", JSON.stringify(spawned));
+  const id = /\(id: ([^)]+)\)/.exec(String(spawned.text))?.[1];
+  if (!id) fail("spawn_agent", `no id in ${spawned.text}`);
+  // Long enough for the stub's init to give the run a session id to resume.
+  await new Promise((r) => setTimeout(r, 5000));
+  const status = await agentStatus(id);
+  if (!status.includes("State: running")) fail("held agent", status);
+  console.log(`ok agent ${id} running before the restart`);
+  return id;
+}
+
+/** From now on the stub reports a nonce through the real MCP tool. */
+function scriptAgentReport(nonce) {
+  writeFileSync(
+    stubScript,
+    JSON.stringify({
+      dispatchMcp: true,
+      turns: [
+        {
+          emit: [
+            {
+              type: "assistant",
+              message: {
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "toolu_e2e_report",
+                    name: "mcp__native-tools__report_result",
+                    input: { summary: nonce },
+                  },
+                ],
+              },
+            },
+            { type: "result", result: "reported" },
+          ],
+        },
+      ],
+    }),
+  );
+}
+
+/** The same agent must come back by itself and deliver the nonce. */
+async function checkAgentResumed(id, nonce) {
+  const deadline = Date.now() + 90_000;
+  let status = "";
+  while (Date.now() < deadline) {
+    status = await agentStatus(id);
+    if (!status.includes("State: running") && !status.includes("State: queued"))
+      break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  if (!status.includes("State: done") || !status.includes(nonce)) {
+    fail("agent resume", status);
+  }
+  const resumed = readFileSync(log, "utf8")
+    .split("\n")
+    .find(
+      (line) =>
+        line.includes(id) && line.includes("resuming after restart (session"),
+    );
+  if (!resumed) fail("agent resume", "no session resume in the daemon log");
+  console.log(`ok agent ${id} resumed its session and reported`);
+}
+
 if (await gatewayTaken()) {
   console.error("a daemon already answers on :19876; run this in CI only");
   process.exit(2);
@@ -388,6 +485,7 @@ writeFileSync(
   }),
 );
 
+writeFileSync(stubScript, JSON.stringify({ turns: [] }));
 boot();
 await checkBridge("first boot");
 const upgrade = await post("/auth/upgrade", TOKEN, {
@@ -400,11 +498,15 @@ if (!deviceToken || deviceToken === TOKEN) fail("upgrade", "no new token");
 await checkDevice("first boot", deviceToken);
 const pairedToken = await pairDevice();
 await checkPaired("first boot", pairedToken);
+const agentId = await spawnHeldAgent();
+const agentNonce = randomBytes(8).toString("hex");
 await stop();
+scriptAgentReport(agentNonce);
 boot();
 await checkBridge("after restart");
 await checkDevice("after restart", deviceToken);
 await checkPaired("after restart", pairedToken);
+await checkAgentResumed(agentId, agentNonce);
 await stop();
 console.log("e2e-daemon passed");
 process.exit(0);
