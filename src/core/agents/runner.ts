@@ -1072,7 +1072,6 @@ async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
  * Returns how many rows were considered.
  */
 export async function resumeAgentsAfterRestart(): Promise<number> {
-  if (Date.now() > 0) return 0; // MUTATION
   const now = Date.now();
   try {
     const pruned = agentsRepo.pruneSettled(now - SETTLED_RETENTION_MS);

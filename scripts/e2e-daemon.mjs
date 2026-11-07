@@ -510,4 +510,3 @@ await checkAgentResumed(agentId, agentNonce);
 await stop();
 console.log("e2e-daemon passed");
 process.exit(0);
-// mutation run
