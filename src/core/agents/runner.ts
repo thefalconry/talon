@@ -112,8 +112,23 @@ export const DEFAULT_AGENT_CAPS: AgentCaps = {
   minHeadroomPct: 25,
 };
 
+/**
+ * How long a run may go on after `report_result` before it is ended. Its job
+ * is done and the tool told it to stop, so this only leaves room for a last
+ * message; further turns would spend tokens on a result already recorded.
+ */
+const DEFAULT_REPORT_GRACE_MS = 15_000;
+
 /** Floor the tool boundary clamps a requested `timeout_s` up to. */
 const MIN_TIMEOUT_MS = 30_000;
+
+/** Raised to end a run that kept going after it reported. */
+class AgentWoundDownError extends Error {
+  constructor(graceMs: number) {
+    super(`run ended ${graceMs}ms after report_result`);
+    this.name = "AgentWoundDownError";
+  }
+}
 
 /** Raised to abort a run the no-progress watchdog gave up on. */
 class AgentStalledError extends Error {
@@ -674,6 +689,28 @@ function watchRun(
  * fire-and-forget spawn, so every failure has to end as a settled record
  * their parent is told about.
  */
+/** Arms the timer that ends a run which keeps going after it reported. */
+function windDownAfterReport(abortController: AbortController): {
+  arm: () => void;
+  cancel: () => void;
+  fired: () => boolean;
+} {
+  const graceMs = capsHolder.caps.reportGraceMs ?? DEFAULT_REPORT_GRACE_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let fired = false;
+  return {
+    arm: () => {
+      timer = setTimeout(() => {
+        fired = true;
+        abortController.abort(new AgentWoundDownError(graceMs));
+      }, graceMs);
+      timer.unref();
+    },
+    cancel: () => clearTimeout(timer),
+    fired: () => fired,
+  };
+}
+
 async function runAgent(
   record: AgentRecord,
   spec: AgentSpawnSpec,
@@ -701,7 +738,13 @@ async function runAgent(
     ...(chatId !== undefined ? { chatId } : {}),
   });
   task.bind({ model, backendId: record.backendId });
-  agentRegistry.start(id, { model, abort: abortController, taskId: task.id });
+  const windDown = windDownAfterReport(abortController);
+  agentRegistry.start(id, {
+    model,
+    abort: abortController,
+    taskId: task.id,
+    onReported: windDown.arm,
+  });
   task.start();
 
   let settled: AgentRecord | null = null;
@@ -771,11 +814,22 @@ async function runAgent(
   } catch (err) {
     if (agentRegistry.isInterrupted(id)) {
       settled = null;
+    } else if (windDown.fired() && !agentRegistry.killRequested(id)) {
+      // Ended by us, after it reported: the run succeeded, and the abort says
+      // nothing about the backend's health.
+      settled = settleSuccess(
+        id,
+        task,
+        capture.last,
+        undefined,
+        trail.snapshot(),
+      );
     } else {
       if (!watch.stalled) recordBackendRunFailure(record.backendId, err);
       settled = settleFailure(id, task, err, trail.snapshot(), watch.stalled);
     }
   } finally {
+    windDown.cancel();
     watchdog.stop();
     closeTrail(id);
     await release().catch((err: unknown) =>
