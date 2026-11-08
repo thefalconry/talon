@@ -9,7 +9,11 @@ import type {
   QueryParams,
   QueryResult,
 } from "../../runtime/turn/handler-types.js";
-import { getSession, incrementTurns, setSessionId } from "../../../storage/sessions.js";
+import {
+  getSession,
+  incrementTurns,
+  setSessionId,
+} from "../../../storage/sessions.js";
 import { getChatSettings } from "../../../storage/chat-settings.js";
 import type { DeliveryDecision } from "../../runtime/turn/delivery.js";
 import { log, logError, logWarn } from "../../../util/log.js";
@@ -143,21 +147,22 @@ function buildTurnInput(inputs: {
   previousTurns: number;
 }): string {
   const { params, config, session, previousTurns } = inputs;
+  // The override (plugin reload, skill toggle) replaces only the base
+  // prompt; the backend suffix, the chat's frontend flavour and the
+  // per-session snapshot are still assembled around it, as agy does.
   const override = getState().systemPromptOverride;
-  const systemPrompt =
-    override ??
-    prepareSystemPrompt({
-      config,
-      previousTurns,
-      backendSuffix: kimiSystemPromptSuffix(
-        frontendsForChat(
-          params.chatId,
-          nonTerminalFrontends(config.frontend),
-        )[0] ?? "telegram",
-      ),
-      chatId: params.chatId,
-      sessionEpoch: session.createdAt,
-    }).text;
+  const { text: systemPrompt } = prepareSystemPrompt({
+    config: override ? { ...config, systemPrompt: override } : config,
+    previousTurns,
+    backendSuffix: kimiSystemPromptSuffix(
+      frontendsForChat(
+        params.chatId,
+        nonTerminalFrontends(config.frontend),
+      )[0] ?? "telegram",
+    ),
+    chatId: params.chatId,
+    sessionEpoch: session.createdAt,
+  });
   const prompt = formatUserPrompt({
     text: params.text,
     senderName: params.senderName ?? "user",
@@ -223,12 +228,11 @@ export async function handleMessage(
       onStep: makeStepHandler(ctx, chatId, child),
     });
     turnMs = Date.now() - turnStart;
-    if (turnResult.sessionId && turnResult.sessionId !== session.sessionId) {
-      setSessionId(chatId, turnResult.sessionId);
-    }
   } catch (err) {
     if (!isTerminatorAbort(streamState, err)) {
-      const surfaced = isKimiAuthFailure(`${child.stderrSnapshot} ${errMsg(err)}`)
+      const surfaced = isKimiAuthFailure(
+        `${child.stderrSnapshot} ${errMsg(err)}`,
+      )
         ? kimiAuthError(err)
         : err;
       const decision = await applyRetryDecision({
@@ -251,14 +255,30 @@ export async function handleMessage(
         model: activeModel,
         toolCalls: ctx.toolMetrics.count,
       });
-      logError("agent", `[${chatId}] kimi error: ${decision.classified.message}`);
+      logError(
+        "agent",
+        `[${chatId}] kimi error: ${decision.classified.message}`,
+      );
       throw decision.classified;
     }
   } finally {
     unregisterInterrupt();
   }
 
-  settleUsage(chatId, streamState, turnResult?.usage, activeModel, child.sessionId);
+  // kimi reports the session id only on its last stdout line, so a turn
+  // cut short by an interrupt usually has none. Keep whatever arrived.
+  const capturedSessionId = turnResult?.sessionId ?? child.sessionId;
+  if (capturedSessionId && capturedSessionId !== session.sessionId) {
+    setSessionId(chatId, capturedSessionId);
+  }
+
+  settleUsage(
+    chatId,
+    streamState,
+    turnResult?.usage,
+    activeModel,
+    child.sessionId,
+  );
 
   const responseText = finalizeResponseText(streamState);
   const durationMs = Date.now() - t0;
@@ -287,7 +307,19 @@ export async function handleMessage(
   );
   if ("retry" in delivery) return delivery.retry;
 
-  incrementTurns(chatId);
+  // The turn count is what decides whether the next turn carries the
+  // system prompt (buildTurnInput). With no session id to resume, the
+  // next turn starts a fresh kimi session, so it must count as a first
+  // turn again or that session would run without the system prompt.
+  if (getSession(chatId).sessionId) {
+    incrementTurns(chatId);
+  } else {
+    logWarn(
+      "agent",
+      `[${chatId}] kimi turn ended without a session id; ` +
+        "the next turn starts a new session with the system prompt",
+    );
+  }
   return finishCallbackTurn({
     chatId,
     state: streamState,

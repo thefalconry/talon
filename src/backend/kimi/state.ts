@@ -35,11 +35,6 @@ export function getState(): KimiState {
   return state;
 }
 
-/** The daemon's loopback bridge URL. */
-export function bridgeUrl(): string {
-  return `http://127.0.0.1:${state.gatewayPortFn()}`;
-}
-
 /**
  * Path to the `kimi` executable: config `kimiBinary`, else the
  * `KIMI_BINARY` env var, else bare `kimi` off PATH.

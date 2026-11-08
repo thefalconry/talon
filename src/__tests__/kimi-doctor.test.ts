@@ -90,7 +90,9 @@ model = "liquid/lfm-2.5-2.6b:free"
 
   it("recognises Kimi auth error messages", () => {
     expect(isKimiAuthFailure("Unauthorized: Invalid API key")).toBe(true);
-    expect(isKimiAuthFailure("authentication required for provider")).toBe(true);
+    expect(isKimiAuthFailure("authentication required for provider")).toBe(
+      true,
+    );
     expect(isKimiAuthFailure("no api key found")).toBe(true);
     expect(isKimiAuthFailure("Network timeout after 30s")).toBe(false);
   });

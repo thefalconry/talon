@@ -10,12 +10,24 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 
+/**
+ * The CLI's data root: `KIMI_CODE_HOME` when set, else `~/.kimi-code`
+ * (the same resolution kimi itself uses). It holds config.toml, the
+ * provider keys and the session transcripts.
+ */
+export function kimiHome(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  userHome: string = homedir(),
+): string {
+  return env.KIMI_CODE_HOME?.trim() || join(userHome, ".kimi-code");
+}
+
 /** Where the CLI stores its configuration. Env override for tests. */
 export function kimiConfigPath(override?: string): string {
   return (
     override ||
     process.env.TALON_KIMI_CONFIG_FILE ||
-    join(homedir(), ".kimi-code", "config.toml")
+    join(kimiHome(), "config.toml")
   );
 }
 

@@ -22,6 +22,7 @@ const {
   listModels,
   resetModelCache,
   getDefaultModelId,
+  getSettingsPresentation,
 } = await import("../backend/kimi/models.js");
 const { toKimiEffort } = await import("../backend/kimi/effort.js");
 
@@ -154,8 +155,20 @@ describe("kimi models — catalog browsing", () => {
       formatModelError("test-ambig", {
         kind: "ambiguous",
         matches: [
-          { id: "m1", displayName: "M1", provider: "p", providerName: "P", selectable: true },
-          { id: "m2", displayName: "M2", provider: "p", providerName: "P", selectable: true },
+          {
+            id: "m1",
+            displayName: "M1",
+            provider: "p",
+            providerName: "P",
+            selectable: true,
+          },
+          {
+            id: "m2",
+            displayName: "M2",
+            provider: "p",
+            providerName: "P",
+            selectable: true,
+          },
         ],
       }),
     ).toContain("Multiple Kimi models match `test-ambig`");
@@ -180,5 +193,63 @@ describe("kimi effort mapping", () => {
     expect(toKimiEffort("xhigh")).toBeUndefined();
     expect(toKimiEffort("max")).toBeUndefined();
     expect(toKimiEffort(undefined)).toBeUndefined();
+  });
+});
+
+describe("kimi models — settings picker fits Telegram's limits", () => {
+  const serve = (raw: string) =>
+    execFileMock.mockImplementation(
+      (
+        _c: string,
+        _a: string[],
+        _o: unknown,
+        cb: (e: unknown, r: { stdout: string; stderr: string }) => void,
+      ) => cb(null, { stdout: raw, stderr: "" }),
+    );
+
+  it("keeps every button's callback_data within 64 bytes and paginates", async () => {
+    serve(fixture("provider-list.json"));
+    const all = await listModels();
+    const result = await getSettingsPresentation(
+      "openrouter/moonshotai/kimi-k3",
+    );
+    expect(result.view).toBe("models");
+    expect(result.modelButtons.length).toBeLessThanOrEqual(8);
+    expect(result.totalPages).toBeGreaterThan(1);
+    for (const b of result.modelButtons) {
+      expect(Buffer.byteLength(b.callback_data, "utf8")).toBeLessThanOrEqual(
+        64,
+      );
+    }
+    // The fixture has ids too long for a button: they are hidden, and said so.
+    expect(result.totalCount).toBeLessThan(all.total);
+    expect(result.modelDetails.join("\n")).toMatch(/too long for a button/);
+  });
+
+  it("groups a multi-provider catalog into provider chips first", async () => {
+    const models: Record<string, unknown> = {};
+    for (let i = 0; i < 40; i++) {
+      const provider = i % 2 === 0 ? "alpha" : "beta";
+      models[`${provider}/m${i}`] = { provider, model: `m${i}` };
+    }
+    serve(JSON.stringify({ providers: { alpha: {}, beta: {} }, models }));
+    const groups = await getSettingsPresentation("alpha/m0");
+    expect(groups.view).toBe("groups");
+    expect(groups.modelButtons.map((b) => b.callback_data)).toEqual([
+      "settings:models:provider:alpha",
+      "settings:models:provider:beta",
+    ]);
+    const drilled = await getSettingsPresentation("alpha/m0", {
+      provider: "beta",
+      page: 2,
+    });
+    expect(drilled.view).toBe("models");
+    expect(drilled.provider).toBe("beta");
+    expect(drilled.page).toBe(2);
+    expect(
+      drilled.modelButtons.every((b) =>
+        b.callback_data.startsWith("settings:model:beta/"),
+      ),
+    ).toBe(true);
   });
 });

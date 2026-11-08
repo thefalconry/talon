@@ -10,17 +10,21 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { log } from "../../../util/log.js";
+import { log, logError } from "../../../util/log.js";
 import {
   parseKimiLine,
   type KimiEvent,
   type KimiTurnTokens,
   kimiUsageToTokens,
 } from "../events.js";
-import { KIMI_BASE_ARGS, KIMI_KILL_GRACE_MS } from "../constants.js";
+import {
+  KIMI_BASE_ARGS,
+  KIMI_KILL_GRACE_MS,
+  KIMI_RUN_LABEL_ENV,
+} from "../constants.js";
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { kimiHome } from "../auth.js";
 
 const STDERR_TAIL_CHARS = 4000;
 
@@ -45,7 +49,7 @@ export class KimiTurnAborted extends Error {
   }
 }
 
-export class KimiProcessExited extends Error {
+class KimiProcessExited extends Error {
   constructor(
     message: string,
     readonly code: number | null,
@@ -56,7 +60,7 @@ export class KimiProcessExited extends Error {
   }
 }
 
-export function buildKimiArgs(spec: KimiSpawnSpec, prompt: string): string[] {
+function buildKimiArgs(spec: KimiSpawnSpec, prompt: string): string[] {
   const args = [...KIMI_BASE_ARGS, "-p", prompt, "-m", spec.model];
   if (spec.sessionId) {
     args.push("-S", spec.sessionId);
@@ -67,12 +71,48 @@ export function buildKimiArgs(spec: KimiSpawnSpec, prompt: string): string[] {
   return args;
 }
 
-/** Look for usage recorded in ~/.kimi-code/sessions/.../wire.jsonl */
+/**
+ * Render argv for the log with the prompt replaced by its size. The
+ * prompt is the user's message (plus the whole system prompt on a first
+ * turn) and must not be copied into the daemon log.
+ */
+export function describeKimiArgs(args: readonly string[]): string {
+  return args
+    .map((arg, i) =>
+      i > 0 && args[i - 1] === "-p"
+        ? `<prompt: ${Buffer.byteLength(arg, "utf-8")} bytes>`
+        : arg,
+    )
+    .join(" ");
+}
+
+/**
+ * Linux caps a single argv string at MAX_ARG_STRLEN (32 pages = 128 KiB).
+ * `kimi` takes the prompt only as `-p <prompt>` (it reads nothing from
+ * stdin in prompt mode), so a bigger prompt cannot be passed at all, and
+ * spawn would fail with a bare E2BIG. A small margin covers the NUL.
+ */
+export const KIMI_MAX_PROMPT_BYTES = 128 * 1024 - 64;
+
+/** A clear error for a prompt `kimi -p` cannot take, else undefined. */
+export function kimiPromptTooLarge(prompt: string): Error | undefined {
+  if (process.platform !== "linux") return undefined;
+  const bytes = Buffer.byteLength(prompt, "utf-8");
+  if (bytes <= KIMI_MAX_PROMPT_BYTES) return undefined;
+  return new Error(
+    `kimi: the prompt is ${Math.ceil(bytes / 1024)} KiB, over the ` +
+      `${KIMI_MAX_PROMPT_BYTES >> 10} KiB a single command-line argument ` +
+      "can hold on Linux, and kimi only takes the prompt as `-p <prompt>`. " +
+      "Shorten the message or the system prompt.",
+  );
+}
+
+/** Look for usage recorded in <kimi home>/sessions/.../wire.jsonl */
 export async function readKimiSessionUsage(
   sessionId: string,
 ): Promise<KimiTurnTokens | undefined> {
   try {
-    const baseDir = join(homedir(), ".kimi-code", "sessions");
+    const baseDir = join(kimiHome(), "sessions");
     const entries = await readdir(baseDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -152,15 +192,21 @@ export class KimiChild {
       );
     }
 
+    const tooLarge = kimiPromptTooLarge(prompt);
+    if (tooLarge) return Promise.reject(tooLarge);
+
     const args = buildKimiArgs(this.spec, prompt);
     log(
       "agent",
-      `[${this.label}] kimi spawn: ${this.spec.binary} ${args.join(" ")}`,
+      `[${this.label}] kimi spawn: ${this.spec.binary} ${describeKimiArgs(args)}`,
     );
 
     const proc = spawn(this.spec.binary, args, {
       cwd: this.spec.cwd,
-      env: this.spec.env ?? process.env,
+      env: {
+        ...(this.spec.env ?? process.env),
+        [KIMI_RUN_LABEL_ENV]: this.label,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -174,6 +220,18 @@ export class KimiChild {
 
     return new Promise<KimiTurnResult>((resolve, reject) => {
       this.inFlightReject = reject;
+      // Set once a line handler throws: the turn is failed with that error
+      // and the process is torn down, so later output is ignored.
+      let lineError: unknown;
+      const handleLine = (line: string): void => {
+        if (lineError !== undefined) return;
+        try {
+          this.onLine(line, handlers);
+        } catch (err) {
+          lineError = err ?? new Error("kimi stream handler failed");
+          this.failTurn(lineError);
+        }
+      };
 
       proc.stdout.on("data", (chunk: string) => {
         this.stdoutBuf += chunk;
@@ -181,7 +239,7 @@ export class KimiChild {
         while (nl >= 0) {
           const line = this.stdoutBuf.slice(0, nl);
           this.stdoutBuf = this.stdoutBuf.slice(nl + 1);
-          this.onLine(line, handlers);
+          handleLine(line);
           nl = this.stdoutBuf.indexOf("\n");
         }
       });
@@ -204,8 +262,15 @@ export class KimiChild {
 
         // Flush remaining line in buffer
         if (this.stdoutBuf.trim()) {
-          this.onLine(this.stdoutBuf, handlers);
+          const last = this.stdoutBuf;
           this.stdoutBuf = "";
+          handleLine(last);
+        }
+        if (lineError !== undefined) {
+          // failTurn already rejected; this keeps the flush path settled
+          // too when the throwing line was the unterminated last one.
+          reject(lineError);
+          return;
         }
 
         if (code === 0) {
@@ -215,7 +280,11 @@ export class KimiChild {
           }
           resolve({ sessionId: this.sessionId, usage });
         } else {
-          const detail = this.stderrTail.trim().split("\n").slice(-4).join("\n");
+          const detail = this.stderrTail
+            .trim()
+            .split("\n")
+            .slice(-4)
+            .join("\n");
           reject(
             new KimiProcessExited(
               `kimi exited (code ${code ?? "n/a"})${detail ? `: ${detail}` : ""}`,
@@ -240,6 +309,24 @@ export class KimiChild {
     }
     handlers.onStep?.(event);
     handlers.onEvent?.(event);
+  }
+
+  /**
+   * A stream handler threw. Fail the turn with that error rather than let
+   * it escape the stdout listener, where it would be an uncaught exception
+   * and take the whole daemon down with it.
+   */
+  private failTurn(err: unknown): void {
+    logError(
+      "agent",
+      `[${this.label}] kimi stream handler failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    const reject = this.inFlightReject;
+    this.inFlightReject = null;
+    reject?.(err);
+    this.kill("stream handler error");
   }
 
   kill(reason: string): void {
@@ -279,7 +366,10 @@ export function ensureChild(chatId: string, spec: KimiSpawnSpec): KimiChild {
   const existing = children.get(chatId);
   if (existing) {
     existing.spec = spec;
-    if (spec.sessionId) existing.sessionId = spec.sessionId;
+    // Track the spec's session exactly: a pooled child must not carry the
+    // id of a session the chat has since dropped (reset, expired) into a
+    // turn that starts a fresh one.
+    existing.sessionId = spec.sessionId;
     return existing;
   }
   const child = new KimiChild(chatId, spec);

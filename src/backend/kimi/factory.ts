@@ -41,6 +41,9 @@ import {
 const kimiFactory: BackendFactory = {
   id: "kimi",
   label: "Kimi",
+  // Its own shell/file tools can't be withheld per turn, so guest-scoped
+  // turns (non-operator senders) are refused rather than run with them.
+  guestToolScope: "refused",
   doctor: (config, isActive) => kimiDoctorChecks(config, isActive),
 
   async init(config, ctx) {

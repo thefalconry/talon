@@ -24,7 +24,7 @@ import {
 
 // ── Wire types ──────────────────────────────────────────────────────────────
 
-export interface KimiToolCallFunction {
+interface KimiToolCallFunction {
   name: string;
   arguments: string; // JSON string!
 }
@@ -35,7 +35,7 @@ export interface KimiToolCall {
   function: KimiToolCallFunction;
 }
 
-export interface KimiMetaEvent {
+interface KimiMetaEvent {
   role: "meta";
   type: string;
   version?: string;
@@ -52,13 +52,13 @@ export interface KimiMetaEvent {
   [key: string]: unknown;
 }
 
-export interface KimiAssistantEvent {
+interface KimiAssistantEvent {
   role: "assistant";
   content?: string;
   tool_calls?: KimiToolCall[];
 }
 
-export interface KimiToolEvent {
+interface KimiToolEvent {
   role: "tool";
   tool_call_id: string;
   content: string;
@@ -68,6 +68,16 @@ export type KimiEvent = KimiMetaEvent | KimiAssistantEvent | KimiToolEvent;
 
 // ── Parsing ─────────────────────────────────────────────────────────────────
 
+/**
+ * Parse one stdout line into a typed event.
+ *
+ * The CLI is versioned separately from Talon, so the declared wire types
+ * are a hope, not a guarantee. Everything downstream (tool settling,
+ * metrics, the run log) assumes the shapes above, and it runs inside a
+ * stream listener where a throw would escape as an uncaught exception.
+ * So each event is normalised here: text fields become strings, and tool
+ * calls without an id or a function object are dropped.
+ */
 export function parseKimiLine(line: string): KimiEvent | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
@@ -77,12 +87,99 @@ export function parseKimiLine(line: string): KimiEvent | null {
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object") return null;
-  const role = (parsed as { role?: unknown }).role;
-  if (role !== "meta" && role !== "assistant" && role !== "tool") {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
-  return parsed as KimiEvent;
+  const raw = parsed as Record<string, unknown>;
+  switch (raw.role) {
+    case "meta":
+      return {
+        ...raw,
+        role: "meta",
+        type: asText(raw.type),
+        session_id:
+          typeof raw.session_id === "string" && raw.session_id
+            ? raw.session_id
+            : undefined,
+      } as KimiMetaEvent;
+    case "assistant":
+      return normaliseAssistant(raw);
+    case "tool":
+      return {
+        role: "tool",
+        tool_call_id: asText(raw.tool_call_id),
+        content: asText(raw.content),
+      };
+    default:
+      return null;
+  }
+}
+
+function normaliseAssistant(raw: Record<string, unknown>): KimiAssistantEvent {
+  const event: KimiAssistantEvent = { role: "assistant" };
+  const content = asText(raw.content);
+  if (content) event.content = content;
+  if (Array.isArray(raw.tool_calls)) {
+    const calls = raw.tool_calls.flatMap((call) => {
+      const normalised = normaliseToolCall(call);
+      return normalised ? [normalised] : [];
+    });
+    if (calls.length > 0) event.tool_calls = calls;
+  }
+  return event;
+}
+
+function normaliseToolCall(call: unknown): KimiToolCall | null {
+  if (!call || typeof call !== "object") return null;
+  const { id, function: fn } = call as { id?: unknown; function?: unknown };
+  if (typeof id !== "string" || !id) return null;
+  if (!fn || typeof fn !== "object") return null;
+  const { name, arguments: args } = fn as {
+    name?: unknown;
+    arguments?: unknown;
+  };
+  return {
+    type: "function",
+    id,
+    function: {
+      name: typeof name === "string" && name ? name : "unknown",
+      arguments:
+        typeof args === "string" ? args : args == null ? "" : safeJson(args),
+    },
+  };
+}
+
+/**
+ * Coerce a wire field to text. Content may arrive as a string, as a list
+ * of content parts (`{type:"text", text}` or similar), or be missing.
+ */
+function asText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  if (Array.isArray(value)) {
+    return value
+      .map((part) => {
+        if (typeof part === "string") return part;
+        if (part && typeof part === "object") {
+          const text = (part as { text?: unknown }).text;
+          if (typeof text === "string") return text;
+        }
+        return "";
+      })
+      .join("");
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return safeJson(value);
+}
+
+function safeJson(value: unknown): string {
+  try {
+    return JSON.stringify(value) ?? "";
+  } catch {
+    return "";
+  }
 }
 
 export function parseKimiStream(text: string): KimiEvent[] {

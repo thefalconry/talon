@@ -20,6 +20,11 @@ export async function warmSession(chatId: string): Promise<void> {
   log("agent", `[${chatId}] kimi session warmed`);
 }
 
+/**
+ * Talon's MCP tools are not wired into kimi (see `kimiSystemPromptSuffix`),
+ * so there is nothing to add or remove. kimi re-reads its own `mcp.json`
+ * on every spawn; dropping the pooled child is all a refresh needs.
+ */
 export async function refreshTools(chatId: string): Promise<{
   added: string[];
   removed: string[];

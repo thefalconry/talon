@@ -38,10 +38,6 @@ export function resetModelCache(): void {
   inFlight = null;
 }
 
-export function getCachedModels(): KimiModelInfo[] {
-  return [...catalog];
-}
-
 interface KimiRawModel {
   provider?: string;
   model?: string;
@@ -55,7 +51,10 @@ interface KimiRawModel {
 }
 
 interface KimiProviderListJson {
-  providers?: Record<string, { baseUrl?: string; type?: string; apiKey?: string }>;
+  providers?: Record<
+    string,
+    { baseUrl?: string; type?: string; apiKey?: string }
+  >;
   models?: Record<string, KimiRawModel>;
 }
 
@@ -80,7 +79,8 @@ export function parseKimiModels(jsonText: string): KimiModelInfo[] {
     const providerName = providerObj?.type
       ? providerObj.type.toUpperCase()
       : providerId;
-    const isFree = id.includes(":free") || (raw.model?.includes(":free") ?? false);
+    const isFree =
+      id.includes(":free") || (raw.model?.includes(":free") ?? false);
     const reasoning =
       raw.capabilities?.includes("thinking") ||
       raw.capabilities?.includes("always_thinking") ||
@@ -108,7 +108,7 @@ export function parseKimiModels(jsonText: string): KimiModelInfo[] {
   return models;
 }
 
-export function synthesizeUnknownModel(id: string): KimiModelInfo {
+function synthesizeUnknownModel(id: string): KimiModelInfo {
   const isFree = id.includes(":free");
   return {
     id,
@@ -214,25 +214,101 @@ export async function getSettingsPresentation(
 ): Promise<ModelPickerResult> {
   const models = await effectiveModels();
   const callbackPrefix = options.callbackPrefix ?? "settings:model:";
-  const modelButtons: ModelButton[] = models.map((m) => ({
-    text: `${m.id === activeModel ? "● " : ""}${m.displayName}`,
-    callback_data: `${callbackPrefix}${m.id}`,
-  }));
+  const navPrefix = options.navCallbackPrefix ?? "settings:models";
+  const filter = options.filter ?? "all";
+  const pageSize = clamp(
+    options.pageSize ?? PICKER_PAGE_SIZE,
+    1,
+    PICKER_MAX_PAGE_SIZE,
+  );
+
+  // Telegram rejects the whole keyboard when one button's callback_data
+  // passes 64 bytes, and kimi ids are user-configured provider paths that
+  // can run long (`openrouter/vendor/model:free`). A model whose button
+  // would overflow is left off the picker; `/model <id>` still reaches it.
+  const callbackBudget = CALLBACK_DATA_BUDGET - byteLen(callbackPrefix);
+  const all = models.filter((m) => byteLen(m.id) <= callbackBudget);
+  const hidden = models.length - all.length;
+  const filtered = filter === "free" ? all.filter((m) => m.free) : all;
+
   const active = models.find((m) => m.id === activeModel);
   const modelDetails = [
     ...(active ? [`Active: ${active.displayName} (${active.id})`] : []),
     `Backend: Kimi — ${models.length} models (kimi provider list --json)`,
+    ...(hidden > 0
+      ? [`${hidden} model id(s) too long for a button — use /model <id>`]
+      : []),
   ];
-  return {
-    modelButtons,
+  const baseResult = {
     modelDetails,
+    filter,
+    freeCount: all.filter((m) => m.free).length,
+    totalCount: all.length,
+  } as const;
+
+  // A large catalog (REPORT.md saw 375 models) would also blow Telegram's
+  // keyboard size limit: it is paginated, and grouped into provider chips
+  // first when there is more than one provider to choose between.
+  const counts = new Map<string, number>();
+  for (const m of filtered) {
+    counts.set(m.provider, (counts.get(m.provider) ?? 0) + 1);
+  }
+  if (
+    !options.provider &&
+    filtered.length > PICKER_GROUP_THRESHOLD &&
+    counts.size > 1
+  ) {
+    const modelButtons: ModelButton[] = [...counts.entries()]
+      .map(([provider, count]) => ({
+        text: `${filtered.find((m) => m.provider === provider)?.providerName ?? provider} (${count})`,
+        callback_data: `${navPrefix}:provider:${provider}`,
+      }))
+      .filter((b) => byteLen(b.callback_data) <= CALLBACK_DATA_BUDGET);
+    return {
+      ...baseResult,
+      modelButtons,
+      view: "groups",
+      page: 1,
+      totalPages: 1,
+    };
+  }
+
+  const scoped = options.provider
+    ? filtered.filter((m) => m.provider === options.provider)
+    : filtered;
+  const totalPages = Math.max(1, Math.ceil(scoped.length / pageSize));
+  const page = clamp(options.page ?? 1, 1, totalPages);
+  const start = (page - 1) * pageSize;
+  const modelButtons: ModelButton[] = scoped
+    .slice(start, start + pageSize)
+    .map((m) => ({
+      text: `${m.id === activeModel ? "● " : ""}${m.displayName}`,
+      callback_data: `${callbackPrefix}${m.id}`,
+    }));
+  return {
+    ...baseResult,
+    modelButtons,
     view: "models",
-    page: 1,
-    totalPages: 1,
-    filter: "all",
-    freeCount: models.filter((m) => m.free).length,
-    totalCount: models.length,
+    page,
+    totalPages,
+    ...(options.provider ? { provider: options.provider } : {}),
   };
+}
+
+/** Telegram's cap on inline-button callback_data, in UTF-8 bytes. */
+const CALLBACK_DATA_BUDGET = 64;
+const PICKER_PAGE_SIZE = 8;
+const PICKER_MAX_PAGE_SIZE = 24;
+/** Above this many models the picker shows provider chips first. */
+const PICKER_GROUP_THRESHOLD = 30;
+
+function byteLen(s: string): number {
+  return Buffer.byteLength(s, "utf8");
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  if (Number.isNaN(n)) return lo;
+  return Math.min(hi, Math.max(lo, Math.floor(n)));
 }
 
 export async function getProviders(): Promise<UnifiedProviderInfo[]> {
@@ -285,7 +361,6 @@ export async function listModels(
   filter?: "free" | "all",
 ): Promise<{ models: UnifiedModelInfo[]; total: number }> {
   const models = await refreshModels();
-  const filtered =
-    filter === "free" ? models.filter((m) => m.free) : models;
+  const filtered = filter === "free" ? models.filter((m) => m.free) : models;
   return { models: filtered, total: filtered.length };
 }

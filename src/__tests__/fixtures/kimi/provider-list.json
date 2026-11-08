@@ -12,10 +12,7 @@
       "model": "qwen/qwen3.7-max",
       "maxContextSize": 1000000,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3.7 Max"
     },
     "openrouter/qwen/qwen3-coder-plus": {
@@ -23,9 +20,7 @@
       "model": "qwen/qwen3-coder-plus",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3 Coder Plus"
     },
     "openrouter/qwen/qwen3-next-80b-a3b-thinking": {
@@ -33,10 +28,7 @@
       "model": "qwen/qwen3-next-80b-a3b-thinking",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3-Next 80B-A3B (Thinking)"
     },
     "openrouter/qwen/qwen3-235b-a22b-thinking-2507": {
@@ -44,10 +36,7 @@
       "model": "qwen/qwen3-235b-a22b-thinking-2507",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 235B A22B Thinking 2507"
     },
     "openrouter/qwen/qwen3.5-9b": {
@@ -55,12 +44,7 @@
       "model": "qwen/qwen3.5-9b",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5 9B"
     },
     "openrouter/qwen/qwen3-next-80b-a3b-instruct": {
@@ -68,9 +52,7 @@
       "model": "qwen/qwen3-next-80b-a3b-instruct",
       "maxContextSize": 262144,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3-Next 80B-A3B Instruct"
     },
     "openrouter/qwen/qwen3-coder-flash": {
@@ -78,9 +60,7 @@
       "model": "qwen/qwen3-coder-flash",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3 Coder Flash"
     },
     "openrouter/qwen/qwen3-14b": {
@@ -88,10 +68,7 @@
       "model": "qwen/qwen3-14b",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 14B"
     },
     "openrouter/qwen/qwen3.6-plus": {
@@ -99,12 +76,7 @@
       "model": "qwen/qwen3.6-plus",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.6 Plus"
     },
     "openrouter/qwen/qwen3.5-27b": {
@@ -112,12 +84,7 @@
       "model": "qwen/qwen3.5-27b",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5 27B"
     },
     "openrouter/qwen/qwen3.8-27b": {
@@ -125,30 +92,16 @@
       "model": "qwen/qwen3.8-27b",
       "maxContextSize": 1000000,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.8 27B",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "xhigh"]
     },
     "openrouter/qwen/qwen3.5-35b-a3b": {
       "provider": "openrouter",
       "model": "qwen/qwen3.5-35b-a3b",
       "maxContextSize": 262144,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5 35B-A3B"
     },
     "openrouter/qwen/qwen3.5-plus-20260420": {
@@ -156,12 +109,7 @@
       "model": "qwen/qwen3.5-plus-20260420",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5 Plus 2026-04-20"
     },
     "openrouter/qwen/qwen3-32b": {
@@ -169,10 +117,7 @@
       "model": "qwen/qwen3-32b",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 32B"
     },
     "openrouter/qwen/qwen3.5-plus-02-15": {
@@ -180,12 +125,7 @@
       "model": "qwen/qwen3.5-plus-02-15",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5 Plus 2026-02-15"
     },
     "openrouter/qwen/qwen-plus-2025-07-28": {
@@ -193,9 +133,7 @@
       "model": "qwen/qwen-plus-2025-07-28",
       "maxContextSize": 1000000,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen Plus 0728"
     },
     "openrouter/qwen/qwen3-coder": {
@@ -203,9 +141,7 @@
       "model": "qwen/qwen3-coder",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3 Coder 480B A35B"
     },
     "openrouter/qwen/qwen2.5-vl-72b-instruct": {
@@ -213,9 +149,7 @@
       "model": "qwen/qwen2.5-vl-72b-instruct",
       "maxContextSize": 128000,
       "maxOutputSize": 115200,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Qwen2.5 VL 72B Instruct"
     },
     "openrouter/qwen/qwen3-coder-next": {
@@ -223,9 +157,7 @@
       "model": "qwen/qwen3-coder-next",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3 Coder Next"
     },
     "openrouter/qwen/qwen3-coder-30b-a3b-instruct": {
@@ -233,9 +165,7 @@
       "model": "qwen/qwen3-coder-30b-a3b-instruct",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3-Coder 30B-A3B Instruct"
     },
     "openrouter/qwen/qwen3-235b-a22b-2507": {
@@ -243,9 +173,7 @@
       "model": "qwen/qwen3-235b-a22b-2507",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3 235B A22B Instruct 2507"
     },
     "openrouter/qwen/qwen3.5-flash-02-23": {
@@ -253,12 +181,7 @@
       "model": "qwen/qwen3.5-flash-02-23",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5-Flash"
     },
     "openrouter/qwen/qwen3.5-397b-a17b": {
@@ -266,12 +189,7 @@
       "model": "qwen/qwen3.5-397b-a17b",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5 397B-A17B"
     },
     "openrouter/qwen/qwen3-vl-8b-thinking": {
@@ -279,11 +197,7 @@
       "model": "qwen/qwen3-vl-8b-thinking",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Qwen3 VL 8B Thinking"
     },
     "openrouter/qwen/qwen3.6-27b": {
@@ -291,12 +205,7 @@
       "model": "qwen/qwen3.6-27b",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.6 27B"
     },
     "openrouter/qwen/qwen3.7-flash": {
@@ -305,12 +214,7 @@
       "maxContextSize": 1000000,
       "maxInputSize": 991000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.7 Flash"
     },
     "openrouter/qwen/qwen3-30b-a3b-thinking-2507": {
@@ -318,10 +222,7 @@
       "model": "qwen/qwen3-30b-a3b-thinking-2507",
       "maxContextSize": 81920,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 30B A3B Thinking 2507"
     },
     "openrouter/qwen/qwen3.6-35b-a3b": {
@@ -329,12 +230,7 @@
       "model": "qwen/qwen3.6-35b-a3b",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.6 35B-A3B"
     },
     "openrouter/qwen/qwen3-max-thinking": {
@@ -342,10 +238,7 @@
       "model": "qwen/qwen3-max-thinking",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 Max Thinking"
     },
     "openrouter/qwen/qwen3.8-max-0902": {
@@ -353,29 +246,16 @@
       "model": "qwen/qwen3.8-max-0902",
       "maxContextSize": 1000000,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "always_thinking", "tool_use"],
       "displayName": "Qwen3.8 Max 0902",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high", "xhigh"]
     },
     "openrouter/qwen/qwen3-max": {
       "provider": "openrouter",
       "model": "qwen/qwen3-max",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3 Max"
     },
     "openrouter/qwen/qwen3-vl-8b-instruct": {
@@ -383,10 +263,7 @@
       "model": "qwen/qwen3-vl-8b-instruct",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Qwen3 VL 8B Instruct"
     },
     "openrouter/qwen/qwen3.8-2.4t-a95b": {
@@ -394,26 +271,16 @@
       "model": "qwen/qwen3.8-2.4t-a95b",
       "maxContextSize": 1048576,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["always_thinking", "tool_use"],
       "displayName": "Qwen3.8 2.4T A95B",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "xhigh"]
     },
     "openrouter/qwen/qwen3-vl-30b-a3b-instruct": {
       "provider": "openrouter",
       "model": "qwen/qwen3-vl-30b-a3b-instruct",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Qwen3 VL 30B A3B Instruct"
     },
     "openrouter/qwen/qwen-plus": {
@@ -421,9 +288,7 @@
       "model": "qwen/qwen-plus",
       "maxContextSize": 1000000,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen Plus"
     },
     "openrouter/qwen/qwen3.5-122b-a10b": {
@@ -431,12 +296,7 @@
       "model": "qwen/qwen3.5-122b-a10b",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.5 122B-A10B"
     },
     "openrouter/qwen/qwen3.8-27b:free": {
@@ -444,18 +304,9 @@
       "model": "qwen/qwen3.8-27b:free",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.8 27B (free)",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "xhigh"]
     },
     "openrouter/qwen/qwen-2.5-coder-32b-instruct": {
       "provider": "openrouter",
@@ -469,9 +320,7 @@
       "model": "qwen/qwen3-30b-a3b-instruct-2507",
       "maxContextSize": 262144,
       "maxOutputSize": 32000,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen3 30B A3B Instruct 2507"
     },
     "openrouter/qwen/qwen3.6-flash": {
@@ -479,12 +328,7 @@
       "model": "qwen/qwen3.6-flash",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.6 Flash"
     },
     "openrouter/qwen/qwen3-30b-a3b": {
@@ -492,10 +336,7 @@
       "model": "qwen/qwen3-30b-a3b",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 30B A3B"
     },
     "openrouter/qwen/qwen-2.5-7b-instruct": {
@@ -503,9 +344,7 @@
       "model": "qwen/qwen-2.5-7b-instruct",
       "maxContextSize": 32768,
       "maxOutputSize": 29491,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen2.5 7B Instruct"
     },
     "openrouter/qwen/qwen3.8-flash": {
@@ -513,12 +352,7 @@
       "model": "qwen/qwen3.8-flash",
       "maxContextSize": 1000000,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Qwen3.8 Flash"
     },
     "openrouter/qwen/qwen3-vl-30b-a3b-thinking": {
@@ -526,11 +360,7 @@
       "model": "qwen/qwen3-vl-30b-a3b-thinking",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Qwen3 VL 30B A3B Thinking"
     },
     "openrouter/qwen/qwen3.6-max-preview": {
@@ -538,10 +368,7 @@
       "model": "qwen/qwen3.6-max-preview",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3.6 Max Preview"
     },
     "openrouter/qwen/qwen-2.5-72b-instruct": {
@@ -549,9 +376,7 @@
       "model": "qwen/qwen-2.5-72b-instruct",
       "maxContextSize": 32768,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Qwen2.5 72B Instruct"
     },
     "openrouter/qwen/qwen3-8b": {
@@ -559,10 +384,7 @@
       "model": "qwen/qwen3-8b",
       "maxContextSize": 131072,
       "maxOutputSize": 8192,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 8B"
     },
     "openrouter/qwen/qwen3-235b-a22b": {
@@ -570,10 +392,7 @@
       "model": "qwen/qwen3-235b-a22b",
       "maxContextSize": 131072,
       "maxOutputSize": 8192,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Qwen3 235B-A22B"
     },
     "openrouter/qwen/qwen3-vl-235b-a22b-thinking": {
@@ -581,11 +400,7 @@
       "model": "qwen/qwen3-vl-235b-a22b-thinking",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Qwen3 VL 235B A22B Thinking"
     },
     "openrouter/qwen/qwen3-vl-235b-a22b-instruct": {
@@ -593,10 +408,7 @@
       "model": "qwen/qwen3-vl-235b-a22b-instruct",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Qwen3 VL 235B A22B Instruct"
     },
     "openrouter/qwen/qwen3.7-plus": {
@@ -604,11 +416,7 @@
       "model": "qwen/qwen3.7-plus",
       "maxContextSize": 1000000,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Qwen3.7 Plus"
     },
     "openrouter/qwen/qwen3-vl-32b-instruct": {
@@ -616,10 +424,7 @@
       "model": "qwen/qwen3-vl-32b-instruct",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Qwen3 VL 32B Instruct"
     },
     "openrouter/baidu/ernie-4.5-vl-424b-a47b": {
@@ -627,10 +432,7 @@
       "model": "baidu/ernie-4.5-vl-424b-a47b",
       "maxContextSize": 123000,
       "maxOutputSize": 16000,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "ERNIE 4.5 VL 424B A47B "
     },
     "openrouter/unbiased/pareto": {
@@ -638,10 +440,7 @@
       "model": "unbiased/pareto",
       "maxContextSize": 262144,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Pareto"
     },
     "openrouter/aion-labs/aion-2.0": {
@@ -649,10 +448,7 @@
       "model": "aion-labs/aion-2.0",
       "maxContextSize": 1048576,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Aion-2.0"
     },
     "openrouter/aion-labs/aion-rp-llama-3.1-8b": {
@@ -667,10 +463,7 @@
       "model": "aion-labs/aion-3.0",
       "maxContextSize": 1048576,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Aion-3.0"
     },
     "openrouter/aion-labs/aion-3.0-mini": {
@@ -678,10 +471,7 @@
       "model": "aion-labs/aion-3.0-mini",
       "maxContextSize": 1048576,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Aion-3.0-Mini"
     },
     "openrouter/~anthropic/claude-fable-latest": {
@@ -689,49 +479,25 @@
       "model": "~anthropic/claude-fable-latest",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Claude Fable Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/~anthropic/claude-opus-latest": {
       "provider": "openrouter",
       "model": "~anthropic/claude-opus-latest",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Opus Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/~anthropic/claude-haiku-latest": {
       "provider": "openrouter",
       "model": "~anthropic/claude-haiku-latest",
       "maxContextSize": 200000,
       "maxOutputSize": 64000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Haiku Latest"
     },
     "openrouter/~anthropic/claude-sonnet-latest": {
@@ -739,19 +505,9 @@
       "model": "~anthropic/claude-sonnet-latest",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Sonnet Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/morph/morph-v3-large": {
       "provider": "openrouter",
@@ -779,60 +535,34 @@
       "model": "~deepseek/deepseek-v4-flash-latest",
       "maxContextSize": 1310720,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V4 Flash Latest",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/~deepseek/deepseek-pro-latest": {
       "provider": "openrouter",
       "model": "~deepseek/deepseek-pro-latest",
       "maxContextSize": 1048576,
       "maxOutputSize": 384000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek Pro Latest",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/~deepseek/deepseek-flash-latest": {
       "provider": "openrouter",
       "model": "~deepseek/deepseek-flash-latest",
       "maxContextSize": 1048576,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "DeepSeek Flash Latest",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/dots-studio/dots-3-note-preview:free": {
       "provider": "openrouter",
       "model": "dots-studio/dots-3-note-preview:free",
       "maxContextSize": 512000,
       "maxOutputSize": 460800,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Dots3-Note Preview (free)"
     },
     "openrouter/~x-ai/grok-latest": {
@@ -840,28 +570,16 @@
       "model": "~x-ai/grok-latest",
       "maxContextSize": 500000,
       "maxOutputSize": 450000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Grok Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh"]
     },
     "openrouter/meituan/longcat-2.0": {
       "provider": "openrouter",
       "model": "meituan/longcat-2.0",
       "maxContextSize": 1048756,
       "maxOutputSize": 262144,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "LongCat 2.0"
     },
     "openrouter/prism-ml/ternary-bonsai-2-27b": {
@@ -869,26 +587,16 @@
       "model": "prism-ml/ternary-bonsai-2-27b",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Ternary Bonsai 2 27B",
-      "supportEfforts": [
-        "medium",
-        "xhigh"
-      ]
+      "supportEfforts": ["medium", "xhigh"]
     },
     "openrouter/poolside/laguna-xs-2.1": {
       "provider": "openrouter",
       "model": "poolside/laguna-xs-2.1",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Laguna XS 2.1"
     },
     "openrouter/poolside/laguna-xs-2.1:free": {
@@ -896,10 +604,7 @@
       "model": "poolside/laguna-xs-2.1:free",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Laguna XS 2.1 (free)"
     },
     "openrouter/poolside/laguna-s-2.1:free": {
@@ -907,10 +612,7 @@
       "model": "poolside/laguna-s-2.1:free",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Laguna S 2.1 (free)"
     },
     "openrouter/poolside/laguna-s-2.1": {
@@ -918,10 +620,7 @@
       "model": "poolside/laguna-s-2.1",
       "maxContextSize": 1048576,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Laguna S 2.1"
     },
     "openrouter/kwaipilot/kat-coder-pro-v2.5": {
@@ -929,9 +628,7 @@
       "model": "kwaipilot/kat-coder-pro-v2.5",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "KAT-Coder-Pro V2.5"
     },
     "openrouter/stepfun/step-3.7-flash": {
@@ -940,28 +637,16 @@
       "maxContextSize": 262144,
       "maxInputSize": 256000,
       "maxOutputSize": 230400,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "always_thinking", "tool_use"],
       "displayName": "Step 3.7 Flash",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/stepfun/step-3.5-flash": {
       "provider": "openrouter",
       "model": "stepfun/step-3.5-flash",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Step 3.5 Flash"
     },
     "openrouter/mistralai/ministral-14b-2512": {
@@ -969,10 +654,7 @@
       "model": "mistralai/ministral-14b-2512",
       "maxContextSize": 262144,
       "maxOutputSize": 209715,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Ministral 3 14B 2512"
     },
     "openrouter/mistralai/mistral-large": {
@@ -980,9 +662,7 @@
       "model": "mistralai/mistral-large",
       "maxContextSize": 128000,
       "maxOutputSize": 102400,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Mistral Large"
     },
     "openrouter/mistralai/codestral-2508": {
@@ -990,9 +670,7 @@
       "model": "mistralai/codestral-2508",
       "maxContextSize": 256000,
       "maxOutputSize": 204800,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Codestral 2508"
     },
     "openrouter/mistralai/mistral-medium-3-5": {
@@ -1000,15 +678,9 @@
       "model": "mistralai/mistral-medium-3-5",
       "maxContextSize": 262144,
       "maxOutputSize": 209715,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Mistral Medium 3.5",
-      "supportEfforts": [
-        "high"
-      ],
+      "supportEfforts": ["high"],
       "offEffort": "none"
     },
     "openrouter/mistralai/devstral-2512": {
@@ -1016,9 +688,7 @@
       "model": "mistralai/devstral-2512",
       "maxContextSize": 262144,
       "maxOutputSize": 209715,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Devstral 2"
     },
     "openrouter/mistralai/mistral-large-2407": {
@@ -1026,9 +696,7 @@
       "model": "mistralai/mistral-large-2407",
       "maxContextSize": 131072,
       "maxOutputSize": 104857,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Mistral Large 2407"
     },
     "openrouter/mistralai/mistral-small-3.2-24b-instruct": {
@@ -1036,10 +704,7 @@
       "model": "mistralai/mistral-small-3.2-24b-instruct",
       "maxContextSize": 256000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Mistral Small 3.2 24B"
     },
     "openrouter/mistralai/mixtral-8x22b-instruct": {
@@ -1047,9 +712,7 @@
       "model": "mistralai/mixtral-8x22b-instruct",
       "maxContextSize": 65536,
       "maxOutputSize": 52428,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Mixtral 8x22B Instruct"
     },
     "openrouter/mistralai/mistral-saba": {
@@ -1057,9 +720,7 @@
       "model": "mistralai/mistral-saba",
       "maxContextSize": 32768,
       "maxOutputSize": 26214,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Saba"
     },
     "openrouter/mistralai/ministral-3b-2512": {
@@ -1067,10 +728,7 @@
       "model": "mistralai/ministral-3b-2512",
       "maxContextSize": 131072,
       "maxOutputSize": 104857,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Ministral 3 3B 2512"
     },
     "openrouter/mistralai/mistral-nemo": {
@@ -1078,9 +736,7 @@
       "model": "mistralai/mistral-nemo",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Mistral Nemo"
     },
     "openrouter/mistralai/mistral-medium-3": {
@@ -1088,10 +744,7 @@
       "model": "mistralai/mistral-medium-3",
       "maxContextSize": 131072,
       "maxOutputSize": 104857,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Mistral Medium 3"
     },
     "openrouter/mistralai/mistral-small-24b-instruct-2501": {
@@ -1106,10 +759,7 @@
       "model": "mistralai/mistral-small-3.1-24b-instruct",
       "maxContextSize": 128000,
       "maxOutputSize": 102400,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Mistral Small 3.1 24B"
     },
     "openrouter/mistralai/mistral-small-2603": {
@@ -1117,15 +767,9 @@
       "model": "mistralai/mistral-small-2603",
       "maxContextSize": 262144,
       "maxOutputSize": 209715,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Mistral Small 4",
-      "supportEfforts": [
-        "high"
-      ],
+      "supportEfforts": ["high"],
       "offEffort": "none"
     },
     "openrouter/mistralai/ministral-8b-2512": {
@@ -1133,10 +777,7 @@
       "model": "mistralai/ministral-8b-2512",
       "maxContextSize": 262144,
       "maxOutputSize": 209715,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Ministral 3 8B 2512"
     },
     "openrouter/mistralai/voxtral-small-24b-2507": {
@@ -1144,10 +785,7 @@
       "model": "mistralai/voxtral-small-24b-2507",
       "maxContextSize": 32768,
       "maxOutputSize": 26214,
-      "capabilities": [
-        "audio_in",
-        "tool_use"
-      ],
+      "capabilities": ["audio_in", "tool_use"],
       "displayName": "Voxtral Small 24B 2507"
     },
     "openrouter/mistralai/mistral-medium-3.1": {
@@ -1155,10 +793,7 @@
       "model": "mistralai/mistral-medium-3.1",
       "maxContextSize": 131072,
       "maxOutputSize": 104857,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Mistral Medium 3.1"
     },
     "openrouter/xiaomi/mimo-v2.6-pro": {
@@ -1223,10 +858,7 @@
       "model": "xiaomi/mimo-v2.5-pro",
       "maxContextSize": 1050000,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "MiMo-V2.5-Pro",
       "reasoningKey": "reasoning_content"
     },
@@ -1235,10 +867,7 @@
       "model": "minimax/minimax-m2.1",
       "maxContextSize": 204800,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "MiniMax-M2.1",
       "reasoningKey": "reasoning_details"
     },
@@ -1247,10 +876,7 @@
       "model": "minimax/minimax-m2",
       "maxContextSize": 204800,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "MiniMax-M2",
       "reasoningKey": "reasoning_details"
     },
@@ -1259,10 +885,7 @@
       "model": "minimax/minimax-m2.7",
       "maxContextSize": 204800,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "MiniMax-M2.7"
     },
     "openrouter/minimax/minimax-m2.5": {
@@ -1270,10 +893,7 @@
       "model": "minimax/minimax-m2.5",
       "maxContextSize": 204800,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "MiniMax-M2.5",
       "reasoningKey": "reasoning_details"
     },
@@ -1282,12 +902,7 @@
       "model": "minimax/minimax-m3",
       "maxContextSize": 1048576,
       "maxOutputSize": 512000,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "MiniMax-M3"
     },
     "openrouter/minimax/minimax-m2-her": {
@@ -1302,10 +917,7 @@
       "model": "minimax/minimax-m1",
       "maxContextSize": 1000000,
       "maxOutputSize": 40000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "MiniMax M1"
     },
     "openrouter/minimax/minimax-01": {
@@ -1313,9 +925,7 @@
       "model": "minimax/minimax-01",
       "maxContextSize": 1000192,
       "maxOutputSize": 900172,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "MiniMax-01"
     },
     "openrouter/nvidia/nemotron-3.5-lightning:free": {
@@ -1323,10 +933,7 @@
       "model": "nvidia/nemotron-3.5-lightning:free",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Nemotron 3.5 Lightning (free)"
     },
     "openrouter/nvidia/nemotron-3.5-content-safety": {
@@ -1334,10 +941,7 @@
       "model": "nvidia/nemotron-3.5-content-safety",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Nemotron 3.5 Content Safety"
     },
     "openrouter/nvidia/nemotron-3.5-lightning": {
@@ -1345,10 +949,7 @@
       "model": "nvidia/nemotron-3.5-lightning",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Nemotron 3.5 Lightning 30B A3B"
     },
     "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
@@ -1370,55 +971,34 @@
       "model": "nvidia/nemotron-3-super-120b-a12b",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Nemotron 3 Super 120B A12B",
-      "supportEfforts": [
-        "low",
-        "medium"
-      ]
+      "supportEfforts": ["low", "medium"]
     },
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": {
       "provider": "openrouter",
       "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
       "maxContextSize": 1000000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Nemotron 3 Ultra (free)",
-      "supportEfforts": [
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["medium", "high"]
     },
     "openrouter/nvidia/nemotron-3-super-120b-a12b:free": {
       "provider": "openrouter",
       "model": "nvidia/nemotron-3-super-120b-a12b:free",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Nemotron 3 Super (free)",
-      "supportEfforts": [
-        "low",
-        "medium"
-      ]
+      "supportEfforts": ["low", "medium"]
     },
     "openrouter/nvidia/nemotron-3.5-content-safety:free": {
       "provider": "openrouter",
       "model": "nvidia/nemotron-3.5-content-safety:free",
       "maxContextSize": 128000,
       "maxOutputSize": 8192,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Nemotron 3.5 Content Safety (free)"
     },
     "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
@@ -1426,25 +1006,16 @@
       "model": "nvidia/nemotron-3-ultra-550b-a55b",
       "maxContextSize": 262144,
       "maxOutputSize": 182520,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Nemotron 3 Ultra 550B A55B",
-      "supportEfforts": [
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["medium", "high"]
     },
     "openrouter/nvidia/nemotron-3-nano-30b-a3b": {
       "provider": "openrouter",
       "model": "nvidia/nemotron-3-nano-30b-a3b",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Nemotron 3 Nano 30B A3B"
     },
     "openrouter/anthropic/claude-opus-4.8": {
@@ -1452,68 +1023,34 @@
       "model": "anthropic/claude-opus-4.8",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Opus 4.8",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/anthropic/claude-opus-4.7": {
       "provider": "openrouter",
       "model": "anthropic/claude-opus-4.7",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Opus 4.7",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/anthropic/claude-opus-5": {
       "provider": "openrouter",
       "model": "anthropic/claude-opus-5",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Opus 5",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/anthropic/claude-opus-4.1": {
       "provider": "openrouter",
       "model": "anthropic/claude-opus-4.1",
       "maxContextSize": 200000,
       "maxOutputSize": 32000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Opus 4.1 (latest)"
     },
     "openrouter/anthropic/claude-sonnet-4.6": {
@@ -1521,28 +1058,16 @@
       "model": "anthropic/claude-sonnet-4.6",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Sonnet 4.6",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "max"]
     },
     "openrouter/anthropic/claude-3-haiku": {
       "provider": "openrouter",
       "model": "anthropic/claude-3-haiku",
       "maxContextSize": 200000,
       "maxOutputSize": 4096,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Claude 3 Haiku"
     },
     "openrouter/anthropic/claude-haiku-4.5": {
@@ -1550,11 +1075,7 @@
       "model": "anthropic/claude-haiku-4.5",
       "maxContextSize": 200000,
       "maxOutputSize": 64000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Haiku 4.5 (latest)"
     },
     "openrouter/anthropic/claude-opus-4.6": {
@@ -1562,48 +1083,25 @@
       "model": "anthropic/claude-opus-4.6",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Opus 4.6",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "max"]
     },
     "openrouter/anthropic/claude-fable-5": {
       "provider": "openrouter",
       "model": "anthropic/claude-fable-5",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Claude Fable 5",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/anthropic/claude-sonnet-4.5": {
       "provider": "openrouter",
       "model": "anthropic/claude-sonnet-4.5",
       "maxContextSize": 1000000,
       "maxOutputSize": 64000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Sonnet 4.5 (latest)"
     },
     "openrouter/anthropic/claude-opus-4.5": {
@@ -1611,11 +1109,7 @@
       "model": "anthropic/claude-opus-4.5",
       "maxContextSize": 200000,
       "maxOutputSize": 64000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Opus 4.5 (latest)"
     },
     "openrouter/anthropic/claude-sonnet-4": {
@@ -1623,11 +1117,7 @@
       "model": "anthropic/claude-sonnet-4",
       "maxContextSize": 200000,
       "maxOutputSize": 64000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Sonnet 4"
     },
     "openrouter/anthropic/claude-sonnet-5": {
@@ -1635,50 +1125,25 @@
       "model": "anthropic/claude-sonnet-5",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Claude Sonnet 5",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/anthropic/claude-fable-5.1": {
       "provider": "openrouter",
       "model": "anthropic/claude-fable-5.1",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Claude Fable 5.1",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/google/gemma-4-26b-a4b-it": {
       "provider": "openrouter",
       "model": "google/gemma-4-26b-a4b-it",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Gemma 4 26B A4B IT"
     },
     "openrouter/google/gemini-3.1-pro-preview-customtools": {
@@ -1695,35 +1160,23 @@
       ],
       "displayName": "Gemini 3.1 Pro Preview Custom Tools",
       "reasoningKey": "reasoning_details",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/google/gemini-3.1-flash-lite-image": {
       "provider": "openrouter",
       "model": "google/gemini-3.1-flash-lite-image",
       "maxContextSize": 65536,
       "maxOutputSize": 58982,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Nano Banana 2 Lite",
-      "supportEfforts": [
-        "minimal",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "high"]
     },
     "openrouter/google/gemma-3-4b-it": {
       "provider": "openrouter",
       "model": "google/gemma-3-4b-it",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Gemma 3 4B IT"
     },
     "openrouter/google/lyria-3-clip-preview": {
@@ -1731,9 +1184,7 @@
       "model": "google/lyria-3-clip-preview",
       "maxContextSize": 1048576,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Lyria 3 Clip Preview"
     },
     "openrouter/google/gemini-2.5-flash-image": {
@@ -1741,9 +1192,7 @@
       "model": "google/gemini-2.5-flash-image",
       "maxContextSize": 32768,
       "maxOutputSize": 8192,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Nano Banana"
     },
     "openrouter/google/gemini-3-pro-image": {
@@ -1751,11 +1200,7 @@
       "model": "google/gemini-3-pro-image",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Nano Banana Pro"
     },
     "openrouter/google/gemini-3.1-pro-preview": {
@@ -1772,11 +1217,7 @@
       ],
       "displayName": "Gemini 3.1 Pro Preview",
       "reasoningKey": "reasoning_details",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/google/gemini-2.5-flash-lite": {
       "provider": "openrouter",
@@ -1805,12 +1246,7 @@
         "tool_use"
       ],
       "displayName": "Gemini 3.6 Flash",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/google/gemini-3.1-flash-lite": {
       "provider": "openrouter",
@@ -1825,12 +1261,7 @@
         "tool_use"
       ],
       "displayName": "Gemini 3.1 Flash Lite",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/google/gemini-3.5-flash": {
       "provider": "openrouter",
@@ -1845,12 +1276,7 @@
         "tool_use"
       ],
       "displayName": "Gemini 3.5 Flash",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/google/gemini-3.1-flash-lite-preview": {
       "provider": "openrouter",
@@ -1865,22 +1291,14 @@
         "tool_use"
       ],
       "displayName": "Gemini 3.1 Flash Lite Preview",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/google/gemma-3-27b-it": {
       "provider": "openrouter",
       "model": "google/gemma-3-27b-it",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Gemma 3 27B IT"
     },
     "openrouter/google/gemini-3.1-flash-image": {
@@ -1888,15 +1306,9 @@
       "model": "google/gemini-3.1-flash-image",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Nano Banana 2",
-      "supportEfforts": [
-        "minimal",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "high"]
     },
     "openrouter/google/gemini-3.5-flash-lite": {
       "provider": "openrouter",
@@ -1911,24 +1323,14 @@
         "tool_use"
       ],
       "displayName": "Gemini 3.5 Flash Lite",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/google/gemini-2.5-pro-preview": {
       "provider": "openrouter",
       "model": "google/gemini-2.5-pro-preview",
       "maxContextSize": 1048576,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "audio_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "audio_in", "thinking", "tool_use"],
       "displayName": "Gemini 2.5 Pro Preview 06-05"
     },
     "openrouter/google/gemini-3-pro-image-preview": {
@@ -1936,10 +1338,7 @@
       "model": "google/gemini-3-pro-image-preview",
       "maxContextSize": 65536,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Nano Banana Pro Preview"
     },
     "openrouter/google/gemma-4-31b-it:free": {
@@ -1947,12 +1346,7 @@
       "model": "google/gemma-4-31b-it:free",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Gemma 4 31B (free)"
     },
     "openrouter/google/gemma-4-31b-it": {
@@ -1960,12 +1354,7 @@
       "model": "google/gemma-4-31b-it",
       "maxContextSize": 262144,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Gemma 4 31B IT"
     },
     "openrouter/google/gemini-3-flash-preview": {
@@ -1982,12 +1371,7 @@
       ],
       "displayName": "Gemini 3 Flash Preview",
       "reasoningKey": "reasoning_details",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/google/gemini-3.8-flash": {
       "provider": "openrouter",
@@ -2002,20 +1386,14 @@
         "tool_use"
       ],
       "displayName": "Gemini 3.8 Flash",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/google/lyria-3-pro-preview": {
       "provider": "openrouter",
       "model": "google/lyria-3-pro-preview",
       "maxContextSize": 1048576,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Lyria 3 Pro Preview"
     },
     "openrouter/google/gemini-3.7-flash": {
@@ -2031,11 +1409,7 @@
         "tool_use"
       ],
       "displayName": "Gemini 3.7 Flash",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/google/gemini-2.5-pro": {
       "provider": "openrouter",
@@ -2056,15 +1430,9 @@
       "model": "google/gemini-3.1-flash-image-preview",
       "maxContextSize": 65536,
       "maxOutputSize": 58982,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Nano Banana 2 Preview",
-      "supportEfforts": [
-        "minimal",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "high"]
     },
     "openrouter/google/gemini-2.5-flash": {
       "provider": "openrouter",
@@ -2085,10 +1453,7 @@
       "model": "google/gemma-3-12b-it",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Gemma 3 12B IT"
     },
     "openrouter/google/gemma-4-26b-a4b-it:free": {
@@ -2096,12 +1461,7 @@
       "model": "google/gemma-4-26b-a4b-it:free",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Gemma 4 26B A4B  (free)"
     },
     "openrouter/google/gemma-2-27b-it": {
@@ -2123,9 +1483,7 @@
       "model": "relace/relace-search",
       "maxContextSize": 256000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Relace Search"
     },
     "openrouter/nex-agi/nex-n2.5-mini:free": {
@@ -2133,16 +1491,9 @@
       "model": "nex-agi/nex-n2.5-mini:free",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Nex-N2.5-Mini (free)",
-      "supportEfforts": [
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["medium", "high"],
       "offEffort": "none"
     },
     "openrouter/nex-agi/nex-n2.5-pro": {
@@ -2150,16 +1501,9 @@
       "model": "nex-agi/nex-n2.5-pro",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Nex-N2.5-Pro",
-      "supportEfforts": [
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["medium", "high"],
       "offEffort": "none"
     },
     "openrouter/nex-agi/nex-n2.5-pro:free": {
@@ -2167,16 +1511,9 @@
       "model": "nex-agi/nex-n2.5-pro:free",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Nex-N2.5-Pro (free)",
-      "supportEfforts": [
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["medium", "high"],
       "offEffort": "none"
     },
     "openrouter/nex-agi/nex-n2.5-mini": {
@@ -2184,15 +1521,9 @@
       "model": "nex-agi/nex-n2.5-mini",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Nex-N2.5-Mini",
-      "supportEfforts": [
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["medium", "high"],
       "offEffort": "none"
     },
     "openrouter/thinkingmachines/inkling-small": {
@@ -2200,20 +1531,9 @@
       "model": "thinkingmachines/inkling-small",
       "maxContextSize": 1048576,
       "maxOutputSize": 262144,
-      "capabilities": [
-        "image_in",
-        "audio_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "audio_in", "thinking", "tool_use"],
       "displayName": "Inkling Small",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "max"
-      ],
+      "supportEfforts": ["minimal", "low", "medium", "high", "max"],
       "offEffort": "none"
     },
     "openrouter/thinkingmachines/inkling-small:free": {
@@ -2221,20 +1541,9 @@
       "model": "thinkingmachines/inkling-small:free",
       "maxContextSize": 1048576,
       "maxOutputSize": 262144,
-      "capabilities": [
-        "image_in",
-        "audio_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "audio_in", "thinking", "tool_use"],
       "displayName": "Inkling Small (free)",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "max"
-      ],
+      "supportEfforts": ["minimal", "low", "medium", "high", "max"],
       "offEffort": "none"
     },
     "openrouter/thinkingmachines/inkling:free": {
@@ -2242,20 +1551,9 @@
       "model": "thinkingmachines/inkling:free",
       "maxContextSize": 1048576,
       "maxOutputSize": 262144,
-      "capabilities": [
-        "image_in",
-        "audio_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "audio_in", "thinking", "tool_use"],
       "displayName": "Inkling (free)",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "max"
-      ],
+      "supportEfforts": ["minimal", "low", "medium", "high", "max"],
       "offEffort": "none"
     },
     "openrouter/thinkingmachines/inkling": {
@@ -2263,20 +1561,9 @@
       "model": "thinkingmachines/inkling",
       "maxContextSize": 1048576,
       "maxOutputSize": 471859,
-      "capabilities": [
-        "image_in",
-        "audio_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "audio_in", "thinking", "tool_use"],
       "displayName": "Inkling",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "max"
-      ],
+      "supportEfforts": ["minimal", "low", "medium", "high", "max"],
       "offEffort": "none"
     },
     "openrouter/gryphe/mythomax-l2-13b": {
@@ -2299,14 +1586,7 @@
         "tool_use"
       ],
       "displayName": "Muse Spark 1.3",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/meta/muse-spark-1.2": {
       "provider": "openrouter",
@@ -2321,13 +1601,7 @@
         "tool_use"
       ],
       "displayName": "Muse Spark 1.2",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high", "xhigh"]
     },
     "openrouter/meta/muse-spark-1.2-contributor": {
       "provider": "openrouter",
@@ -2342,13 +1616,7 @@
         "tool_use"
       ],
       "displayName": "Muse Spark 1.2 Contributor",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high", "xhigh"]
     },
     "openrouter/meta/muse-spark-1.3-contributor": {
       "provider": "openrouter",
@@ -2363,14 +1631,7 @@
         "tool_use"
       ],
       "displayName": "Muse Spark 1.3 Contributor",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/meta/muse-spark-1.1": {
       "provider": "openrouter",
@@ -2385,42 +1646,23 @@
         "tool_use"
       ],
       "displayName": "Muse Spark 1.1",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high", "xhigh"]
     },
     "openrouter/meta/muse-glimmer-30b": {
       "provider": "openrouter",
       "model": "meta/muse-glimmer-30b",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Muse Glimmer 30B",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh"]
     },
     "openrouter/perceptron/perceptron-mk1": {
       "provider": "openrouter",
       "model": "perceptron/perceptron-mk1",
       "maxContextSize": 32768,
       "maxOutputSize": 8192,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking"],
       "displayName": "Perceptron Mk1"
     },
     "openrouter/thedrummer/skyfall-36b-v2": {
@@ -2449,9 +1691,7 @@
       "model": "bytedance/ui-tars-1.5-7b",
       "maxContextSize": 128000,
       "maxOutputSize": 2048,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "UI-TARS 7B "
     },
     "openrouter/bytedance-seed/seed-1.6-flash": {
@@ -2459,12 +1699,7 @@
       "model": "bytedance-seed/seed-1.6-flash",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Seed 1.6 Flash"
     },
     "openrouter/bytedance-seed/seed-2-1-turbo": {
@@ -2472,12 +1707,7 @@
       "model": "bytedance-seed/seed-2-1-turbo",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Seed 2.1 Turbo"
     },
     "openrouter/bytedance-seed/seed-2.0-code": {
@@ -2485,30 +1715,16 @@
       "model": "bytedance-seed/seed-2.0-code",
       "maxContextSize": 262144,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Seed 2.0 Code",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/bytedance-seed/seed-1.6": {
       "provider": "openrouter",
       "model": "bytedance-seed/seed-1.6",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Seed 1.6"
     },
     "openrouter/bytedance-seed/seed-2.0-mini": {
@@ -2516,54 +1732,27 @@
       "model": "bytedance-seed/seed-2.0-mini",
       "maxContextSize": 262144,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Seed 2.0 Mini",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/bytedance-seed/seed-2.0-lite": {
       "provider": "openrouter",
       "model": "bytedance-seed/seed-2.0-lite",
       "maxContextSize": 262144,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Seed 2.0 Lite",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/inception/mercury-2.5": {
       "provider": "openrouter",
       "model": "inception/mercury-2.5",
       "maxContextSize": 260000,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Mercury 2.5",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["low", "medium", "high"],
       "offEffort": "none"
     },
     "openrouter/inception/mercury-2": {
@@ -2571,16 +1760,9 @@
       "model": "inception/mercury-2",
       "maxContextSize": 128000,
       "maxOutputSize": 50000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Mercury 2",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["low", "medium", "high"],
       "offEffort": "none"
     },
     "openrouter/writer/palmyra-x5": {
@@ -2603,11 +1785,7 @@
         "tool_use"
       ],
       "displayName": "Gemini Pro Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/~google/gemini-flash-latest": {
       "provider": "openrouter",
@@ -2622,11 +1800,7 @@
         "tool_use"
       ],
       "displayName": "Gemini Flash Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/microsoft/phi-4": {
       "provider": "openrouter",
@@ -2647,49 +1821,27 @@
       "model": "sakana/fugu-ultra",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Fugu Ultra",
-      "supportEfforts": [
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["high", "xhigh", "max"]
     },
     "openrouter/sakana/fugu-max": {
       "provider": "openrouter",
       "model": "sakana/fugu-max",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Fugu Max",
-      "supportEfforts": [
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["high", "xhigh", "max"]
     },
     "openrouter/sakana/sakana-namazu": {
       "provider": "openrouter",
       "model": "sakana/sakana-namazu",
       "maxContextSize": 262144,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Sakana Namazu",
-      "supportEfforts": [
-        "high"
-      ],
+      "supportEfforts": ["high"],
       "offEffort": "none"
     },
     "openrouter/sakana/fugu-ultra-v2": {
@@ -2697,50 +1849,27 @@
       "model": "sakana/fugu-ultra-v2",
       "maxContextSize": 1000000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Fugu Ultra v2",
-      "supportEfforts": [
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["high", "xhigh", "max"]
     },
     "openrouter/~moonshotai/kimi-latest": {
       "provider": "openrouter",
       "model": "~moonshotai/kimi-latest",
       "maxContextSize": 1048576,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Kimi Latest",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/ibm-granite/granite-4.2-8b": {
       "provider": "openrouter",
       "model": "ibm-granite/granite-4.2-8b",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Granite 4.2 8B",
-      "supportEfforts": [
-        "low",
-        "high"
-      ],
+      "supportEfforts": ["low", "high"],
       "offEffort": "none"
     },
     "openrouter/ibm-granite/granite-4.0-h-micro": {
@@ -2755,10 +1884,7 @@
       "model": "deepseek/deepseek-chat-v3.1",
       "maxContextSize": 163840,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V3.1"
     },
     "openrouter/deepseek/deepseek-v4-flash-vision-exp": {
@@ -2766,92 +1892,53 @@
       "model": "deepseek/deepseek-v4-flash-vision-exp",
       "maxContextSize": 1048576,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "DeepSeek V4 Flash Vision Exp",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
       "provider": "openrouter",
       "model": "deepseek/deepseek-v4-pro-0813",
       "maxContextSize": 1048576,
       "maxOutputSize": 384000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V4 Pro 0813",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
       "provider": "openrouter",
       "model": "deepseek/deepseek-v4-flash-0731",
       "maxContextSize": 1310720,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V4 Flash 0731",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/deepseek/deepseek-v4-flash": {
       "provider": "openrouter",
       "model": "deepseek/deepseek-v4-flash",
       "maxContextSize": 1048576,
       "maxOutputSize": 384000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V4 Flash",
       "reasoningKey": "reasoning_content",
-      "supportEfforts": [
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["high", "xhigh"]
     },
     "openrouter/deepseek/deepseek-v4.1-flash": {
       "provider": "openrouter",
       "model": "deepseek/deepseek-v4.1-flash",
       "maxContextSize": 1048576,
       "maxOutputSize": 384000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "DeepSeek V4.1 Flash",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/deepseek/deepseek-r1": {
       "provider": "openrouter",
       "model": "deepseek/deepseek-r1",
       "maxContextSize": 64000,
       "maxOutputSize": 16000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek-R1"
     },
     "openrouter/deepseek/deepseek-chat": {
@@ -2859,9 +1946,7 @@
       "model": "deepseek/deepseek-chat",
       "maxContextSize": 163840,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "DeepSeek Chat"
     },
     "openrouter/deepseek/deepseek-r1-0528": {
@@ -2869,10 +1954,7 @@
       "model": "deepseek/deepseek-r1-0528",
       "maxContextSize": 163840,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "R1 0528"
     },
     "openrouter/deepseek/deepseek-v3.2": {
@@ -2880,10 +1962,7 @@
       "model": "deepseek/deepseek-v3.2",
       "maxContextSize": 163840,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V3.2"
     },
     "openrouter/deepseek/deepseek-r1-distill-llama-70b": {
@@ -2891,9 +1970,7 @@
       "model": "deepseek/deepseek-r1-distill-llama-70b",
       "maxContextSize": 8192,
       "maxOutputSize": 7372,
-      "capabilities": [
-        "thinking"
-      ],
+      "capabilities": ["thinking"],
       "displayName": "R1 Distill Llama 70B"
     },
     "openrouter/deepseek/deepseek-v3.2-exp": {
@@ -2901,10 +1978,7 @@
       "model": "deepseek/deepseek-v3.2-exp",
       "maxContextSize": 163840,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V3.2 Exp"
     },
     "openrouter/deepseek/deepseek-v3.1-terminus": {
@@ -2912,10 +1986,7 @@
       "model": "deepseek/deepseek-v3.1-terminus",
       "maxContextSize": 163840,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V3.1 Terminus"
     },
     "openrouter/deepseek/deepseek-v4-pro": {
@@ -2923,25 +1994,17 @@
       "model": "deepseek/deepseek-v4-pro",
       "maxContextSize": 1048576,
       "maxOutputSize": 384000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "DeepSeek V4 Pro",
       "reasoningKey": "reasoning_content",
-      "supportEfforts": [
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["high", "xhigh"]
     },
     "openrouter/deepseek/deepseek-chat-v3-0324": {
       "provider": "openrouter",
       "model": "deepseek/deepseek-chat-v3-0324",
       "maxContextSize": 163840,
       "maxOutputSize": 147456,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "DeepSeek V3 0324"
     },
     "openrouter/~openai/gpt-terra-latest": {
@@ -2949,19 +2012,9 @@
       "model": "~openai/gpt-terra-latest",
       "maxContextSize": 1050000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT Terra Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/~openai/gpt-sol-latest": {
@@ -2969,19 +2022,9 @@
       "model": "~openai/gpt-sol-latest",
       "maxContextSize": 1050000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT Sol Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/~openai/gpt-luna-latest": {
@@ -2989,19 +2032,9 @@
       "model": "~openai/gpt-luna-latest",
       "maxContextSize": 1050000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT Luna Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/~openai/gpt-astra-latest": {
@@ -3009,37 +2042,18 @@
       "model": "~openai/gpt-astra-latest",
       "maxContextSize": 1050000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT Astra Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/~openai/gpt-mini-latest": {
       "provider": "openrouter",
       "model": "~openai/gpt-mini-latest",
       "maxContextSize": 400000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT Mini Latest",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/amazon/nova-2-lite-v1": {
@@ -3047,12 +2061,7 @@
       "model": "amazon/nova-2-lite-v1",
       "maxContextSize": 1000000,
       "maxOutputSize": 65535,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Nova 2 Lite"
     },
     "openrouter/amazon/nova-micro-v1": {
@@ -3060,9 +2069,7 @@
       "model": "amazon/nova-micro-v1",
       "maxContextSize": 128000,
       "maxOutputSize": 5120,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Nova Micro 1.0"
     },
     "openrouter/amazon/nova-pro-v1": {
@@ -3070,10 +2077,7 @@
       "model": "amazon/nova-pro-v1",
       "maxContextSize": 300000,
       "maxOutputSize": 5120,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Nova Pro 1.0"
     },
     "openrouter/amazon/nova-premier-v1": {
@@ -3081,10 +2085,7 @@
       "model": "amazon/nova-premier-v1",
       "maxContextSize": 1000000,
       "maxOutputSize": 32000,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Nova Premier 1.0"
     },
     "openrouter/amazon/nova-lite-v1": {
@@ -3092,10 +2093,7 @@
       "model": "amazon/nova-lite-v1",
       "maxContextSize": 300000,
       "maxOutputSize": 5120,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Nova Lite 1.0"
     },
     "openrouter/inclusionai/ling-3.0-flash": {
@@ -3103,10 +2101,7 @@
       "model": "inclusionai/ling-3.0-flash",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Ling 3.0 Flash"
     },
     "openrouter/inclusionai/ling-3.0-flash-fin": {
@@ -3114,10 +2109,7 @@
       "model": "inclusionai/ling-3.0-flash-fin",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Ling 3.0 Flash Fin"
     },
     "openrouter/inclusionai/ling-3.0-flash-fin:free": {
@@ -3125,10 +2117,7 @@
       "model": "inclusionai/ling-3.0-flash-fin:free",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Ling 3.0 Flash Fin (free)"
     },
     "openrouter/inclusionai/ling-3.0-flash-sante:free": {
@@ -3136,10 +2125,7 @@
       "model": "inclusionai/ling-3.0-flash-sante:free",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Ling 3.0 Flash Sante (free)"
     },
     "openrouter/inclusionai/ling-3.0-flash-vl:free": {
@@ -3147,12 +2133,7 @@
       "model": "inclusionai/ling-3.0-flash-vl:free",
       "maxContextSize": 262144,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Ling 3.0 Flash VL (free)"
     },
     "openrouter/inclusionai/ling-3.0-flash-vl": {
@@ -3160,12 +2141,7 @@
       "model": "inclusionai/ling-3.0-flash-vl",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Ling 3.0 Flash VL"
     },
     "openrouter/anthracite-org/magnum-v4-72b": {
@@ -3188,11 +2164,7 @@
       "maxContextSize": 200000,
       "maxInputSize": 200000,
       "maxOutputSize": 8000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Free Models Router"
     },
     "openrouter/openrouter/pareto-code": {
@@ -3249,9 +2221,7 @@
       "model": "sao10k/l3.1-euryale-70b",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Llama 3.1 Euryale 70B v2.2"
     },
     "openrouter/x-ai/grok-4.20-multi-agent": {
@@ -3259,34 +2229,18 @@
       "model": "x-ai/grok-4.20-multi-agent",
       "maxContextSize": 2000000,
       "maxOutputSize": 1800000,
-      "capabilities": [
-        "image_in",
-        "always_thinking"
-      ],
+      "capabilities": ["image_in", "always_thinking"],
       "displayName": "Grok 4.20 Multi-Agent",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh"]
     },
     "openrouter/x-ai/grok-4.3": {
       "provider": "openrouter",
       "model": "x-ai/grok-4.3",
       "maxContextSize": 1000000,
       "maxOutputSize": 900000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Grok 4.3",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["low", "medium", "high"],
       "offEffort": "none"
     },
     "openrouter/x-ai/grok-4.20": {
@@ -3294,11 +2248,7 @@
       "model": "x-ai/grok-4.20",
       "maxContextSize": 2000000,
       "maxOutputSize": 1800000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Grok 4.20"
     },
     "openrouter/x-ai/grok-4.5": {
@@ -3306,28 +2256,16 @@
       "model": "x-ai/grok-4.5",
       "maxContextSize": 500000,
       "maxOutputSize": 450000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Grok 4.5",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/x-ai/grok-build-0.1": {
       "provider": "openrouter",
       "model": "x-ai/grok-build-0.1",
       "maxContextSize": 256000,
       "maxOutputSize": 230400,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Grok Build 0.1"
     },
     "openrouter/x-ai/grok-4.6": {
@@ -3335,45 +2273,25 @@
       "model": "x-ai/grok-4.6",
       "maxContextSize": 500000,
       "maxOutputSize": 450000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Grok 4.6",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh"]
     },
     "openrouter/x-ai/grok-4.7": {
       "provider": "openrouter",
       "model": "x-ai/grok-4.7",
       "maxContextSize": 500000,
       "maxOutputSize": 450000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "Grok 4.7",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh"]
     },
     "openrouter/meta-llama/llama-3.1-8b-instruct": {
       "provider": "openrouter",
       "model": "meta-llama/llama-3.1-8b-instruct",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Llama-3.1-8B-Instruct"
     },
     "openrouter/meta-llama/llama-guard-4-12b": {
@@ -3381,9 +2299,7 @@
       "model": "meta-llama/llama-guard-4-12b",
       "maxContextSize": 163840,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Llama Guard 4 12B"
     },
     "openrouter/meta-llama/llama-3.2-3b-instruct": {
@@ -3405,10 +2321,7 @@
       "model": "meta-llama/llama-4-maverick",
       "maxContextSize": 1048576,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Llama 4 Maverick"
     },
     "openrouter/meta-llama/llama-4-scout": {
@@ -3416,10 +2329,7 @@
       "model": "meta-llama/llama-4-scout",
       "maxContextSize": 1310720,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "Llama 4 Scout"
     },
     "openrouter/meta-llama/llama-3.1-70b-instruct": {
@@ -3427,9 +2337,7 @@
       "model": "meta-llama/llama-3.1-70b-instruct",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Llama-3.1-70B-Instruct"
     },
     "openrouter/meta-llama/llama-3.3-70b-instruct": {
@@ -3437,9 +2345,7 @@
       "model": "meta-llama/llama-3.3-70b-instruct",
       "maxContextSize": 131072,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Llama-3.3-70B-Instruct"
     },
     "openrouter/nousresearch/hermes-3-llama-3.1-70b": {
@@ -3461,9 +2367,7 @@
       "model": "nousresearch/hermes-4-405b",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "thinking"
-      ],
+      "capabilities": ["thinking"],
       "displayName": "Hermes 4 405B"
     },
     "openrouter/openai/o4-mini-high": {
@@ -3471,15 +2375,9 @@
       "model": "openai/o4-mini-high",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "o4 Mini High",
-      "supportEfforts": [
-        "high"
-      ]
+      "supportEfforts": ["high"]
     },
     "openrouter/openai/gpt-5-nano": {
       "provider": "openrouter",
@@ -3487,28 +2385,16 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5 Nano",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/openai/gpt-4.1-nano": {
       "provider": "openrouter",
       "model": "openai/gpt-4.1-nano",
       "maxContextSize": 1047576,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4.1 nano"
     },
     "openrouter/openai/gpt-4o-2024-05-13": {
@@ -3516,10 +2402,7 @@
       "model": "openai/gpt-4o-2024-05-13",
       "maxContextSize": 128000,
       "maxOutputSize": 4096,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4o (2024-05-13)"
     },
     "openrouter/openai/gpt-5-pro": {
@@ -3528,25 +2411,16 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5 Pro",
-      "supportEfforts": [
-        "high"
-      ]
+      "supportEfforts": ["high"]
     },
     "openrouter/openai/gpt-4o-mini-2024-07-18": {
       "provider": "openrouter",
       "model": "openai/gpt-4o-mini-2024-07-18",
       "maxContextSize": 128000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4o-mini (2024-07-18)"
     },
     "openrouter/openai/o3-mini-high": {
@@ -3554,14 +2428,9 @@
       "model": "openai/o3-mini-high",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["always_thinking", "tool_use"],
       "displayName": "o3 Mini High",
-      "supportEfforts": [
-        "high"
-      ]
+      "supportEfforts": ["high"]
     },
     "openrouter/openai/gpt-5.1-codex-mini": {
       "provider": "openrouter",
@@ -3569,46 +2438,25 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.1 Codex mini",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/openai/gpt-6-astra-pro": {
       "provider": "openrouter",
       "model": "openai/gpt-6-astra-pro",
       "maxContextSize": 1050000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-6 Astra Pro",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/openai/gpt-audio-mini": {
       "provider": "openrouter",
       "model": "openai/gpt-audio-mini",
       "maxContextSize": 128000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "audio_in",
-        "tool_use"
-      ],
+      "capabilities": ["audio_in", "tool_use"],
       "displayName": "GPT Audio Mini"
     },
     "openrouter/openai/gpt-5.1-codex": {
@@ -3617,17 +2465,9 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5.1 Codex",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/openai/gpt-5.6-sol": {
       "provider": "openrouter",
@@ -3635,19 +2475,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.6 Sol",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-4o-2024-08-06": {
@@ -3655,10 +2485,7 @@
       "model": "openai/gpt-4o-2024-08-06",
       "maxContextSize": 128000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4o (2024-08-06)"
     },
     "openrouter/openai/gpt-5.2-codex": {
@@ -3667,18 +2494,9 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5.2 Codex",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh"]
     },
     "openrouter/openai/gpt-6-astra": {
       "provider": "openrouter",
@@ -3686,29 +2504,16 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-6 Astra",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"]
     },
     "openrouter/openai/gpt-5.2-chat": {
       "provider": "openrouter",
       "model": "openai/gpt-5.2-chat",
       "maxContextSize": 128000,
       "maxOutputSize": 32000,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-5.2 Chat"
     },
     "openrouter/openai/gpt-5.6-luna-pro": {
@@ -3717,19 +2522,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.6 Luna Pro",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-5.2-pro": {
@@ -3738,27 +2533,16 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5.2 Pro",
-      "supportEfforts": [
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["medium", "high", "xhigh"]
     },
     "openrouter/openai/gpt-4.1-mini": {
       "provider": "openrouter",
       "model": "openai/gpt-4.1-mini",
       "maxContextSize": 1047576,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4.1 mini"
     },
     "openrouter/openai/gpt-5.4": {
@@ -3767,18 +2551,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.4",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-oss-20b": {
@@ -3786,26 +2561,16 @@
       "model": "openai/gpt-oss-20b",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["always_thinking", "tool_use"],
       "displayName": "GPT OSS 20B",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/openai/gpt-4-turbo": {
       "provider": "openrouter",
       "model": "openai/gpt-4-turbo",
       "maxContextSize": 128000,
       "maxOutputSize": 4096,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4 Turbo"
     },
     "openrouter/openai/gpt-5-image": {
@@ -3813,10 +2578,7 @@
       "model": "openai/gpt-5-image",
       "maxContextSize": 400000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "GPT-5 Image"
     },
     "openrouter/openai/gpt-5.6-sol-pro": {
@@ -3825,19 +2587,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.6 Sol Pro",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-oss-safeguard-20b": {
@@ -3845,16 +2597,9 @@
       "model": "openai/gpt-oss-safeguard-20b",
       "maxContextSize": 131072,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["always_thinking", "tool_use"],
       "displayName": "GPT OSS Safeguard 20B",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/openai/gpt-5.1": {
       "provider": "openrouter",
@@ -3862,17 +2607,9 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.1",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["low", "medium", "high"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-5.1-codex-max": {
@@ -3881,35 +2618,18 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5.1 Codex Max",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["low", "medium", "high", "xhigh"]
     },
     "openrouter/openai/gpt-5.4-image-2": {
       "provider": "openrouter",
       "model": "openai/gpt-5.4-image-2",
       "maxContextSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "GPT-5.4 Image 2",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-3.5-turbo-0613": {
@@ -3917,9 +2637,7 @@
       "model": "openai/gpt-3.5-turbo-0613",
       "maxContextSize": 4095,
       "maxOutputSize": 3685,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "GPT-3.5 Turbo (older v0613)"
     },
     "openrouter/openai/gpt-audio": {
@@ -3927,10 +2645,7 @@
       "model": "openai/gpt-audio",
       "maxContextSize": 128000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "audio_in",
-        "tool_use"
-      ],
+      "capabilities": ["audio_in", "tool_use"],
       "displayName": "GPT Audio"
     },
     "openrouter/openai/o1": {
@@ -3938,11 +2653,7 @@
       "model": "openai/o1",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "o1"
     },
     "openrouter/openai/gpt-4o": {
@@ -3950,10 +2661,7 @@
       "model": "openai/gpt-4o",
       "maxContextSize": 128000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4o"
     },
     "openrouter/openai/gpt-5.6-luna": {
@@ -3962,19 +2670,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.6 Luna",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-5.3-codex": {
@@ -3983,18 +2681,9 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.3 Codex",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-4o-mini": {
@@ -4002,10 +2691,7 @@
       "model": "openai/gpt-4o-mini",
       "maxContextSize": 128000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4o mini"
     },
     "openrouter/openai/o1-pro": {
@@ -4013,10 +2699,7 @@
       "model": "openai/o1-pro",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "o1-pro"
     },
     "openrouter/openai/gpt-4.1": {
@@ -4024,10 +2707,7 @@
       "model": "openai/gpt-4.1",
       "maxContextSize": 1047576,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4.1"
     },
     "openrouter/openai/gpt-5.4-nano": {
@@ -4036,18 +2716,9 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.4 nano",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-5.6-terra-pro": {
@@ -4056,19 +2727,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.6 Terra Pro",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-5.5-pro": {
@@ -4077,27 +2738,16 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5.5 Pro",
-      "supportEfforts": [
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["medium", "high", "xhigh"]
     },
     "openrouter/openai/gpt-chat-latest": {
       "provider": "openrouter",
       "model": "openai/gpt-chat-latest",
       "maxContextSize": 400000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT Chat Latest"
     },
     "openrouter/openai/gpt-5.4-mini": {
@@ -4106,18 +2756,9 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.4 mini",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-3.5-turbo-16k": {
@@ -4125,9 +2766,7 @@
       "model": "openai/gpt-3.5-turbo-16k",
       "maxContextSize": 16385,
       "maxOutputSize": 4096,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "GPT-3.5 Turbo 16k"
     },
     "openrouter/openai/gpt-5-image-mini": {
@@ -4135,10 +2774,7 @@
       "model": "openai/gpt-5-image-mini",
       "maxContextSize": 400000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "GPT-5 Image Mini"
     },
     "openrouter/openai/gpt-3.5-turbo": {
@@ -4146,9 +2782,7 @@
       "model": "openai/gpt-3.5-turbo",
       "maxContextSize": 16385,
       "maxOutputSize": 4096,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "GPT-3.5-turbo"
     },
     "openrouter/openai/gpt-5-mini": {
@@ -4157,34 +2791,18 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5 Mini",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/openai/gpt-oss-120b": {
       "provider": "openrouter",
       "model": "openai/gpt-oss-120b",
       "maxContextSize": 131072,
       "maxOutputSize": 65536,
-      "capabilities": [
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["always_thinking", "tool_use"],
       "displayName": "GPT OSS 120B",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["low", "medium", "high"]
     },
     "openrouter/openai/gpt-5.4-pro": {
       "provider": "openrouter",
@@ -4192,17 +2810,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5.4 Pro",
-      "supportEfforts": [
-        "medium",
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["medium", "high", "xhigh"]
     },
     "openrouter/openai/gpt-3.5-turbo-instruct": {
       "provider": "openrouter",
@@ -4217,19 +2827,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.6 Terra",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-4": {
@@ -4237,9 +2837,7 @@
       "model": "openai/gpt-4",
       "maxContextSize": 8191,
       "maxOutputSize": 4096,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "GPT-4"
     },
     "openrouter/openai/gpt-5.2": {
@@ -4248,18 +2846,9 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.2",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-5": {
@@ -4268,29 +2857,16 @@
       "maxContextSize": 400000,
       "maxInputSize": 272000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "always_thinking", "tool_use"],
       "displayName": "GPT-5",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ]
+      "supportEfforts": ["minimal", "low", "medium", "high"]
     },
     "openrouter/openai/o4-mini": {
       "provider": "openrouter",
       "model": "openai/o4-mini",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "o4-mini"
     },
     "openrouter/openai/o3-mini": {
@@ -4298,10 +2874,7 @@
       "model": "openai/o3-mini",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "o3-mini"
     },
     "openrouter/openai/o3": {
@@ -4309,11 +2882,7 @@
       "model": "openai/o3",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "o3"
     },
     "openrouter/openai/o3-pro": {
@@ -4321,11 +2890,7 @@
       "model": "openai/o3-pro",
       "maxContextSize": 200000,
       "maxOutputSize": 100000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "o3-pro"
     },
     "openrouter/openai/gpt-5.5": {
@@ -4334,18 +2899,9 @@
       "maxContextSize": 1050000,
       "maxInputSize": 922000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GPT-5.5",
-      "supportEfforts": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
+      "supportEfforts": ["low", "medium", "high", "xhigh"],
       "offEffort": "none"
     },
     "openrouter/openai/gpt-4o-2024-11-20": {
@@ -4353,10 +2909,7 @@
       "model": "openai/gpt-4o-2024-11-20",
       "maxContextSize": 128000,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "tool_use"],
       "displayName": "GPT-4o (2024-11-20)"
     },
     "openrouter/~z-ai/glm-flash-latest": {
@@ -4364,43 +2917,25 @@
       "model": "~z-ai/glm-flash-latest",
       "maxContextSize": 1310720,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "always_thinking", "tool_use"],
       "displayName": "GLM Flash Latest",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/~z-ai/glm-latest": {
       "provider": "openrouter",
       "model": "~z-ai/glm-latest",
       "maxContextSize": 1310720,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["always_thinking", "tool_use"],
       "displayName": "GLM Latest",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/moonshotai/kimi-k2-0905": {
       "provider": "openrouter",
       "model": "moonshotai/kimi-k2-0905",
       "maxContextSize": 262144,
       "maxOutputSize": 98304,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Kimi K2 0905"
     },
     "openrouter/moonshotai/kimi-k2.6": {
@@ -4408,11 +2943,7 @@
       "model": "moonshotai/kimi-k2.6",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Kimi K2.6",
       "reasoningKey": "reasoning_details"
     },
@@ -4421,11 +2952,7 @@
       "model": "moonshotai/kimi-k2.7-code",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Kimi K2.7 Code"
     },
     "openrouter/moonshotai/kimi-k2-thinking": {
@@ -4433,10 +2960,7 @@
       "model": "moonshotai/kimi-k2-thinking",
       "maxContextSize": 262144,
       "maxOutputSize": 98304,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Kimi K2 Thinking",
       "reasoningKey": "reasoning_details"
     },
@@ -4445,27 +2969,16 @@
       "model": "moonshotai/kimi-k3",
       "maxContextSize": 1048576,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "Kimi K3",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/moonshotai/kimi-k2": {
       "provider": "openrouter",
       "model": "moonshotai/kimi-k2",
       "maxContextSize": 131072,
       "maxOutputSize": 98304,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Kimi K2 0711"
     },
     "openrouter/moonshotai/kimi-k2.5": {
@@ -4473,11 +2986,7 @@
       "model": "moonshotai/kimi-k2.5",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "Kimi K2.5",
       "reasoningKey": "reasoning_details"
     },
@@ -4500,10 +3009,7 @@
       "model": "cohere/north-mini-code:free",
       "maxContextSize": 256000,
       "maxOutputSize": 64000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "North Mini Code (free)"
     },
     "openrouter/cohere/command-r-plus-08-2024": {
@@ -4511,9 +3017,7 @@
       "model": "cohere/command-r-plus-08-2024",
       "maxContextSize": 128000,
       "maxOutputSize": 4000,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Command R+"
     },
     "openrouter/cohere/command-a": {
@@ -4535,9 +3039,7 @@
       "model": "cohere/command-r-08-2024",
       "maxContextSize": 128000,
       "maxOutputSize": 4000,
-      "capabilities": [
-        "tool_use"
-      ],
+      "capabilities": ["tool_use"],
       "displayName": "Command R"
     },
     "openrouter/upstage/solar-pro-3": {
@@ -4545,17 +3047,9 @@
       "model": "upstage/solar-pro-3",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Solar Pro 3",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high"
-      ],
+      "supportEfforts": ["minimal", "low", "medium", "high"],
       "offEffort": "none"
     },
     "openrouter/upstage/solar-pro4": {
@@ -4563,19 +3057,9 @@
       "model": "upstage/solar-pro4",
       "maxContextSize": 524288,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Solar Pro 4",
-      "supportEfforts": [
-        "minimal",
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max"
-      ],
+      "supportEfforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
       "offEffort": "none"
     },
     "openrouter/arcee-ai/trinity-large-thinking": {
@@ -4583,10 +3067,7 @@
       "model": "arcee-ai/trinity-large-thinking",
       "maxContextSize": 262144,
       "maxOutputSize": 80000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Trinity Large Thinking"
     },
     "openrouter/tencent/hy3": {
@@ -4595,15 +3076,9 @@
       "maxContextSize": 262144,
       "maxInputSize": 192000,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Hy3",
-      "supportEfforts": [
-        "low",
-        "high"
-      ],
+      "supportEfforts": ["low", "high"],
       "offEffort": "none"
     },
     "openrouter/tencent/hy4-preview": {
@@ -4611,15 +3086,9 @@
       "model": "tencent/hy4-preview",
       "maxContextSize": 1048576,
       "maxOutputSize": 64000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Hy4 preview",
-      "supportEfforts": [
-        "low",
-        "high"
-      ],
+      "supportEfforts": ["low", "high"],
       "offEffort": "none"
     },
     "openrouter/tencent/hy-mt2-30b-a3b": {
@@ -4648,15 +3117,9 @@
       "model": "tencent/hy3-preview",
       "maxContextSize": 262144,
       "maxOutputSize": 235929,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "Hy3 preview",
-      "supportEfforts": [
-        "low",
-        "high"
-      ],
+      "supportEfforts": ["low", "high"],
       "offEffort": "none"
     },
     "openrouter/tencent/hunyuan-a13b-instruct": {
@@ -4664,9 +3127,7 @@
       "model": "tencent/hunyuan-a13b-instruct",
       "maxContextSize": 131072,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "thinking"
-      ],
+      "capabilities": ["thinking"],
       "displayName": "Hunyuan A13B Instruct"
     },
     "openrouter/liquid/lfm-2.5-2.6b:free": {
@@ -4674,10 +3135,7 @@
       "model": "liquid/lfm-2.5-2.6b:free",
       "maxContextSize": 65536,
       "maxOutputSize": 8192,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "LFM2.5-2.6B (free)"
     },
     "openrouter/z-ai/glm-4.7": {
@@ -4685,10 +3143,7 @@
       "model": "z-ai/glm-4.7",
       "maxContextSize": 204800,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-4.7",
       "reasoningKey": "reasoning_details"
     },
@@ -4697,10 +3152,7 @@
       "model": "z-ai/glm-4.5-air",
       "maxContextSize": 131072,
       "maxOutputSize": 98304,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-4.5-Air"
     },
     "openrouter/z-ai/glm-4.6": {
@@ -4708,10 +3160,7 @@
       "model": "z-ai/glm-4.6",
       "maxContextSize": 204800,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-4.6"
     },
     "openrouter/z-ai/glm-4.6v": {
@@ -4719,12 +3168,7 @@
       "model": "z-ai/glm-4.6v",
       "maxContextSize": 131072,
       "maxOutputSize": 32768,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "GLM-4.6V"
     },
     "openrouter/z-ai/glm-5.2": {
@@ -4732,62 +3176,35 @@
       "model": "z-ai/glm-5.2",
       "maxContextSize": 1048576,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-5.2",
       "reasoningKey": "reasoning_content",
-      "supportEfforts": [
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["high", "xhigh"]
     },
     "openrouter/z-ai/glm-5.3-flashx": {
       "provider": "openrouter",
       "model": "z-ai/glm-5.3-flashx",
       "maxContextSize": 1048576,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "always_thinking", "tool_use"],
       "displayName": "GLM 5.3 FlashX",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/z-ai/glm-5.3-flash": {
       "provider": "openrouter",
       "model": "z-ai/glm-5.3-flash",
       "maxContextSize": 1310720,
       "maxOutputSize": 943718,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "always_thinking", "tool_use"],
       "displayName": "GLM-5.3-Flash",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/z-ai/glm-4.5": {
       "provider": "openrouter",
       "model": "z-ai/glm-4.5",
       "maxContextSize": 131072,
       "maxOutputSize": 98304,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-4.5"
     },
     "openrouter/z-ai/glm-4.5v": {
@@ -4795,11 +3212,7 @@
       "model": "z-ai/glm-4.5v",
       "maxContextSize": 65536,
       "maxOutputSize": 16384,
-      "capabilities": [
-        "image_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "thinking", "tool_use"],
       "displayName": "GLM-4.5V"
     },
     "openrouter/z-ai/glm-5.2:free": {
@@ -4807,24 +3220,16 @@
       "model": "z-ai/glm-5.2:free",
       "maxContextSize": 32768,
       "maxOutputSize": 29491,
-      "capabilities": [
-        "thinking"
-      ],
+      "capabilities": ["thinking"],
       "displayName": "GLM 5.2 (free)",
-      "supportEfforts": [
-        "high",
-        "xhigh"
-      ]
+      "supportEfforts": ["high", "xhigh"]
     },
     "openrouter/z-ai/glm-5": {
       "provider": "openrouter",
       "model": "z-ai/glm-5",
       "maxContextSize": 204800,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-5",
       "reasoningKey": "reasoning_content"
     },
@@ -4833,10 +3238,7 @@
       "model": "z-ai/glm-5.1",
       "maxContextSize": 204800,
       "maxOutputSize": 128000,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-5.1",
       "reasoningKey": "reasoning_content"
     },
@@ -4845,10 +3247,7 @@
       "model": "z-ai/glm-5-turbo",
       "maxContextSize": 202752,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-5-Turbo",
       "reasoningKey": "reasoning_content"
     },
@@ -4857,28 +3256,16 @@
       "model": "z-ai/glm-5.3",
       "maxContextSize": 1310720,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "always_thinking",
-        "tool_use"
-      ],
+      "capabilities": ["always_thinking", "tool_use"],
       "displayName": "GLM-5.3",
-      "supportEfforts": [
-        "low",
-        "high",
-        "max"
-      ]
+      "supportEfforts": ["low", "high", "max"]
     },
     "openrouter/z-ai/glm-5v-turbo": {
       "provider": "openrouter",
       "model": "z-ai/glm-5v-turbo",
       "maxContextSize": 202752,
       "maxOutputSize": 131072,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "thinking", "tool_use"],
       "displayName": "GLM-5V-Turbo"
     },
     "openrouter/z-ai/glm-4.7-flash": {
@@ -4886,10 +3273,7 @@
       "model": "z-ai/glm-4.7-flash",
       "maxContextSize": 200000,
       "maxOutputSize": 117964,
-      "capabilities": [
-        "thinking",
-        "tool_use"
-      ],
+      "capabilities": ["thinking", "tool_use"],
       "displayName": "GLM-4.7-Flash",
       "reasoningKey": "reasoning_details"
     },
@@ -4905,10 +3289,7 @@
       "model": "perplexity/sonar-pro-search",
       "maxContextSize": 200000,
       "maxOutputSize": 8000,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Sonar Pro Search"
     },
     "openrouter/perplexity/sonar": {
@@ -4916,9 +3297,7 @@
       "model": "perplexity/sonar",
       "maxContextSize": 127072,
       "maxOutputSize": 114364,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Sonar"
     },
     "openrouter/perplexity/sonar-reasoning-pro": {
@@ -4926,10 +3305,7 @@
       "model": "perplexity/sonar-reasoning-pro",
       "maxContextSize": 128000,
       "maxOutputSize": 115200,
-      "capabilities": [
-        "image_in",
-        "thinking"
-      ],
+      "capabilities": ["image_in", "thinking"],
       "displayName": "Sonar Reasoning Pro"
     },
     "openrouter/perplexity/sonar-pro": {
@@ -4937,9 +3313,7 @@
       "model": "perplexity/sonar-pro",
       "maxContextSize": 200000,
       "maxOutputSize": 8000,
-      "capabilities": [
-        "image_in"
-      ],
+      "capabilities": ["image_in"],
       "displayName": "Sonar Pro"
     },
     "openrouter/perplexity/sonar-deep-research": {
@@ -4947,9 +3321,7 @@
       "model": "perplexity/sonar-deep-research",
       "maxContextSize": 128000,
       "maxOutputSize": 115200,
-      "capabilities": [
-        "thinking"
-      ],
+      "capabilities": ["thinking"],
       "displayName": "Sonar Deep Research"
     },
     "openrouter/rekaai/reka-edge": {
@@ -4957,11 +3329,7 @@
       "model": "rekaai/reka-edge",
       "maxContextSize": 16384,
       "maxOutputSize": 14745,
-      "capabilities": [
-        "image_in",
-        "video_in",
-        "tool_use"
-      ],
+      "capabilities": ["image_in", "video_in", "tool_use"],
       "displayName": "Reka Edge"
     },
     "openrouter/rekaai/reka-flash-3": {
@@ -4969,9 +3337,7 @@
       "model": "rekaai/reka-flash-3",
       "maxContextSize": 65536,
       "maxOutputSize": 58982,
-      "capabilities": [
-        "thinking"
-      ],
+      "capabilities": ["thinking"],
       "displayName": "Reka Flash 3"
     }
   }

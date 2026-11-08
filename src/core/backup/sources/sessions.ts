@@ -15,6 +15,7 @@
  *   - OpenCode / Kilo: `$XDG_DATA_HOME/<name>/storage` plus the session
  *     database, copied through SQLite rather than byte-wise.
  *   - Antigravity (agy): the CLI's conversations, brain and summaries.
+ *   - Kimi: `$KIMI_CODE_HOME/sessions` (default `~/.kimi-code`).
  *
  * Only stores of backends the config enables are captured — a Codex
  * install used for unrelated work is not Talon's state. Claude is always
@@ -152,6 +153,14 @@ const STORES: readonly StoreSpec[] = [
     dir: (userHome) => join(userHome, ".gemini", "antigravity-cli"),
     dirs: ["conversations", "brain", "annotations", "implicit"],
     databases: ["conversation_summaries.db"],
+  },
+  {
+    backend: "kimi",
+    // Same resolution as the CLI and src/backend/kimi/auth.ts: kimiHome().
+    dir: (userHome, env) =>
+      env.KIMI_CODE_HOME?.trim() || join(userHome, ".kimi-code"),
+    dirs: ["sessions"],
+    databases: [],
   },
 ];
 

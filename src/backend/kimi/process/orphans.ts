@@ -1,12 +1,28 @@
 /**
  * Orphan subprocess eviction for the Kimi backend.
+ *
+ * A one-shot run spawns a real `kimi` process. Abort normally kills it,
+ * but a child that ignores SIGTERM, or one whose parent lost the handle
+ * across a daemon restart, outlives the run and keeps spending tokens.
+ * kimi's argv carries only the prompt and flags, never the run's label,
+ * so every spawn is tagged with [KIMI_RUN_LABEL_ENV] and the sweep
+ * matches on `/proc/<pid>/environ`, the way the Claude SDK backend
+ * matches its subprocesses.
  */
 
 import { readdir, readFile } from "node:fs/promises";
 import { log } from "../../../util/log.js";
-import { KIMI_KILL_GRACE_MS } from "../constants.js";
+import { childBelongsToLiveDaemon } from "../../../core/daemon/pidfile.js";
+import { KIMI_KILL_GRACE_MS, KIMI_RUN_LABEL_ENV } from "../constants.js";
 import { childChatIds, getChild } from "./child.js";
 
+/**
+ * Kill stray `kimi` processes belonging to `contextLabel`.
+ *
+ * Two passes: the children this process still tracks (authoritative),
+ * then a `/proc` sweep for anything that escaped the pool. Linux only;
+ * elsewhere the tracked pass still runs and the sweep is a no-op.
+ */
 export async function evictOrphanSubprocesses(contextLabel: string): Promise<{
   found: number;
   termed: number;
@@ -59,6 +75,20 @@ export async function evictOrphanSubprocesses(contextLabel: string): Promise<{
   return result;
 }
 
+/** True when argv is a `kimi` invocation (direct or via its node shebang). */
+export function isKimiArgv(argv: readonly string[]): boolean {
+  return argv.some((arg) => arg === "kimi" || arg.endsWith("/kimi"));
+}
+
+/** True when an environ block carries exactly this run's label tag. */
+export function environHasRunLabel(
+  environ: readonly string[],
+  contextLabel: string,
+): boolean {
+  return environ.includes(`${KIMI_RUN_LABEL_ENV}=${contextLabel}`);
+}
+
+/** `/proc` pids of `kimi` processes tagged with `contextLabel`. */
 async function findOrphanPids(contextLabel: string): Promise<number[]> {
   if (process.platform !== "linux") return [];
   let entries: string[];
@@ -75,9 +105,19 @@ async function findOrphanPids(contextLabel: string): Promise<number[]> {
       const argv = (await readFile(`/proc/${pid}/cmdline`, "utf-8")).split(
         "\0",
       );
-      if (!argv.some((arg) => arg === "kimi" || arg.endsWith("/kimi"))) continue;
-      if (argv.includes(contextLabel)) matched.push(pid);
+      if (!isKimiArgv(argv)) continue;
+      // Exact env-entry match, never a substring scan: this code can
+      // SIGKILL, so a label that happens to appear inside another value
+      // must not select a victim.
+      const environ = (await readFile(`/proc/${pid}/environ`, "utf-8")).split(
+        "\0",
+      );
+      if (!environHasRunLabel(environ, contextLabel)) continue;
+      // Another running daemon's live run, not an orphan of ours.
+      if (childBelongsToLiveDaemon(pid)) continue;
+      matched.push(pid);
     } catch {
+      // Exited between readdir and readFile, or not ours. Skip.
       continue;
     }
   }

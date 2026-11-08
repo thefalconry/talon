@@ -15,7 +15,8 @@ import { parseKimiModels } from "./models.js";
 
 /** Resolve the binary the same way the runtime does: env, config, PATH. */
 function resolveBinary(config: DoctorConfigSlice | undefined): string {
-  const configured = (config as { kimiBinary?: string } | undefined)?.kimiBinary;
+  const configured = (config as { kimiBinary?: string } | undefined)
+    ?.kimiBinary;
   return process.env.KIMI_BINARY || configured || "kimi";
 }
 

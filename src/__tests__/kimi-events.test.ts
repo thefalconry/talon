@@ -97,7 +97,10 @@ describe("kimi events — tool unwrapping and execution", () => {
       (e) => e.role === "assistant" && e.tool_calls && e.tool_calls.length > 0,
     );
     expect(assistantWithTools).toBeDefined();
-    if (assistantWithTools?.role !== "assistant" || !assistantWithTools.tool_calls) {
+    if (
+      assistantWithTools?.role !== "assistant" ||
+      !assistantWithTools.tool_calls
+    ) {
       throw new Error("unreachable");
     }
 
