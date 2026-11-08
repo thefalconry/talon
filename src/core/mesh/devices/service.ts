@@ -88,10 +88,10 @@ export type MeshTransport = {
   command(command: DeviceCommand): boolean | void;
 };
 
-/** Outcome of pinging one device (see {@link MeshService.pingAll}). */
 const WAIT_FOR_DEVICE_DEFAULT_SEC = 60;
 const WAIT_FOR_DEVICE_MAX_SEC = 300;
 
+/** Outcome of pinging one device (see {@link MeshService.pingAll}). */
 export type MeshPingResult = {
   device: DeviceInfo;
   /** True when the device answered the probe (offline devices are false). */
