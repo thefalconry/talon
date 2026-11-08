@@ -702,9 +702,8 @@ export class MeshService {
   }
 
   /**
-   * `remove_device`: drop a stale device from the mesh registry (with its
-   * location + history). Destructive, so it requires an explicit target —
-   * no "default to the most recent device" like the read tools.
+   * `set_device_tags`: replace a device's operator-assigned tags (an empty
+   * list clears them). Requires an explicit target, like remove_device.
    */
   async setDeviceTags(query: unknown, tags: unknown): Promise<MeshToolResult> {
     await this.load();
@@ -733,6 +732,11 @@ export class MeshService {
     };
   }
 
+  /**
+   * `remove_device`: drop a stale device from the mesh registry (with its
+   * location + history). Destructive, so it requires an explicit target —
+   * no "default to the most recent device" like the read tools.
+   */
   async removeDevice(query?: unknown): Promise<MeshToolResult> {
     await this.load();
     if (typeof query !== "string" || !query.trim()) {
