@@ -316,6 +316,9 @@ describe("compactChatSession", () => {
     const out = await compactChatSession("c1", { fork: true });
     expect(sdk.options).toMatchObject({ resume: "sess-1", forkSession: true });
     expect(out).toMatchObject({ status: "compacted", sessionId: "fork-9" });
+    // The chat's session did not change: not a compaction (yet). The Weaver
+    // counts it if a turn adopts the fork.
+    expect(recordCompactBoundary).not.toHaveBeenCalled();
   });
 
   it("drops the id when the CLI did not honour the fork (compacted in place)", async () => {
@@ -323,6 +326,8 @@ describe("compactChatSession", () => {
     const out = await compactChatSession("c1", { fork: true });
     expect(out).toMatchObject({ status: "compacted" });
     expect((out as { sessionId?: string }).sessionId).toBeUndefined();
+    // ...which did change the chat's own session, so it counts.
+    expect(recordCompactBoundary).toHaveBeenCalledTimes(1);
   });
 
   it("aborts before the boundary: kills the pass and leaves the session untouched", async () => {

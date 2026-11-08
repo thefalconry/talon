@@ -119,10 +119,11 @@ export class Weaver {
     // A turn is coming: the chat is no longer idle (cancels the timer,
     // aborts a compaction pass not yet sent, or applies `idleCompactOnTurn`
     // to one in flight).
-    this.idleCompactor?.onTurnQueued(params.chatId, {
-      chatId: params.chatId,
-      numericChatId: params.numericChatId,
-    });
+    this.idleCompactor?.onTurnQueued(
+      params.chatId,
+      { chatId: params.chatId, numericChatId: params.numericChatId },
+      params.source,
+    );
     const thread = this.loom.thread(params.chatId);
     // A turn is killable when its backend can interrupt an in-flight
     // chat turn. The abort hook tracks lifecycle through this closure:

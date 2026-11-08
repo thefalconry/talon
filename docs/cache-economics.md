@@ -179,8 +179,13 @@ post_tokens}`, or `SDKStatusMessage {compact_result: 'failed'}`. The
    in the `kv` row `idle-compact.pending-forks`, so a fork a restart
    orphaned is deleted at the chat's next turn). At
    the next turn, right before the backend runs it, the Weaver switches the
-   chat to the fork only if `now ≥ lastRequestAt + TTL` (the cache it would
-   have read is gone, so the compacted session is the cheaper resume). It
+   chat to the fork only once the source session's cache has expired (the
+   compacted session is then the cheaper resume). That is one TTL after the
+   pass's own `/compact` request, not after `lastRequestAt`: the request
+   read the source's cached prefix, and a cache hit refreshes the TTL, so
+   the source stays warm until about 1 h 54 min after the last turn's
+   request (the pass's send time + TTL; a pass whose usage shows no cache
+   read keeps `lastRequestAt + TTL`). It
    discards it — `returned_early` — when the user came back while the
    cache was still warm (a warm full transcript beats a re-written
    summary), and also on a newer request or turn, a model change, or a
@@ -203,8 +208,8 @@ post_tokens}`, or `SDKStatusMessage {compact_result: 'failed'}`. The
      `idleCompactOnTurn` decides.
      - `"wait"` (default): the pass is not aborted. The turn, queued
        behind it on the chat's Thread, waits until it finishes, and the
-       chat gets one status message ("Kompaktuję czat, odpowiem za
-       chwilę…"). A precompute that finishes is marked `adoptEvenIfWarm`
+       chat gets one status message ("Compacting this chat, I'll reply in
+       a moment…"). A precompute that finishes is marked `adoptEvenIfWarm`
        and that turn switches to it even though the cache has not expired
        — no `returned_early`; the session-changed, model-changed and
        newer-request/newer-turn checks still apply. An in-place pass just
@@ -212,14 +217,20 @@ post_tokens}`, or `SDKStatusMessage {compact_result: 'failed'}`. The
      - `"abort"`: abort it — a precompute always; an in-place pass until
        its `compact_boundary` has arrived, after which it finishes and the
        turn waits for it (seconds: the closing `result`, capped at 10 s).
-     - `"ask"`: the chat gets "Trwa kompakcja czatu (~1–2 min) — poczekać
-       czy przerwać?" with [Poczekaj] / [Przerwij] inline buttons (core
+     - `"ask"`: the chat gets "This chat is being compacted (~1–2 min).
+       Wait for it or stop it?" with [Wait] / [Stop] inline buttons (core
        `engine/inline-choice.ts`, sent through the frontend's
        `send_message_with_buttons` action; the click is routed by the
-       `ichoice:` callback prefix, today on Telegram only). [Przerwij]
+       `ichoice:` callback prefix, today on Telegram only). [Stop]
        aborts as `"abort"` does; no click in 30 s, or a frontend without
        buttons, applies `"wait"`. The message is then edited to the
        outcome (and its buttons dropped).
+
+   Only a user's message gets the status message or the question. A
+   background turn (trigger wake, sub-agent report, pulse, device job)
+   arriving mid-pass waits silently under `"wait"` and `"ask"` (counted as
+   `session.idle_compact.turn_background_wait`); `"abort"` aborts as for
+   any turn.
 
    The 5-minute cap on a pass stays; a pass that fails or times out leaves
    the waiting turn on the unchanged session. The CLI only rewrites a
@@ -269,12 +280,17 @@ Metrics: `session.idle_compact` (compactions that took effect: in place,
 or a precompute applied), `.in_place`, `.precomputed`, `.applied`,
 `.discarded` and `.discarded.<reason>`, `.aborted`, `.failed`,
 `.turn_wait` / `.turn_ask` (an in-flight pass a turn waited for or asked
-about), `.turn_ask_abort` (a [Przerwij] click),
-`.skipped.<reason>`; histograms `session.idle_compact.saved_tokens`
+about), `.turn_ask_abort` (a [Stop] click), `.turn_background_wait` (a
+background turn that waited silently), `.skipped.<reason>` (`.skipped.backend`
+when the backend found nothing to resume), `.unsupported` (the backend has
+no compaction: the Weaver stops arming it for that backend until a
+restart); histograms `session.idle_compact.saved_tokens`
 (pre − post), `.duration_ms`, and the pass's own `.cache_read_tokens` /
-`.cache_write_tokens` — a warm pass should be nearly all read. An SDK
-compaction also bumps PR A's `session.compacted.manual` and
-`session.compact.{pre,post}_tokens`. The pass's billed tokens and cost are
+`.cache_write_tokens` — a warm pass should be nearly all read. A
+compaction that changes the chat's session also bumps PR A's
+`session.compacted.manual` and `session.compact.{pre,post}_tokens`: an
+in-place pass when it lands, a precomputed fork only when a turn adopts it
+(a discarded fork is not counted). The pass's billed tokens and cost are
 added to the session's totals (`recordSessionCompaction`) without counting
 as a turn, so `lastTurnEndedAt` still means "last real turn".
 

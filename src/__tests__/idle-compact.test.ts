@@ -308,6 +308,18 @@ describe("decidePrecompute", () => {
     });
   });
 
+  it("counts the pass's own cache read: the source stays warm until its send time + TTL", () => {
+    const refreshed = { ...pending, sourceWarmUntil: FIRE_AT + HOUR };
+    // An hour after the last turn's request, but the pass read the prefix at
+    // FIRE_AT, so resuming the original session is still the warm read.
+    expect(
+      decidePrecompute(refreshed, info(), "opus-x", T0 + HOUR + 10 * 60_000),
+    ).toEqual({ apply: false, reason: "returned_early" });
+    expect(
+      decidePrecompute(refreshed, info(), "opus-x", FIRE_AT + HOUR),
+    ).toEqual({ apply: true });
+  });
+
   it("adopts a fork a turn waited for while the cache is still warm — other checks stay", () => {
     const waited = { ...pending, adoptEvenIfWarm: true };
     const warm = T0 + HOUR - 60_000;
@@ -923,7 +935,7 @@ describe("IdleCompactor: a turn during a pass", () => {
     },
   );
 
-  it("onTurn ask: a click on [Przerwij] aborts the in-flight pass", async () => {
+  it("onTurn ask: a click on [Stop] aborts the in-flight pass", async () => {
     const p = driven();
     const a = fakeAsk("abort");
     const c = makeCompactor({
@@ -939,8 +951,8 @@ describe("IdleCompactor: a turn during a pass", () => {
       expect.objectContaining({
         text: IDLE_COMPACT_TEXT.ask,
         buttons: [
-          { id: "wait", label: "Poczekaj" },
-          { id: "abort", label: "Przerwij" },
+          { id: "wait", label: "Wait" },
+          { id: "abort", label: "Stop" },
         ],
       }),
     );
@@ -950,7 +962,7 @@ describe("IdleCompactor: a turn during a pass", () => {
     expect(c.compactor.hasPrecompute("c1")).toBe(false);
   });
 
-  it("onTurn ask: a click on [Poczekaj] waits and adopts the fork", async () => {
+  it("onTurn ask: a click on [Wait] waits and adopts the fork", async () => {
     const p = driven();
     const a = fakeAsk("wait");
     const c = makeCompactor({
@@ -1031,6 +1043,149 @@ describe("IdleCompactor: a turn during a pass", () => {
     p.ctl.finish();
     await c.settle();
     expect(c.compactor.hasPrecompute("c1")).toBe(true);
+  });
+});
+
+describe("IdleCompactor: review fixes", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0 + 30_000);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const TARGET = { chatId: "c1", numericChatId: 1 };
+
+  /** A pass whose request is sent at fire time, as the real backend reports. */
+  const sentThenCompacted =
+    (over: Partial<SessionCompactResult> = {}): CompactFn =>
+    async (_id, opts) => {
+      opts?.onRequestSent?.();
+      return compacted(over);
+    };
+
+  it("keeps the source while the pass's own cache read keeps it warm", async () => {
+    const c = makeCompactor({ compactChat: sentThenCompacted() });
+    c.compactor.onTurnSettled("c1");
+    await vi.advanceTimersByTimeAsync(FIRE_AT - Date.now());
+    await c.settle();
+
+    // Past lastRequestAt + TTL, but within the pass's send time + TTL.
+    vi.setSystemTime(T0 + HOUR + 10 * 60_000);
+    await c.compactor.beforeTurn("c1", "opus-x");
+    expect(store.setSessionId).not.toHaveBeenCalled();
+    expect(c.discardSession).toHaveBeenCalledWith("fork-1");
+    expect(metrics.incrementCounter).toHaveBeenCalledWith(
+      "session.idle_compact.discarded.returned_early",
+    );
+  });
+
+  it("adopts the fork once the refreshed cache has expired too", async () => {
+    const c = makeCompactor({ compactChat: sentThenCompacted() });
+    c.compactor.onTurnSettled("c1");
+    await vi.advanceTimersByTimeAsync(FIRE_AT - Date.now());
+    await c.settle();
+
+    vi.setSystemTime(FIRE_AT + HOUR + 1_000);
+    await c.compactor.beforeTurn("c1", "opus-x");
+    expect(store.setSessionId).toHaveBeenCalledWith("c1", "fork-1");
+  });
+
+  it("keeps lastRequestAt + TTL when the pass did not read the cache", async () => {
+    const c = makeCompactor({
+      compactChat: sentThenCompacted({
+        usage: {
+          inputTokens: 300_000,
+          outputTokens: 900,
+          cacheRead: 0,
+          cacheWrite: 300_000,
+        },
+      } as Partial<SessionCompactResult>),
+    });
+    c.compactor.onTurnSettled("c1");
+    await vi.advanceTimersByTimeAsync(FIRE_AT - Date.now());
+    await c.settle();
+
+    vi.setSystemTime(T0 + HOUR + 1_000);
+    await c.compactor.beforeTurn("c1", "opus-x");
+    expect(store.setSessionId).toHaveBeenCalledWith("c1", "fork-1");
+  });
+
+  it("counts a fork as a compaction only when a turn adopts it", async () => {
+    const c = makeCompactor({ compactChat: sentThenCompacted() });
+    c.compactor.onTurnSettled("c1");
+    await vi.advanceTimersByTimeAsync(FIRE_AT - Date.now());
+    await c.settle();
+    expect(metrics.incrementCounter).not.toHaveBeenCalledWith(
+      "session.compacted.manual",
+    );
+
+    vi.setSystemTime(FIRE_AT + HOUR + 1_000);
+    await c.compactor.beforeTurn("c1", "opus-x");
+    expect(metrics.incrementCounter).toHaveBeenCalledWith(
+      "session.compacted.manual",
+    );
+    expect(metrics.recordHistogram).toHaveBeenCalledWith(
+      "session.compact.pre_tokens",
+      300_000,
+    );
+  });
+
+  it("a background turn mid-pass waits silently; a later user turn is still told", async () => {
+    let finish: (r: SessionCompactResult) => void = () => {};
+    let seen: SessionCompactOptions | undefined;
+    const ask = vi.fn<NonNullable<IdleCompactorDeps["ask"]>>();
+    const c = makeCompactor({
+      onTurn: "ask",
+      ask,
+      compactChat: (_id, opts) =>
+        new Promise((resolve) => {
+          seen = opts;
+          finish = resolve;
+        }),
+    });
+    c.compactor.onTurnSettled("c1");
+    await vi.advanceTimersByTimeAsync(FIRE_AT - Date.now());
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    seen?.onRequestSent?.();
+
+    for (const source of ["trigger", "agent", "pulse"] as const) {
+      c.compactor.onTurnQueued("c1", TARGET, source);
+    }
+    expect(seen?.signal?.aborted).toBe(false);
+    expect(ask).not.toHaveBeenCalled();
+    expect(c.notify).not.toHaveBeenCalled();
+    expect(metrics.incrementCounter).toHaveBeenCalledWith(
+      "session.idle_compact.turn_background_wait",
+    );
+
+    ask.mockResolvedValue(undefined); // no buttons: falls back to the status line
+    c.compactor.onTurnQueued("c1", TARGET, "message");
+    await vi.waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+
+    finish(compacted());
+    await c.settle();
+  });
+
+  it("stops arming a backend that answered unsupported", async () => {
+    const c = makeCompactor({
+      compactChat: async () => ({
+        status: "unsupported",
+        reason: "the Claude CLI does not offer /compact",
+      }),
+    });
+    c.compactor.onTurnSettled("c1");
+    await vi.advanceTimersByTimeAsync(FIRE_AT - Date.now());
+    await c.settle();
+    expect(c.compactChat).toHaveBeenCalledTimes(1);
+    expect(metrics.incrementCounter).toHaveBeenCalledWith(
+      "session.idle_compact.unsupported",
+    );
+
+    vi.setSystemTime(T0 + 30_000);
+    c.compactor.onTurnSettled("c1");
+    expect(c.compactor.isArmed("c1")).toBe(false);
   });
 });
 

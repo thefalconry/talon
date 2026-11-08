@@ -314,7 +314,7 @@ function finish(
     logWarn("agent", `[${chatId}] idle compaction: fork not honoured`);
     delete state.sessionId;
   }
-  return settle(chatId, state, ctx.durationMs);
+  return settle(chatId, state, ctx.durationMs, ctx.forked);
 }
 
 /**
@@ -439,6 +439,7 @@ function settle(
   chatId: string,
   state: CompactStreamState,
   durationMs: number,
+  forked: boolean,
 ): SessionCompactResult {
   if (!state.boundary) {
     const error = state.error ?? "no compact boundary in the reply";
@@ -446,11 +447,16 @@ function settle(
     return { status: "failed", error };
   }
   const { pre, post } = state.boundary;
-  recordCompactBoundary(chatId, {
-    trigger: "manual",
-    pre_tokens: pre,
-    ...(post !== undefined ? { post_tokens: post } : {}),
-  });
+  // Only a compaction of the chat's own session is one. A fork is a
+  // precompute the next turn may still discard; the Weaver records it as a
+  // compaction if and when it adopts the fork (idle-compact.ts beforeTurn).
+  if (!forked) {
+    recordCompactBoundary(chatId, {
+      trigger: "manual",
+      pre_tokens: pre,
+      ...(post !== undefined ? { post_tokens: post } : {}),
+    });
+  }
   const cache = state.usage
     ? ` (cache read ${state.usage.cacheRead}, write ${state.usage.cacheWrite})`
     : "";

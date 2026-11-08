@@ -33,8 +33,10 @@
  *
  *   PRECOMPUTE (default) — the backend compacts a FORK of the session
  *   (`fork: true`); the chat's own session is untouched. At the next turn
- *   the fork is switched in only if `now ≥ lastRequestAt + TTL` (the cache
- *   has expired, so the compacted session is the cheaper resume);
+ *   the fork is switched in only once the source's cache has expired, so
+ *   the compacted session is the cheaper resume. That is TTL after the
+ *   pass's own `/compact` request, not after `lastRequestAt`: the request
+ *   read the cached prefix, and a cache hit refreshes the TTL;
  *   otherwise it is discarded (`returned_early` — the user came back to a
  *   warm cache, which beats a re-written summary). Also discarded when a
  *   newer request or turn happened, the model changed, or the session was
@@ -145,14 +147,14 @@ const DEFAULT_COMPACT_TIMEOUT_MS = 5 * 60 * 1000;
 /** `"ask"`: how long the buttons wait for a click before `"wait"` applies. */
 const ASK_TIMEOUT_MS = 30_000;
 
-/** The chat-facing texts (the operator's chats are Polish). */
+/** The chat-facing texts. */
 export const IDLE_COMPACT_TEXT = {
-  waiting: "Kompaktuję czat, odpowiem za chwilę…",
-  ask: "Trwa kompakcja czatu (~1–2 min) — poczekać czy przerwać?",
-  wait: "Poczekaj",
-  abort: "Przerwij",
-  aborted: "Kompakcja przerwana.",
-  done: "Kompakcja zakończona.",
+  waiting: "Compacting this chat, I'll reply in a moment…",
+  ask: "This chat is being compacted (~1–2 min). Wait for it or stop it?",
+  wait: "Wait",
+  abort: "Stop",
+  aborted: "Compaction stopped.",
+  done: "Compaction finished.",
 } as const;
 
 /** What the timer was armed for — compared again when it fires. */
@@ -281,6 +283,13 @@ export type PrecomputedCompaction = {
    * fork at that turn even while the cache is warm — no `returned_early`.
    */
   adoptEvenIfWarm?: boolean;
+  /**
+   * Until when the SOURCE session's cache stays warm. The pass's own
+   * `/compact` request read that cached prefix (the 0.1× read the design
+   * relies on), and a cache hit refreshes its TTL, so this is the request's
+   * send time + TTL rather than `plan.anchor + ttlMs`. Absent = the anchor.
+   */
+  sourceWarmUntil?: number;
 };
 
 export type PrecomputeDiscard =
@@ -292,7 +301,8 @@ export type PrecomputeDiscard =
 
 /**
  * At the next turn: switch to the fork only once the cache it would have
- * read has expired. Pure.
+ * read has expired — counting the refresh the pass's own read gave it
+ * (`sourceWarmUntil`). Pure.
  */
 export function decidePrecompute(
   pending: PrecomputedCompaction,
@@ -312,10 +322,9 @@ export function decidePrecompute(
   if (pending.plan.modelId && modelId && pending.plan.modelId !== modelId) {
     return no("model-changed");
   }
-  if (
-    !pending.adoptEvenIfWarm &&
-    now < pending.plan.anchor + pending.plan.ttlMs
-  ) {
+  const warmUntil =
+    pending.sourceWarmUntil ?? pending.plan.anchor + pending.plan.ttlMs;
+  if (!pending.adoptEvenIfWarm && now < warmUntil) {
     return no("returned_early");
   }
   return { apply: true };
@@ -419,15 +428,22 @@ export type IdleCompactorDeps = {
 /** Where a turn came from — what a status message or question goes to. */
 export type ChatTarget = { chatId: string; numericChatId: number };
 
+/** What started a turn (`ExecuteParams.source`); only "message" is a user. */
+export type TurnSource = "message" | "pulse" | "cron" | "trigger" | "agent";
+
 type RunningPass = {
   abort: AbortController;
   /** The `/compact` request is sent: in flight, its input billed. */
   requestSent: boolean;
+  /** When the request was sent — its cache read refreshed the TTL. */
+  requestSentAt?: number;
   /** The compaction has landed (boundary in). */
   landed: boolean;
   fork: boolean;
-  /** A turn arrived in flight and waits for the pass (status sent / asked). */
+  /** A turn arrived in flight and waits for the pass. */
   turnWaiting: boolean;
+  /** The chat was told (status message or question) — once per pass. */
+  chatTold: boolean;
   /** Ends a pending `"ask"` question when the pass is over. */
   over: AbortController;
 };
@@ -442,6 +458,13 @@ export class IdleCompactor {
   private readonly timers = new WarmCompactTimers();
   private readonly passes = new Map<string, RunningPass>();
   private readonly precomputed = new Map<string, PrecomputedCompaction>();
+  /**
+   * Backends that answered `unsupported` (e.g. a Claude CLI without
+   * `/compact`). Remembered for the process lifetime, so an idle chat does
+   * not spawn a CLI every hour only to learn that again; a restart (after
+   * an upgrade, say) asks afresh.
+   */
+  private readonly unsupported = new Set<string>();
 
   constructor(private readonly deps: IdleCompactorDeps) {}
 
@@ -462,8 +485,17 @@ export class IdleCompactor {
   /**
    * A turn is coming: cancel the timer, and settle a running pass — abort
    * it before its request is sent, else apply `onTurn` (module comment).
+   *
+   * Only a user's message is told or asked anything. A background turn
+   * (trigger wake, sub-agent report, pulse, device job) has nobody waiting
+   * on a reply, so a question or a "replying shortly" message would come
+   * out of nowhere: it waits silently, which `"ask"` also falls back to.
    */
-  onTurnQueued(chatId: string, target?: ChatTarget): void {
+  onTurnQueued(
+    chatId: string,
+    target?: ChatTarget,
+    source: TurnSource = "message",
+  ): void {
     this.timers.cancel(chatId);
     const pass = this.passes.get(chatId);
     if (!pass || pass.abort.signal.aborted) return;
@@ -471,13 +503,18 @@ export class IdleCompactor {
       pass.abort.abort();
       return;
     }
-    if (pass.turnWaiting) return; // decided by an earlier turn
+    if (pass.chatTold) return; // decided by an earlier user turn
     const policy = this.deps.settings.onTurn;
     if (policy === "abort") {
       abortPass(pass);
       return;
     }
     pass.turnWaiting = true;
+    if (source !== "message") {
+      incrementCounter("session.idle_compact.turn_background_wait");
+      return;
+    }
+    pass.chatTold = true;
     const to = target ?? { chatId, numericChatId: Number(chatId) };
     if (policy === "ask" && this.deps.ask) void this.ask(to, pass);
     else this.notify(to, IDLE_COMPACT_TEXT.waiting);
@@ -546,6 +583,7 @@ export class IdleCompactor {
   onTurnSettled(chatId: string): void {
     if (!this.deps.settings.enabled) return;
     try {
+      if (this.unsupported.has(this.deps.getBackend(chatId).id)) return;
       const now = this.now();
       const planned = planWarmCompaction(
         getSessionInfo(chatId),
@@ -592,6 +630,9 @@ export class IdleCompactor {
             ? { contextTokens: pending.postTokens }
             : {},
         );
+        // The chat's session changes only now, so this is where the fork
+        // counts as a compaction (the backend skips it for a fork pass).
+        recordAdoptedCompaction(pending.preTokens, pending.postTokens);
         incrementCounter("session.idle_compact");
         incrementCounter("session.idle_compact.applied");
         recordSaved(pending.preTokens, pending.postTokens);
@@ -652,6 +693,7 @@ export class IdleCompactor {
       landed: false,
       fork: this.deps.settings.mode === "precompute",
       turnWaiting: false,
+      chatTold: false,
       over: new AbortController(),
     };
     this.passes.set(chatId, pass);
@@ -721,10 +763,12 @@ export class IdleCompactor {
         signal: pass.abort.signal,
         onBoundary: () => {
           pass.requestSent = true;
+          pass.requestSentAt ??= this.now();
           pass.landed = true;
         },
         onRequestSent: () => {
           pass.requestSent = true;
+          pass.requestSentAt ??= this.now();
         },
       });
     } catch (err) {
@@ -738,6 +782,9 @@ export class IdleCompactor {
       fork,
       backend,
       turnWaiting: pass.turnWaiting && !pass.abort.signal.aborted,
+      ...(pass.requestSentAt !== undefined
+        ? { requestSentAt: pass.requestSentAt }
+        : {}),
     });
   }
 
@@ -752,6 +799,7 @@ export class IdleCompactor {
       backend: Backend;
       /** A turn is queued behind this pass, waiting for it. */
       turnWaiting: boolean;
+      requestSentAt?: number;
     },
   ): void {
     if (result.status === "aborted") {
@@ -767,7 +815,25 @@ export class IdleCompactor {
       );
       return;
     }
-    if (result.status !== "compacted") return; // skipped / unsupported
+    if (result.status === "unsupported") {
+      if (!this.unsupported.has(ctx.backend.id)) {
+        this.unsupported.add(ctx.backend.id);
+        logWarn(
+          "dispatcher",
+          `idle compaction is unavailable on backend ${ctx.backend.id}: ${result.reason} — not arming it again until a restart`,
+        );
+      }
+      incrementCounter("session.idle_compact.unsupported");
+      return;
+    }
+    if (result.status === "skipped") {
+      incrementCounter("session.idle_compact.skipped.backend");
+      log(
+        "dispatcher",
+        `idle compaction chat=${chatId} skipped by the backend: ${result.reason}`,
+      );
+      return;
+    }
     const preTokens = result.preTokens || ctx.contextTokens;
     recordPassUsage(chatId, result);
     const forked =
@@ -777,6 +843,13 @@ export class IdleCompactor {
     if (forked) {
       const { backend } = ctx;
       const forkSessionId = result.sessionId!;
+      // A pass that read the source's cached prefix refreshed it. Without
+      // usage figures, assume it did: that is the read the design pays for.
+      const readCache = result.usage ? result.usage.cacheRead > 0 : true;
+      const sourceWarmUntil =
+        readCache && ctx.requestSentAt !== undefined
+          ? Math.max(ctx.plan.anchor, ctx.requestSentAt) + ctx.plan.ttlMs
+          : undefined;
       this.precomputed.set(chatId, {
         forkSessionId,
         sourceSessionId: ctx.sourceSessionId,
@@ -789,6 +862,7 @@ export class IdleCompactor {
           await backend.sessions?.discardSession?.(id);
         },
         ...(ctx.turnWaiting ? { adoptEvenIfWarm: true } : {}),
+        ...(sourceWarmUntil !== undefined ? { sourceWarmUntil } : {}),
       });
       writePendingFork(chatId, { forkSessionId, backendId: backend.id });
       incrementCounter("session.idle_compact.precomputed");
@@ -837,6 +911,16 @@ function recordPassUsage(
     result.usage.cacheWrite,
   );
   recordSessionCompaction(chatId, result.usage);
+}
+
+/**
+ * The same counters a compaction boundary in a turn's stream records
+ * (`recordCompactBoundary`), for a precomputed fork the chat adopted.
+ */
+function recordAdoptedCompaction(pre: number, post: number | undefined): void {
+  incrementCounter("session.compacted.manual");
+  recordHistogram("session.compact.pre_tokens", pre);
+  if (post !== undefined) recordHistogram("session.compact.post_tokens", post);
 }
 
 function recordSaved(pre: number, post: number | undefined): void {

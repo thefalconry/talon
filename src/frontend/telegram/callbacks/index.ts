@@ -59,7 +59,7 @@ export function registerCallbacks(
       const answered = resolveInlineChoice(data);
       await answerCallbackQuerySafe(
         ctx,
-        answered ? undefined : { text: "To pytanie jest już nieaktualne." },
+        answered ? undefined : { text: "This question has expired." },
       );
       return;
     }

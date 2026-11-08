@@ -13,8 +13,8 @@ import {
 } from "../core/engine/inline-choice.js";
 
 const BUTTONS = [
-  { id: "wait", label: "Poczekaj" },
-  { id: "abort", label: "Przerwij" },
+  { id: "wait", label: "Wait" },
+  { id: "abort", label: "Stop" },
 ];
 
 function fakeHandler(ok = true) {
