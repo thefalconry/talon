@@ -14,7 +14,6 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { DoctorCheck } from "../../core/doctor/index.js";
 import {
@@ -27,12 +26,14 @@ import {
   type ExecFn,
   type ProvisionOutcome,
 } from "../../core/plugin/provision.js";
+import { logWarn } from "../../util/log.js";
 import { dirs } from "../../util/paths.js";
 import {
   ENDPOINT_PLAYWRIGHT_MINOR,
   bundledPlaywrightVersion,
   couplingError,
 } from "./version-coupling.js";
+import { userHome } from "../../util/fs-path.js";
 
 /** Engines whose builds Playwright manages (vs system channels). */
 const MANAGED_ENGINES = new Set(["chromium", "firefox", "webkit"]);
@@ -112,12 +113,19 @@ const safeListDir = (p: string): string[] => {
 
 /** browsers.json shipped beside the CLI — the revisions this playwright-core needs. */
 function readRegistry(cli: string): BrowserDescriptor[] {
+  const path = join(dirname(cli), "browsers.json");
   try {
-    const parsed = JSON.parse(
-      readFileSync(join(dirname(cli), "browsers.json"), "utf-8"),
-    ) as { browsers?: BrowserDescriptor[] };
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as {
+      browsers?: BrowserDescriptor[];
+    };
     return Array.isArray(parsed.browsers) ? parsed.browsers : [];
-  } catch {
+  } catch (err) {
+    // It ships with playwright-core, so this is unexpected — and without
+    // it any build directory counts, stale revisions included.
+    logWarn(
+      "playwright",
+      `browsers.json unreadable, falling back to any-build check path=${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return [];
   }
 }
@@ -165,7 +173,7 @@ function browserPresent(
 ): boolean {
   const root = browsersRoot(
     deps.platform ?? process.platform,
-    deps.home ?? homedir(),
+    deps.home ?? userHome(),
     deps.env ?? process.env,
   );
   const present = new Set((deps.listDir ?? safeListDir)(root));

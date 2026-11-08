@@ -65,6 +65,7 @@ export function runTurn(
     numericChatId,
     prompt: `[${msg.senderName}]: ${msg.text}`,
     senderName: msg.senderName,
+    senderKeys: msg.senderId ? [`teams:${msg.senderId}`] : undefined,
     isGroup: true,
     source: "message",
     onEvent: async (event) => {

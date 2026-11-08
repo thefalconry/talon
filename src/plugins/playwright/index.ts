@@ -15,7 +15,7 @@
  *   "playwright": {
  *     "enabled": true,
  *     "browser": "firefox",
- *     "endpointFile": "/home/dylan/camoufox-endpoint.txt"
+ *     "endpointFile": "/home/ada/camoufox-endpoint.txt"
  *   }
  *
  * VERSION COUPLING (endpoint mode): the WebSocket handshake requires the
@@ -51,20 +51,18 @@ export function createPlaywrightPlugin(config: {
   const browser = config.browser ?? "chromium";
   const headless = config.headless !== false; // default true
 
-  // Resolve endpoint: direct string or read from file
   let endpoint = config.endpoint;
   if (!endpoint && config.endpointFile) {
     try {
       endpoint = readFileSync(config.endpointFile, "utf-8").trim();
-    } catch {
+    } catch (err) {
       log(
         "playwright",
-        `Warning: could not read endpoint file ${config.endpointFile}`,
+        `Warning: could not read endpoint file ${config.endpointFile}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
 
-  // Resolve path from Talon's node_modules
   const mcpBin = resolve(
     import.meta.dirname ?? ".",
     "../../../node_modules/@playwright/mcp/cli.js",

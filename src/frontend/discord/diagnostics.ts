@@ -1,12 +1,19 @@
 /**
- * Client diagnostics — the error/warn/disconnect/rate-limit listeners that
- * only log. discord.js handles reconnects and retries itself; these exist
- * so a silent failure mode (a fatal close code, an approaching IP ban) is
- * visible in the daemon log.
+ * Client diagnostics — the error/warn/disconnect/rate-limit listeners.
+ * discord.js handles reconnects and retries itself; these exist so a
+ * silent failure mode (a fatal close code, an approaching IP ban) is
+ * visible in the daemon log, and so the operator hears when the gateway
+ * stays down: `discord.gateway` is raised once a shard has been
+ * disconnected for `GATEWAY_OUTAGE_MS` (at once, critically, for a close
+ * code discord.js will never recover from) and resolved on ready/resume.
  */
 
 import { type Client, Events } from "discord.js";
-import { logError, logWarn } from "../../util/log.js";
+import { log, logError, logWarn } from "../../util/log.js";
+import { createOutage, errorText, type Outage } from "../health/outage.js";
+
+/** A gateway down this long reaches the operator. */
+const GATEWAY_OUTAGE_MS = 5 * 60_000;
 
 function shardDisconnectLabel(code: number | undefined): string {
   return code === 4004
@@ -18,7 +25,76 @@ function shardDisconnectLabel(code: number | undefined): string {
         : `code=${code}`;
 }
 
-export function bindClientDiagnostics(client: Client): void {
+function createGatewayOutage(thresholdMs: number): Outage {
+  return createOutage({
+    key: "discord.gateway",
+    thresholdMs,
+    describe: (err, mins) =>
+      `The Discord gateway has been disconnected for ${mins} min: ${err}. Messages are not being received.`,
+    recovered: "The Discord gateway is connected again.",
+  });
+}
+
+/**
+ * Gateway connection health: which shards are down, and the outage that
+ * spans them. Reconnect attempts, errors and recoveries are logged with
+ * the shard, attempt number and time down.
+ */
+function bindGatewayHealth(client: Client, thresholdMs: number): void {
+  const outage = createGatewayOutage(thresholdMs);
+  const down = new Set<number>();
+
+  const lost = (shardId: number, event: string, err: unknown): void => {
+    down.add(shardId);
+    const { attempt, downMs } = outage.fail(err);
+    logWarn(
+      "discord",
+      `gateway.${event} shard=${shardId} attempt=${attempt} down_ms=${downMs} err=${errorText(err)}`,
+    );
+  };
+  const back = (shardId: number, event: string): void => {
+    down.delete(shardId);
+    if (down.size > 0) return;
+    const ended = outage.ok();
+    if (ended) {
+      log(
+        "discord",
+        `gateway.${event} shard=${shardId} failed_attempts=${ended.attempts} down_ms=${ended.downMs}`,
+      );
+    }
+  };
+
+  client.on(Events.ShardReconnecting, (shardId) =>
+    lost(shardId, "reconnecting", "connection closed, reconnecting"),
+  );
+  client.on(Events.ShardError, (err, shardId) => {
+    // An error on a live shard is followed by a close if it matters; only
+    // an error during an outage is part of it (its text is the useful one).
+    if (down.has(shardId)) lost(shardId, "error", err);
+  });
+  client.on(Events.ShardDisconnect, (event, shardId) => {
+    const code = event?.code;
+    lost(shardId, "disconnect", shardDisconnectLabel(code));
+    if (code === 4004 || code === 4013 || code === 4014) {
+      outage.raiseNow(
+        `The Discord gateway closed and will not reconnect: ${shardDisconnectLabel(code)}. ` +
+          "Messages are not being received until this is fixed and Talon restarts.",
+        "critical",
+      );
+    }
+  });
+  client.on(Events.Invalidated, () =>
+    lost(0, "invalidated", "session invalidated"),
+  );
+  client.on(Events.ShardReady, (shardId) => back(shardId, "ready"));
+  client.on(Events.ShardResume, (shardId) => back(shardId, "resumed"));
+}
+
+export function bindClientDiagnostics(
+  client: Client,
+  gatewayOutageMs = GATEWAY_OUTAGE_MS,
+): void {
+  bindGatewayHealth(client, gatewayOutageMs);
   client.on("error", (err) => {
     logError("discord", "Client error", err);
   });

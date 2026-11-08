@@ -12,7 +12,7 @@
  *   real SDK shape. This test catches the case where the real Kilo server
  *   evolves its response (new fields, dropped fields, renamed providers) in a
  *   way that breaks our parser — without us having to wait for it to fail in
- *   production. It also confirms the very practical contract Dylan wants:
+ *   production. It also confirms the very practical contract Ada wants:
  *   discovery against an out-of-the-box Kilo install MUST return a non-empty
  *   list of free models without throwing.
  *
@@ -224,7 +224,7 @@ kiloDescribe("Kilo live discovery (integration)", () => {
   });
 
   // ── 5. Out-of-the-box discovery yields free, selectable models. ──────────
-  // This is the contract Dylan called out explicitly: "expect models to
+  // This is the contract Ada called out explicitly: "expect models to
   // return non zero and not throw an error."
   it("discovers at least one selectable model out of the box", async () => {
     const catalog = await getOpenCodeModelCatalog();
@@ -256,7 +256,7 @@ kiloDescribe("Kilo live discovery (integration)", () => {
     const connectedIds = catalog.connectedProviders.map((p) => p.id);
     // A fresh Kilo install always ships 'kilo' as a connected provider
     // (no login required — its built-in free models are the discovery hook
-    // Dylan called out). 'opencode' often appears too but its connected
+    // Ada called out). 'opencode' often appears too but its connected
     // status depends on whether the binary has cached an opencode-zen
     // session, which isn't reproducible across machines.
     expect(connectedIds).toContain("kilo");

@@ -76,9 +76,7 @@ export function createTeamsFrontend(
       const graphClient = await initGraphClient();
       runtime.graphClient = graphClient;
 
-      // Get our own user ID (to filter out our own messages)
       const me = await graphClient.getMe();
-      runtime.myUserId = me.id;
       log("teams", `Authenticated as: ${me.displayName} (${me.id})`);
 
       const chatId = await resolveChatId(runtime, graphClient, me.id);
@@ -99,8 +97,7 @@ export function createTeamsFrontend(
 
       // The receive side is a timer on the runtime, not a loop to sit in:
       // once the first poll is done the frontend is listening, and
-      // start() is finished. (It used to park on a promise that never
-      // resolved, which made the boot end at shutdown.)
+      // start() is finished.
       await startPolling(runtime, chatId);
     },
 

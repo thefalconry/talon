@@ -21,8 +21,8 @@
  *      model selected", send guard refuses.
  *
  * Plus edge cases: `getDefaultModel` throws / returns null / returns
- * empty string, `null` backend, `null` backendId, `getActiveModelForChat`
- * convenience wrapper, modelByBackend persistence semantics across
+ * empty string, `null` backend, `null` backendId, modelByBackend
+ * persistence semantics across
  * setChatModelForBackend / clearAllChatModels.
  */
 
@@ -54,9 +54,6 @@ vi.mock("write-file-atomic", () => ({
 
 const {
   resolveActiveModelForChat,
-  getActiveModelForChat,
-  describeActiveModelSource,
-  getModelByBackendSnapshot,
   resolveExplicitModelRef,
   resetInvalidOverrideWarnings,
 } = await import("../core/models/active-model.js");
@@ -437,47 +434,6 @@ describe("resolveActiveModelForChat — edge cases", () => {
     expect(result.model).toBe("stored-override");
     expect(result.source).toBe("override-valid");
   });
-
-  it("getActiveModelForChat is a thin wrapper returning just the id", async () => {
-    const cid = nextChatId();
-    setChatModelForBackend(cid, "codex", "override");
-    const be = fakeBackend({
-      resolveModel: async () => exactResolution("override"),
-    });
-    const model = await getActiveModelForChat(cid, be, "codex", fakeConfig());
-    expect(model).toBe("override");
-  });
-
-  it("getActiveModelForChat returns null when chain exhausts", async () => {
-    const cid = nextChatId();
-    const be = fakeBackend({});
-    const model = await getActiveModelForChat(
-      cid,
-      be,
-      "openai-agents",
-      fakeConfig({ backend: "claude" }),
-    );
-    expect(model).toBeNull();
-  });
-});
-
-describe("describeActiveModelSource", () => {
-  it("returns human labels for every source", () => {
-    expect(describeActiveModelSource("override-valid")).toBe("your pick");
-    expect(describeActiveModelSource("override-invalid-fallback")).toContain(
-      "invalid",
-    );
-    expect(describeActiveModelSource("backend-canonical")).toBe(
-      "backend default",
-    );
-    expect(describeActiveModelSource("config-backend-defaults")).toBe(
-      "configured default",
-    );
-    expect(describeActiveModelSource("config-legacy-global")).toBe(
-      "global default",
-    );
-    expect(describeActiveModelSource("none")).toBe("no model selected");
-  });
 });
 
 describe("per-backend storage semantics", () => {
@@ -488,7 +444,7 @@ describe("per-backend storage semantics", () => {
     const cid = nextChatId();
     setChatModelForBackend(cid, "codex", "gpt-5.5");
     setChatModelForBackend(cid, "openai-agents", "claude-via-or-shenanigans");
-    expect(getModelByBackendSnapshot(cid)).toEqual({
+    expect({ ...getChatSettings(cid).modelByBackend }).toEqual({
       codex: "gpt-5.5",
       "openai-agents": "claude-via-or-shenanigans",
     });
@@ -499,7 +455,9 @@ describe("per-backend storage semantics", () => {
     setChatModelForBackend(cid, "codex", "gpt-5.5");
     setChatModelForBackend(cid, "claude", "default");
     setChatModelForBackend(cid, "codex", undefined);
-    expect(getModelByBackendSnapshot(cid)).toEqual({ claude: "default" });
+    expect({ ...getChatSettings(cid).modelByBackend }).toEqual({
+      claude: "default",
+    });
   });
 
   it("clearAllChatModels wipes every per-backend slot AND legacy field", () => {
@@ -507,7 +465,7 @@ describe("per-backend storage semantics", () => {
     setChatModelForBackend(cid, "codex", "gpt-5.5");
     setChatModelForBackend(cid, "claude", "default");
     clearAllChatModels(cid);
-    expect(getModelByBackendSnapshot(cid)).toEqual({});
+    expect({ ...getChatSettings(cid).modelByBackend }).toEqual({});
     expect(getChatSettings(cid).model).toBeUndefined();
   });
 
@@ -515,7 +473,9 @@ describe("per-backend storage semantics", () => {
     const cid = nextChatId();
     setChatBackend(cid, "codex");
     setChatModel(cid, "gpt-5.5");
-    expect(getModelByBackendSnapshot(cid)).toEqual({ codex: "gpt-5.5" });
+    expect({ ...getChatSettings(cid).modelByBackend }).toEqual({
+      codex: "gpt-5.5",
+    });
     // Legacy `model` field should NOT be set when bound to a backend.
     expect(getChatSettings(cid).model).toBeUndefined();
   });
@@ -523,7 +483,7 @@ describe("per-backend storage semantics", () => {
   it("legacy setChatModel writes to legacy slot when chat has no backend binding", () => {
     const cid = nextChatId();
     setChatModel(cid, "fresh-chat-model");
-    expect(getModelByBackendSnapshot(cid)).toEqual({});
+    expect({ ...getChatSettings(cid).modelByBackend }).toEqual({});
     expect(getChatSettings(cid).model).toBe("fresh-chat-model");
   });
 

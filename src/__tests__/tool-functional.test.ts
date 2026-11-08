@@ -103,7 +103,7 @@ describe("Tool → bridge round-trip", () => {
       },
       {
         tool: "get_member_info",
-        params: { user_id: 352042062 },
+        params: { user_id: 424242420 },
         bridgeAction: "get_member_info",
       },
       {
@@ -330,13 +330,13 @@ describe("Tool → bridge round-trip", () => {
     it("get_member_info with stringified user_id arrives at bridge intact", async () => {
       const tool = getTool("get_member_info");
       const bridge = makeBridge();
-      const parsed = parseSchema(tool, { user_id: "352042062" });
+      const parsed = parseSchema(tool, { user_id: "424242420" });
 
       await tool.execute(parsed, bridge);
 
       const [, params] = bridge.mock.calls[0]!;
       const userId = (params as { user_id: unknown }).user_id;
-      expect(userId === 352042062 || userId === "352042062").toBe(true);
+      expect(userId === 424242420 || userId === "424242420").toBe(true);
     });
   });
 });

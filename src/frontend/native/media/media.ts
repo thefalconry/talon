@@ -20,13 +20,17 @@ import type { NativeRuntime } from "../runtime.js";
  */
 export const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
-/** Register a file for serving and return its short media id. */
+/** Register a file for serving and return its short media id (stable per
+ *  path for the life of the daemon). */
 export function registerMedia(
   runtime: NativeRuntime,
   filePath: string,
 ): string {
+  const known = runtime.mediaIds.get(filePath);
+  if (known) return known;
   const id = `m${runtime.nextId().toString(36)}`;
   runtime.media.set(id, filePath);
+  runtime.mediaIds.set(filePath, id);
   return id;
 }
 

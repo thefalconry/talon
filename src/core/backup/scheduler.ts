@@ -26,11 +26,20 @@
 import { FailureBackoff } from "../background/failure-backoff.js";
 import { TalonError } from "../errors.js";
 import { notifyAdmin } from "../frontend-runtime/admin-notify.js";
+import { raiseAlert, resolveAlert } from "../frontend-runtime/alerts.js";
+import { faultText } from "../engine/fault-text.js";
 import { bus } from "../bus/index.js";
 import { log, logError } from "../../util/log.js";
+import { userHome } from "../../util/fs-path.js";
 import { dirs } from "../../util/paths.js";
+import { passphraseProblem } from "./passphrase.js";
 import { buildSnapshot } from "./snapshot.js";
 import { listLocalManifests, pruneLocal, reconcileIndex } from "./store.js";
+import {
+  describeRetention,
+  localRetention,
+  remoteRetention,
+} from "./retention/policy.js";
 import { discoverTargets, selectTargets } from "./targets.js";
 import { pruneRemote, uploadSnapshot } from "./upload.js";
 import type { BackupSettings, Manifest, SnapshotKind } from "./types.js";
@@ -52,6 +61,7 @@ export type RunRequest = {
 /** Test seam: the expensive collaborators, swappable in unit tests. */
 export const _backupDeps = {
   build: buildSnapshot,
+  keyProblem: (settings: BackupSettings) => passphraseProblem(settings),
   discover: discoverTargets,
   upload: uploadSnapshot,
   pruneLocal,
@@ -83,6 +93,10 @@ type SchedulerState = {
   lastSnapshotId: string | undefined;
   lastError: string | undefined;
   nextRunAt: number | undefined;
+  /** The hourly passphrase check (see checkBackupKey). */
+  keyTimer: ReturnType<typeof setInterval> | null;
+  /** What was wrong with the key at the last check, if anything. */
+  keyProblem: string | undefined;
 };
 
 const state: SchedulerState = {
@@ -98,6 +112,8 @@ const state: SchedulerState = {
   lastSnapshotId: undefined,
   lastError: undefined,
   nextRunAt: undefined,
+  keyTimer: null,
+  keyProblem: undefined,
 };
 
 /**
@@ -117,6 +133,7 @@ export function firstRunDelayMs(
 // ── Runs ────────────────────────────────────────────────────────────────────
 
 const backoff = new FailureBackoff();
+const BACKUP_ALERT = "backup.failing";
 
 async function executeRun(request: RunRequest): Promise<Manifest> {
   const settings = state.settings;
@@ -139,6 +156,10 @@ async function executeRun(request: RunRequest): Promise<Manifest> {
       pinned: request.pinned,
       settings,
       home: state.home,
+      // `home` is always set here, which tells the builder not to look
+      // outside it — but the manifest must still say which machine it
+      // came from, or `restore --clone` cannot relocate its plugin paths.
+      originUserHome: userHome(),
     });
     state.lastRunAt = Date.now();
     state.lastSnapshotId = manifest.id;
@@ -151,7 +172,7 @@ async function executeRun(request: RunRequest): Promise<Manifest> {
       parts: manifest.parts.length,
       durationMs: Date.now() - started,
     });
-    await _backupDeps.pruneLocal(settings.keepLocal, state.home);
+    await _backupDeps.pruneLocal(localRetention(settings), state.home);
     if (!request.localOnly) {
       const targets = selectTargets(
         await _backupDeps.discover(),
@@ -159,10 +180,11 @@ async function executeRun(request: RunRequest): Promise<Manifest> {
       );
       if (targets.length > 0) {
         await _backupDeps.upload(manifest, targets, state.home);
-        await _backupDeps.pruneRemote(targets, settings.keepRemote);
+        await _backupDeps.pruneRemote(targets, remoteRetention(settings));
       }
     }
     backoff.succeed();
+    resolveAlert(BACKUP_ALERT, "Backups are succeeding again.");
     return manifest;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -177,19 +199,34 @@ async function executeRun(request: RunRequest): Promise<Manifest> {
     logError("backup", `Run failed (${request.trigger})`, err);
     // Once per streak: the second identical failure tells the admin nothing
     // the first one did not.
-    if (backoff.failures === 1) {
-      await state
-        .notify(
-          `⚠️ Backup failed: ${message}\nRetrying after ${new Date(until).toISOString().slice(11, 16)} UTC.`,
-        )
-        .catch(() => {
-          /* the notifier logs its own failures */
-        });
-    }
+    if (backoff.failures === 1) await reportFailure(message, until);
     throw err;
   } finally {
     state.running = false;
   }
+}
+
+/**
+ * Tell the admin a backup streak started. The default route is an operator
+ * alert (`backup.failing`), so the recovery is announced too; a deployment
+ * that routes backup notices to its own chat (`backup.notifyChatId`) keeps
+ * getting the plain notice there.
+ */
+async function reportFailure(message: string, until: number): Promise<void> {
+  const retryAt = new Date(until).toISOString().slice(11, 16);
+  if (state.notify === notifyAdmin) {
+    raiseAlert(
+      BACKUP_ALERT,
+      `Backup failed: ${faultText(message, 300)}. Retrying after ${retryAt} UTC.`,
+      { severity: "warn" },
+    );
+    return;
+  }
+  await state
+    .notify(`⚠️ Backup failed: ${message}\nRetrying after ${retryAt} UTC.`)
+    .catch(() => {
+      /* the notifier logs its own failures */
+    });
 }
 
 /**
@@ -223,6 +260,7 @@ async function tick(generation: number): Promise<void> {
   const intervalMs = settings.intervalHours * HOUR_MS;
   // Recomputed every tick: a suspended machine or a stepped clock lands
   // here late, and the answer is "run now", not "run N missed times".
+  await checkBackupKey();
   if (backoff.active()) {
     schedule(Math.min(intervalMs, BOOT_DELAY_MS), generation);
     return;
@@ -233,6 +271,82 @@ async function tick(generation: number): Promise<void> {
     /* executeRun logged, notified and armed the backoff */
   }
   schedule(intervalMs, generation);
+}
+
+// ── The key check ───────────────────────────────────────────────────────────
+
+const KEY_ALERT = "backup.key";
+const KEY_CHECK_MS = HOUR_MS;
+
+/**
+ * Is the configured passphrase still there? A key that disappears breaks
+ * every snapshot and the pre-update checkpoint, and a run only notices at
+ * its next window, hours later. So this runs at boot, every hour, before
+ * each scheduled run and on every status request.
+ *
+ * It tells the admin once when the key goes bad and once when it is back,
+ * never on every check. Returns the current problem, or null. Never throws.
+ */
+export async function checkBackupKey(): Promise<string | null> {
+  const settings = state.settings;
+  if (!settings) return null;
+  let problem: { message: string; blocking: boolean } | null;
+  try {
+    problem = await _backupDeps.keyProblem(settings);
+  } catch (err) {
+    problem = {
+      message: err instanceof Error ? err.message : String(err),
+      blocking: true,
+    };
+  }
+  // A check that finished after a reconfiguration describes old settings.
+  if (state.settings !== settings) return state.keyProblem ?? null;
+  const previous = state.keyProblem;
+  state.keyProblem = problem?.message;
+  if (problem && previous === undefined) {
+    await reportKeyProblem(problem);
+  } else if (!problem && previous !== undefined) {
+    await reportKeyRecovered();
+  }
+  return problem?.message ?? null;
+}
+
+async function reportKeyProblem(problem: {
+  message: string;
+  blocking: boolean;
+}): Promise<void> {
+  const consequence = problem.blocking
+    ? "Backups and the pre-update checkpoint will fail until it is fixed, and /update is refused unless forced."
+    : "Backups still run for now.";
+  const text = `Backup key problem: ${faultText(problem.message, 300)}. ${consequence}`;
+  logError("backup", text);
+  if (state.notify === notifyAdmin) {
+    raiseAlert(KEY_ALERT, text, {
+      severity: problem.blocking ? "error" : "warn",
+    });
+    return;
+  }
+  await state.notify(`⚠️ ${text}`).catch(() => {
+    /* the notifier logs its own failures */
+  });
+}
+
+async function reportKeyRecovered(): Promise<void> {
+  const text = "The backup passphrase is readable again.";
+  log("backup", text);
+  if (state.notify === notifyAdmin) {
+    resolveAlert(KEY_ALERT, text);
+    return;
+  }
+  await state.notify(`✅ ${text}`).catch(() => {
+    /* the notifier logs its own failures */
+  });
+}
+
+function armKeyCheck(): void {
+  if (state.keyTimer) clearInterval(state.keyTimer);
+  state.keyTimer = setInterval(() => void checkBackupKey(), KEY_CHECK_MS);
+  state.keyTimer.unref?.();
 }
 
 /**
@@ -255,6 +369,10 @@ export async function initBackup(options: {
   const newest = (await listLocalManifests(state.home))[0];
   state.lastRunAt = newest?.createdAt ?? 0;
   state.lastSnapshotId = newest?.id;
+  // The key is checked whether or not the schedule runs: manual
+  // checkpoints and the pre-update checkpoint need it too.
+  await checkBackupKey();
+  armKeyCheck();
   if (!options.settings.enabled) {
     log(
       "backup",
@@ -271,8 +389,9 @@ export async function initBackup(options: {
   log(
     "backup",
     `Scheduled every ${options.settings.intervalHours}h; first run in ` +
-      `${Math.round(delay / 60_000)}m (keep ${options.settings.keepLocal} local, ` +
-      `${options.settings.keepRemote} remote)`,
+      `${Math.round(delay / 60_000)}m (retention ` +
+      `${describeRetention(localRetention(options.settings))}; ` +
+      `${options.settings.keepRemote} newest per remote target)`,
   );
 }
 
@@ -282,6 +401,8 @@ export function stopBackupScheduler(): void {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
   state.nextRunAt = undefined;
+  if (state.keyTimer) clearInterval(state.keyTimer);
+  state.keyTimer = null;
 }
 
 /** What the status surfaces report about the schedule itself. */
@@ -308,17 +429,38 @@ export function schedulerStatus(): {
 }
 
 /**
+ * What the pre-update hook managed. `disabled` is the operator's explicit
+ * opt-out (`backup.checkpointBeforeUpdate: false`); `failed` covers both a
+ * run that threw and a process with no backup subsystem to ask.
+ */
+export type UpdateCheckpoint =
+  | { status: "taken"; id: string }
+  | { status: "disabled" }
+  | { status: "failed"; error: string };
+
+/**
  * The self-update hook: a pinned checkpoint before the tree moves, so a
- * bad update is one `talon backup restore` away from undone. Returns the
- * checkpoint id, or null when the feature is off or the subsystem is not
- * initialised (a CLI-driven update in a process with no daemon state).
- * Never throws: failing to take a checkpoint must not block the update.
+ * bad update is one `talon backup restore` away from undone.
+ *
+ * Never throws — it reports. The caller decides: `/update` refuses to go
+ * on after a `failed` checkpoint unless the operator forces it, because
+ * an update with no way back is exactly when data goes missing.
+ *
+ * `backup.enabled: false` only stops the schedule; manual checkpoints
+ * still work, so this one is still taken.
  */
 export async function checkpointBeforeUpdate(
   fromVersion: string,
   toVersion: string,
-): Promise<string | null> {
-  if (!state.settings?.checkpointBeforeUpdate) return null;
+): Promise<UpdateCheckpoint> {
+  const settings = state.settings;
+  if (!settings) {
+    return {
+      status: "failed",
+      error: "the backup subsystem is not running in this process",
+    };
+  }
+  if (!settings.checkpointBeforeUpdate) return { status: "disabled" };
   try {
     const manifest = await runBackup({
       kind: "checkpoint",
@@ -326,14 +468,13 @@ export async function checkpointBeforeUpdate(
       pinned: true,
       trigger: "pre-update",
     });
-    return manifest.id;
+    return { status: "taken", id: manifest.id };
   } catch (err) {
-    logError(
-      "backup",
-      "Pre-update checkpoint failed; continuing with the update",
-      err,
-    );
-    return null;
+    logError("backup", "Pre-update checkpoint failed", err);
+    return {
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }
 
@@ -353,5 +494,6 @@ export function _resetBackupScheduler(): void {
   state.lastRunAt = 0;
   state.lastSnapshotId = undefined;
   state.lastError = undefined;
+  state.keyProblem = undefined;
   backoff.succeed();
 }

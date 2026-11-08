@@ -17,8 +17,10 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import writeFileAtomic from "write-file-atomic";
+import { logWarn } from "../util/log.js";
 import { dirs } from "../util/paths.js";
 import * as repo from "./repositories/scripts-repo.js";
 
@@ -93,8 +95,9 @@ function writeScriptFile(
 ): string {
   const path = scriptFilePath(name, lang);
   mkdirSync(dirname(path), { recursive: true });
-  // 0o700: only the user running Talon should be able to read/exec scripts
-  writeFileSync(path, body, { encoding: "utf-8", mode: 0o700 });
+  // 0o700: only the user running Talon should be able to read/exec scripts.
+  // Atomic: a failed replace (ENOSPC) must keep the previous body.
+  writeFileAtomic.sync(path, body, { encoding: "utf-8", mode: 0o700 });
   return path;
 }
 
@@ -117,11 +120,7 @@ export function saveScript(input: {
 }): Script {
   const existing = repo.getByName(input.name);
   if (existing && existing.language !== input.language) {
-    try {
-      rmSync(existing.scriptPath, { force: true });
-    } catch {
-      /* best effort */
-    }
+    removeScriptFile(existing.scriptPath, input.name);
   }
   const scriptPath = writeScriptFile(input.name, input.language, input.script);
   const now = Date.now();
@@ -153,15 +152,27 @@ export function recordScriptUse(name: string): void {
 }
 
 /** Delete a script and best-effort clean up its on-disk file. */
+/**
+ * Best-effort unlink. `force` already absorbs a missing file, so any
+ * throw here is a real fault (permissions, a directory in the way) that
+ * leaves an orphan script on disk.
+ */
+function removeScriptFile(path: string, name: string): void {
+  try {
+    rmSync(path, { force: true });
+  } catch (err) {
+    logWarn(
+      "scripts",
+      `Could not remove script file name=${name} path=${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export function deleteScript(name: string): boolean {
   const script = repo.getByName(name);
   if (!script) return false;
   repo.removeByName(name);
-  try {
-    rmSync(script.scriptPath, { force: true });
-  } catch {
-    /* best effort */
-  }
+  removeScriptFile(script.scriptPath, name);
   return true;
 }
 

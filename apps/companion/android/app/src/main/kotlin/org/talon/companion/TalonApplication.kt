@@ -8,8 +8,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * Registers the `talon/shizuku` and `talon/root` platform channels on the
- * FOREGROUND SERVICE's Flutter engine.
+ * Registers the `talon/shizuku`, `talon/root` and `talon/wake` platform
+ * channels on the FOREGROUND SERVICE's Flutter engine.
  *
  * The mesh loop (SSE + exec) runs inside the foreground service's own isolate
  * so teleport keeps working after the activity is gone — but that engine is
@@ -31,6 +31,7 @@ class TalonApplication : Application() {
             object : FlutterForegroundTaskLifecycleListener {
                 private var shizuku: ShizukuBridge? = null
                 private var root: RootBridge? = null
+                private var wake: WakeBridge? = null
 
                 override fun onEngineCreate(flutterEngine: FlutterEngine?) {
                     val engine = flutterEngine ?: return
@@ -44,6 +45,15 @@ class TalonApplication : Application() {
                         RootBridge.CHANNEL,
                     )
                     root = RootBridge(rootChannel, applicationContext)
+                    // Per-command wake/Wi-Fi locks for the mesh loop, which
+                    // runs in this engine (#1060).
+                    wake = WakeBridge(
+                        MethodChannel(
+                            engine.dartExecutor.binaryMessenger,
+                            WakeBridge.CHANNEL,
+                        ),
+                        applicationContext,
+                    )
                 }
 
                 override fun onTaskStart(starter: FlutterForegroundTaskStarter) {}
@@ -59,6 +69,8 @@ class TalonApplication : Application() {
                     // down and rebuilt on restarts, and re-prompting for root
                     // each time would defeat the point.
                     root = null
+                    wake?.release()
+                    wake = null
                 }
             },
         )

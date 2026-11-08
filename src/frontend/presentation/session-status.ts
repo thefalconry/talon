@@ -1,12 +1,8 @@
 /**
  * Shared /reset and /status logic for chat frontends.
  *
- * Telegram and Discord previously each carried a full copy of the session
- * reset sequence and the /status data-gathering pipeline, and the copies had
- * drifted (Discord's /status no longer re-fetched the context window for the
- * model that actually served the session). All the frontend-agnostic work
- * lives here now; frontends only render `SessionStatusData` in their native
- * markup.
+ * All the frontend-agnostic work lives here so per-frontend copies can't
+ * drift; frontends only render `SessionStatusData` in their native markup.
  */
 
 import type { TalonConfig } from "../../core/config/index.js";
@@ -16,7 +12,7 @@ import {
   getSessionInfo,
   getActiveSessionCount,
 } from "../../storage/sessions.js";
-import { clearHistory } from "../../storage/history.js";
+import { markContextCleared } from "../../storage/history.js";
 import { getChatSettings } from "../../storage/chat-settings.js";
 import { resetPulseCheckpoint } from "../../core/background/pulse/pulse.js";
 import { isPulseEnabled } from "../../core/background/pulse/pulse.js";
@@ -38,18 +34,19 @@ import {
 } from "./status-context.js";
 import { getCacheVerdict, getMetrics } from "../../storage/metrics.js";
 import { formatDuration } from "./format.js";
+import { talonVersionLabel } from "../../util/version.js";
 
 /**
- * Clear a chat's session state everywhere it lives: Talon's session +
- * history stores, the pulse checkpoint, and any in-process backend memory
- * (e.g. openai-agents' MemorySession — stateless backends ignore this).
- * Ends by warming the new session so the next turn (and /status) doesn't
- * pay cold-start latency.
+ * Clear a chat's session state everywhere it lives: Talon's session store
+ * (the replaced backend session id is archived), the chat's context (a
+ * soft reset — see below), the pulse checkpoint, and any in-process
+ * backend memory (e.g. openai-agents' MemorySession — stateless backends
+ * ignore this). Ends by warming the new session so the next turn (and
+ * /status) doesn't pay cold-start latency.
  */
 export async function performSessionReset(
   chatId: string,
   backend: Backend | null | undefined,
-  opts: { keepHistory?: boolean } = {},
 ): Promise<void> {
   const info = getSessionInfo(chatId);
   if (info.turns > 0) {
@@ -65,12 +62,11 @@ export async function performSessionReset(
     );
   }
   resetSession(chatId);
-  // Frontends whose platform keeps the real chat record (Telegram,
-  // Discord) clear the local mirror too — the platform still has
-  // everything. WhatsApp passes keepHistory: the local store is the ONLY
-  // record there, and wiping it on /reset would destroy exactly what the
-  // continuity tools (read/search_chat_history) exist to recover.
-  if (!opts.keepHistory) clearHistory(chatId);
+  // Soft reset, on every frontend: the bot's context starts fresh after
+  // this point, but no history row is deleted — the old conversation stays
+  // searchable (search_history labels it) and recoverable. Hard-deleting
+  // here once wiped weeks of history; only `talon history purge` deletes.
+  markContextCleared(chatId);
   resetPulseCheckpoint(chatId);
   backend?.sessions?.resetChat?.(chatId);
   await backend?.sessions?.warmSession?.(chatId);
@@ -105,7 +101,7 @@ export interface SessionStatusData {
   sessionId: string | undefined;
   uptime: string;
   activeSessionCount: number;
-  /** Runtime name + version, e.g. "Bun 1.3.9" or "Node 24.4.0". */
+  /** Talon version plus runtime, e.g. "Talon v5.10.0 (ab12cd34) · Bun 1.3.9". */
   runtime: string;
   /** Daemon resident set size, in bytes. */
   rssBytes: number;
@@ -234,9 +230,11 @@ export async function collectSessionStatus(
     sessionId: info.sessionId,
     uptime: formatDuration(process.uptime() * 1000),
     activeSessionCount: getActiveSessionCount(),
-    runtime: process.versions.bun
-      ? `Bun ${process.versions.bun}`
-      : `Node ${process.versions.node}`,
+    runtime: `Talon ${talonVersionLabel()} · ${
+      process.versions.bun
+        ? `Bun ${process.versions.bun}`
+        : `Node ${process.versions.node}`
+    }`,
     rssBytes: memory.rss,
     daemon: buildDaemonDisplay({
       rssBytes: memory.rss,

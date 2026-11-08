@@ -22,7 +22,12 @@
 
 import pc from "picocolors";
 import { createInterface } from "node:readline/promises";
-import { getFrontends, loadConfig } from "../../core/config/index.js";
+import { join } from "node:path";
+import {
+  getFrontends,
+  loadBackupConfig,
+  loadConfig,
+} from "../../core/config/index.js";
 import { findRunningInstance } from "../../core/daemon/discovery.js";
 import {
   collectBackupStatus,
@@ -40,7 +45,13 @@ import {
 } from "../../core/backup/index.js";
 import { resolveBackupSettings } from "../../core/backup/plan.js";
 import { buildSnapshot } from "../../core/backup/snapshot.js";
-import { pruneLocal } from "../../core/backup/store.js";
+import { pruneLocal, reconcileIndex } from "../../core/backup/store.js";
+import {
+  describeRetention,
+  localRetention,
+} from "../../core/backup/retention/policy.js";
+import { generatePassphraseFile } from "../../core/backup/passphrase.js";
+import { dirs } from "../../util/paths.js";
 import { fetchGateway } from "../daemon-api.js";
 
 const USAGE = `
@@ -50,10 +61,14 @@ const USAGE = `
     ${pc.cyan("list")} [--remote <targetId>]           list snapshots
     ${pc.cyan("show")} <id>                            everything about one snapshot
     ${pc.cyan("pin")} <id>  |  ${pc.cyan("unpin")} <id>          keep past retention, or release
-    ${pc.cyan("restore")} <id> [--from <target>] [--yes]  restore (daemon must be stopped)
+    ${pc.cyan("restore")} <id> [--from <target>] [--yes] [--allow-unauthenticated]
+                                       restore (daemon must be stopped)
+          [--clone]                            …onto a new machine: relocate sessions + plugin paths
+          [--origin-user-home <path>]          …for a --clone of a snapshot with no recorded origin
     ${pc.cyan("prune")}                                apply the local retention policy
     ${pc.cyan("targets")}                              remote targets and their readiness
     ${pc.cyan("status")}                               schedule, sizes, targets
+    ${pc.cyan("keygen")} [path]                        new passphrase file (mode 600)
 `;
 
 type Flags = { values: string[]; flags: Map<string, string | true> };
@@ -160,7 +175,7 @@ async function backupNow(flags: Flags): Promise<void> {
     pinned: pin,
     settings,
   });
-  await pruneLocal(settings.keepLocal);
+  await pruneLocal(localRetention(settings));
   console.log(
     `  ${pc.green("●")} ${manifest.id} — ${manifest.parts.length} part(s), ` +
       `${formatBytes(manifest.sizeBytes)}\n`,
@@ -169,6 +184,9 @@ async function backupNow(flags: Flags): Promise<void> {
 
 async function backupList(flags: Flags): Promise<void> {
   const target = flags.flags.get("remote");
+  // The manifests on disk are authoritative: a fresh host with a copied-in
+  // backups/ directory has an empty index until something reconciles it.
+  await reconcileIndex();
   const snapshots = await listSnapshots();
   const filtered =
     typeof target === "string"
@@ -233,10 +251,10 @@ async function backupPin(id: string, pinned: boolean): Promise<void> {
 
 async function backupPrune(): Promise<void> {
   const settings = resolveBackupSettings(loadConfig().backup);
-  const removed = await pruneLocal(settings.keepLocal);
+  const removed = await pruneLocal(localRetention(settings));
   console.log(
     removed.length === 0
-      ? `  ${pc.dim(`Nothing to prune (keepLocal=${settings.keepLocal}).`)}\n`
+      ? `  ${pc.dim(`Nothing to prune (${describeRetention(localRetention(settings))}).`)}\n`
       : `  ${pc.green("●")} Pruned ${removed.length}: ${removed.join(", ")}\n`,
   );
 }
@@ -258,7 +276,10 @@ async function backupStatus(): Promise<void> {
     renderResult(result);
     return;
   }
-  const status = await collectBackupStatus({ withTargets: false });
+  const status = await collectBackupStatus({
+    withTargets: false,
+    settings: resolveBackupSettings(loadConfig().backup),
+  });
   console.log(
     `\n${formatBackupStatus(status)
       .split("\n")
@@ -312,10 +333,25 @@ async function backupRestore(id: string, flags: Flags): Promise<void> {
       return;
     }
   }
-  const settings = resolveBackupSettings(loadConfig().backup);
+  // Only the backup block: on a fresh host the real config is inside the
+  // snapshot, and a full load would reject the placeholder one.
+  const settings = resolveBackupSettings(loadBackupConfig());
   const target =
     typeof from === "string" ? await resolveTarget(from) : undefined;
-  const report = await restoreSnapshot({ id, settings, target });
+  if (typeof from === "string" && !target) {
+    process.exitCode = 1;
+    return;
+  }
+  const clone = flags.flags.get("clone") === true;
+  const originUserHome = flags.flags.get("origin-user-home");
+  const report = await restoreSnapshot({
+    id,
+    settings,
+    target,
+    allowUnauthenticated: flags.flags.get("allow-unauthenticated") === true,
+    clone,
+    ...(typeof originUserHome === "string" ? { originUserHome } : {}),
+  });
   const written = Object.entries(report.written)
     .map(([root, count]) => `${root} (${count})`)
     .join(", ");
@@ -330,6 +366,12 @@ async function backupRestore(id: string, flags: Flags): Promise<void> {
   console.log(
     `  Database: ${report.databaseReplaced ? "replaced" : "left in place"}\n`,
   );
+  if (clone) {
+    console.log(
+      `  Clone: config.json paths ${report.configRewritten ? "rewritten for this machine" : "unchanged"}.\n` +
+        `  Reinstall fetched plugins from ${pc.cyan("~/.talon/plugins-manifest.json")} (docs/backups.md).\n`,
+    );
+  }
 }
 
 /**
@@ -352,6 +394,27 @@ async function resolveTarget(id: string): Promise<BackupTarget | undefined> {
     );
   }
   return target;
+}
+
+/** Write a fresh passphrase file. Prints where, never what. */
+async function backupKeygen(path: string | undefined): Promise<void> {
+  try {
+    const dest = await generatePassphraseFile(
+      path ?? join(dirs.root, "backup.key"),
+    );
+    console.log(
+      `  ${pc.green("●")} Wrote a new backup passphrase to ${pc.bold(dest)} (mode 600).\n` +
+        `    Enable it in config.json:\n` +
+        `      "backup": { "encryption": { "passphraseFile": "${dest}" } }\n` +
+        `    Keep a copy OFF this machine — encrypted snapshots cannot be\n` +
+        `    restored without it.\n`,
+    );
+  } catch (err) {
+    console.log(
+      `  ${pc.red("●")} ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
 
 // ── Entry ───────────────────────────────────────────────────────────────────
@@ -385,6 +448,9 @@ export async function runBackupCommand(argv: readonly string[]): Promise<void> {
       return;
     case "targets":
       await backupTargets();
+      return;
+    case "keygen":
+      await backupKeygen(id);
       return;
     case "status":
     case undefined:

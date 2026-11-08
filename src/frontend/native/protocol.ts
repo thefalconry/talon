@@ -17,6 +17,7 @@
  */
 
 import type { HistoryMessage } from "../../storage/history.js";
+import { unescapeHtml } from "../../util/text/html-entities.js";
 
 /** Wire-format version. Surfaced in `/health` and the `hello` event. */
 export const BRIDGE_PROTOCOL_VERSION = 1;
@@ -216,6 +217,24 @@ export type LogEntry = {
   stack?: string;
 };
 
+/**
+ * One slash command the daemon answers itself in a native chat, as
+ * `GET /commands` lists it — so a client can offer autocomplete. Additive
+ * in v1 behind the `commands` capability. A `/send` whose text starts with
+ * a listed name is handled by the daemon (the command and its reply land
+ * in the chat as ordinary messages); any other text reaches the model.
+ */
+export type ClientCommand = {
+  /** Without the leading slash, e.g. `"backup"`. */
+  name: string;
+  /** One line, for the suggestion list. */
+  description: string;
+  /** Argument synopsis, e.g. `"[list|now|restore <id>]"`; absent = none. */
+  args?: string;
+  /** Needs the `operator` scope; other callers get a refusal. */
+  admin?: boolean;
+};
+
 /** A selectable model for the picker. */
 export type ModelOption = {
   id: string;
@@ -377,13 +396,27 @@ export type BridgeEvent =
       name: string;
       params: MeshDeviceCommand["params"];
     }
-  | { kind: "error"; chatId?: string; message: string };
+  | { kind: "error"; chatId?: string; message: string }
+  /**
+   * The daemon is going away and is closing every stream: sent on each one
+   * just before it ends. `reason: "restart"` means a successor process is
+   * starting on the same address; a client should reconnect after
+   * `reconnectAfterMs` and keep retrying at a short interval for a while
+   * rather than climbing its usual backoff. `"shutdown"` carries no
+   * schedule — reconnect as usual. Additive in v1: clients that predate it
+   * ignore the frame and reconnect on their own backoff.
+   */
+  | {
+      kind: "bye";
+      reason: "restart" | "shutdown";
+      reconnectAfterMs?: number;
+    };
 
 // ── Mappers (Talon internals → wire types) ───────────────────────────────────
 
 /** Collapse whitespace and clip a string for list previews. */
 export function previewOf(text: string, max = 90): string {
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = unescapeHtml(text).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 

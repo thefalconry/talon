@@ -17,11 +17,12 @@
 
 import { existsSync, unlinkSync } from "node:fs";
 import { blake3HexFile } from "../native/blake3.js";
-import { log, logError } from "../util/log.js";
+import { log, logError, logWarn } from "../util/log.js";
 import { recordError } from "../util/watchdog.js";
 import { files } from "../util/paths.js";
 import { importLegacyJson } from "./legacy-import.js";
 import { setMessageFilePath } from "./history.js";
+import { dbErrorFields } from "./db.js";
 import * as repo from "./repositories/media-index-repo.js";
 
 export type { MediaEntry } from "./repositories/media-index-repo.js";
@@ -47,15 +48,16 @@ function isMediaEntry(value: unknown): value is MediaEntry {
 
 /**
  * Run the one-time import of the legacy JSON store, then sweep
- * expired entries. Idempotent; called once at boot.
+ * expired entries (unless `purgeExpired: false` — a boot with no safety
+ * checkpoint deletes nothing). Idempotent; called once at boot.
  */
-export function loadMediaIndex(): void {
+export function loadMediaIndex(options: { purgeExpired?: boolean } = {}): void {
   try {
     importLegacyMediaIndex();
   } catch (err) {
     logError("media", "Media index load failed", err);
   }
-  purgeExpired();
+  if (options.purgeExpired !== false) purgeExpired();
 }
 
 /** Legacy shape: bare MediaEntry[]. */
@@ -71,21 +73,56 @@ function importLegacyMediaIndex(): void {
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
-export function addMedia(entry: Omit<MediaEntry, "id">): void {
+/**
+ * Index a downloaded file and dedupe it against identical content.
+ *
+ * Resolves to the path the message's media now lives at — the
+ * canonical copy when the download duplicated one already on disk
+ * (the fresh file is then deleted), otherwise `entry.filePath`.
+ * Callers MUST use the resolved path for anything they show the
+ * model: the original path may no longer exist once this settles.
+ *
+ * The row is written synchronously, so it is queryable before the
+ * hash finishes.
+ */
+export async function addMedia(entry: Omit<MediaEntry, "id">): Promise<string> {
   try {
     repo.upsert(entry);
   } catch (err) {
-    logError("media", "Media index save failed", err);
+    logError(
+      "media",
+      `Media index save failed chat=${entry.chatId} msg=${entry.msgId} path=${entry.filePath}${dbErrorFields(err)}`,
+      err,
+    );
     recordError(
       `Media index write failed: ${err instanceof Error ? err.message : err}`,
     );
-    return;
+    return entry.filePath;
   }
-  // Hash + dedupe off the hot path — the caller is mid-message-handling
-  // and the row is already queryable without the hash.
-  void hashAndDedupe(entry).catch((err) =>
-    logError("media", `Media content hash failed for ${entry.filePath}`, err),
+  // Serialize dedupe: two identical files hashed concurrently (e.g. an
+  // album) could otherwise each pick the other as canonical and both
+  // get unlinked.
+  const run = dedupeChain.then(() => hashAndDedupe(entry));
+  dedupeChain = run.then(
+    () => undefined,
+    () => undefined,
   );
+  try {
+    return await run;
+  } catch (err) {
+    logError("media", `Media content hash failed for ${entry.filePath}`, err);
+    return entry.filePath;
+  }
+}
+
+let dedupeChain: Promise<void> = Promise.resolve();
+
+/** The indexed entry for a message, if any. */
+export function getMediaForMessage(
+  chatId: string,
+  msgId: number,
+): MediaEntry | undefined {
+  return repo.byMessage(chatId, msgId);
 }
 
 /**
@@ -95,15 +132,15 @@ export function addMedia(entry: Omit<MediaEntry, "id">): void {
  * canonical copy and drop the duplicate file, so re-posted media costs
  * one copy on disk no matter how many messages carry it.
  */
-async function hashAndDedupe(entry: Omit<MediaEntry, "id">): Promise<void> {
-  if (!existsSync(entry.filePath)) return; // gone already (expiry, tests)
+async function hashAndDedupe(entry: Omit<MediaEntry, "id">): Promise<string> {
+  if (!existsSync(entry.filePath)) return entry.filePath; // gone already (expiry, tests)
   const hash = await blake3HexFile(entry.filePath);
   repo.setContentHash(entry.chatId, entry.msgId, hash);
 
   const canonical = repo.firstByContentHash(hash, entry.chatId, entry.msgId);
-  if (!canonical) return;
-  if (canonical.filePath === entry.filePath) return; // re-download of the same path
-  if (!existsSync(canonical.filePath)) return; // canonical copy lost — keep ours
+  if (!canonical) return entry.filePath;
+  if (canonical.filePath === entry.filePath) return entry.filePath; // re-download of the same path
+  if (!existsSync(canonical.filePath)) return entry.filePath; // canonical copy lost — keep ours
 
   repo.setFilePath(entry.chatId, entry.msgId, canonical.filePath);
   setMessageFilePath(entry.chatId, entry.msgId, canonical.filePath);
@@ -116,10 +153,16 @@ async function hashAndDedupe(entry: Omit<MediaEntry, "id">): Promise<void> {
         "media",
         `Deduped ${entry.filePath} -> ${canonical.filePath} (blake3 ${hash.slice(0, 12)}…)`,
       );
-    } catch {
-      /* dedupe is best-effort; the entry already points at the canonical copy */
+    } catch (err) {
+      // Dedupe is best-effort — the entry already points at the canonical
+      // copy — but the duplicate now sits on disk unreferenced.
+      logWarn(
+        "media",
+        `Dedupe unlink failed path=${entry.filePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
+  return canonical.filePath;
 }
 
 /** Get recent media for a chat, newest first. */
@@ -161,16 +204,28 @@ function purgeExpired(): void {
     const removed = repo.deleteOlderThan(cutoff);
     // Rows first, files second: content dedupe means several entries can
     // share one file, so only unlink paths no surviving row references.
+    let unlinkFailures = 0;
+    let firstFailure = "";
     for (const path of new Set(expired.map((e) => e.filePath))) {
       if (repo.countByFilePath(path) > 0) continue;
       try {
         if (existsSync(path)) unlinkSync(path);
-      } catch {
-        /* skip */
+      } catch (err) {
+        // Skip it, but count: files left behind are disk that the purge
+        // thinks it reclaimed.
+        if (unlinkFailures++ === 0) {
+          firstFailure = `${path}: ${err instanceof Error ? err.message : String(err)}`;
+        }
       }
     }
     if (removed > 0) {
       log("media", `Purged ${removed} expired media entries`);
+    }
+    if (unlinkFailures > 0) {
+      logWarn(
+        "media",
+        `Media purge left ${unlinkFailures} expired file(s) on disk; first=${firstFailure}`,
+      );
     }
   } catch (err) {
     logError("media", "Media index purge failed", err);

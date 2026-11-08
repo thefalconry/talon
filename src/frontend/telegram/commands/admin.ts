@@ -9,10 +9,12 @@
 import type { Bot } from "grammy";
 import type { TalonConfig } from "../../../core/config/index.js";
 import { respawnSelf } from "../../../core/daemon/respawn.js";
-import { isStaleCommand } from "../stale-command.js";
+import { isStaleCommand } from "../polling/stale-command.js";
 import {
+  describeCheckpoint,
   getRepoRoot,
   runSelfUpdate,
+  wantsForce,
 } from "../../../core/update/self-update.js";
 import { forceDream } from "../../../core/background/dream/index.js";
 import { escapeHtml } from "../formatting.js";
@@ -25,19 +27,27 @@ import {
   renderUsageMessage,
 } from "../render/reports.js";
 import { collectPlanUsage } from "../../presentation/plan-usage-report.js";
+import {
+  canUseReset,
+  sendResetConfirmation,
+  usageResetKeyboard,
+} from "../callbacks/usage-reset.js";
 import { collectDoctorReport } from "../../../core/doctor/index.js";
 import { handleAdminCommand } from "../admin.js";
 import { getTodayMetrics } from "../../../storage/metrics.js";
 import { isAuthorizedAdmin, type RegisterDeps } from "./state.js";
 import { telegramCommandMenu } from "./definitions.js";
 
-function registerAdminCommand(bot: Bot, config: TalonConfig): void {
+function registerAdminCommand(
+  bot: Bot,
+  { config, gateway }: RegisterDeps,
+): void {
   bot.command("admin", async (ctx) => {
     if (!isAuthorizedAdmin(ctx)) {
       await ctx.reply("Not authorized.");
       return;
     }
-    await handleAdminCommand(ctx, bot, config);
+    await handleAdminCommand(ctx, bot, config, gateway);
   });
 }
 
@@ -58,11 +68,32 @@ function registerMetricsCommand(bot: Bot): void {
 
 // /usage — plan limits across every exposed backend, not just this
 // chat's. Not admin-gated: it says how close the shared account is to a
-// wall, which is exactly what a user hitting one needs to know.
+// wall, which is exactly what a user hitting one needs to know. Spending a
+// banked reset is: the "Use a reset" button (and `/usage reset`) only ever
+// reach the configured admin in a DM, and both end at a Confirm press.
 function registerUsageCommand(bot: Bot, config: TalonConfig): void {
   bot.command("usage", async (ctx) => {
     const entries = await collectPlanUsage(config);
-    await ctx.reply(renderUsageMessage(entries), { parse_mode: "HTML" });
+    if (ctx.match.trim().toLowerCase() === "reset") {
+      if (!canUseReset(ctx)) {
+        await ctx.reply(
+          "Only the admin can use a usage-limit reset, in a private chat.",
+        );
+        return;
+      }
+      const target = entries.find((e) => (e.plan?.resetsAvailable ?? 0) > 0);
+      if (!target) {
+        await ctx.reply("No usage-limit reset is available to use right now.");
+        return;
+      }
+      await sendResetConfirmation(ctx, target.id);
+      return;
+    }
+    const keyboard = usageResetKeyboard(ctx, entries);
+    await ctx.reply(renderUsageMessage(entries), {
+      parse_mode: "HTML",
+      ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}),
+    });
   });
 }
 
@@ -140,7 +171,8 @@ function registerRestartCommand(bot: Bot): void {
   });
 }
 
-// /update — pull latest, reinstall, run setup, restart. Only wired
+// /update [force] — pull latest, reinstall, run setup, restart. Refused
+// when the pre-update checkpoint fails unless "force" is given. Only wired
 // up for developer builds running from a git checkout; packaged
 // binaries have no source tree (getRepoRoot() === null) so the
 // command stays absent entirely.
@@ -158,8 +190,11 @@ function registerUpdateCommand(
     if (isStaleCommand(ctx.message?.date, "/update")) return;
     const remote = config.update?.remote ?? "origin";
     const branch = config.update?.branch ?? "main";
+    const force = wantsForce(typeof ctx.match === "string" ? ctx.match : "");
     const sent = await ctx.reply(
-      `⏳ Updating from <code>${escapeHtml(remote)}/${escapeHtml(branch)}</code>…`,
+      `⏳ Updating from <code>${escapeHtml(remote)}/${escapeHtml(branch)}</code>` +
+        (force ? " (forced: a failed checkpoint will not stop it)" : "") +
+        "…",
       { parse_mode: "HTML" },
     );
     const edit = (text: string) =>
@@ -175,12 +210,24 @@ function registerUpdateCommand(
       branch,
       setup: config.update?.setup,
       repoRoot: updateRepoRoot,
+      force,
     })
       .then(async (res) => {
+        if (res.checkpointRefused) {
+          await edit(
+            `🛑 Update refused: ${escapeHtml(res.error ?? "the pre-update checkpoint failed")}\n\n` +
+              `Send <code>/update force</code> to update without a checkpoint.`,
+          );
+          return;
+        }
+        const note = res.checkpoint
+          ? `\n${escapeHtml(describeCheckpoint(res.checkpoint))}`
+          : "";
         if (!res.ok) {
           const tail = res.steps[res.steps.length - 1]?.output ?? "";
           await edit(
             `⚠️ Update failed: ${escapeHtml(res.error ?? "unknown error")}` +
+              note +
               (tail ? `\n\n<pre>${escapeHtml(tail.slice(-1500))}</pre>` : ""),
           );
           return;
@@ -192,7 +239,7 @@ function registerUpdateCommand(
           return;
         }
         await edit(
-          `✅ Updated <code>${escapeHtml(res.before ?? "?")}</code> → <code>${escapeHtml(res.after ?? "?")}</code>. ♻️ Restarting…`,
+          `✅ Updated <code>${escapeHtml(res.before ?? "?")}</code> → <code>${escapeHtml(res.after ?? "?")}</code>.${note}\n♻️ Restarting…`,
         );
         // The successor documents any provisioning changes (plugin
         // runtime upgrades, migrations) back to this chat once it's up.
@@ -232,11 +279,9 @@ function registerUnknownCommandSuggester(bot: Bot, config: TalonConfig): void {
   });
 }
 
-export function registerAdminCommands(
-  bot: Bot,
-  { config }: RegisterDeps,
-): void {
-  registerAdminCommand(bot, config);
+export function registerAdminCommands(bot: Bot, deps: RegisterDeps): void {
+  const { config } = deps;
+  registerAdminCommand(bot, deps);
   registerMetricsCommand(bot);
   registerUsageCommand(bot, config);
   registerDoctorCommand(bot, config);

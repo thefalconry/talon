@@ -112,6 +112,13 @@ export interface ChatBackend {
  */
 export interface BackgroundRunner {
   runOneShotAgent(params: OneShotAgentParams): Promise<OneShotUsage | void>;
+  /**
+   * Whether `runOneShotAgent` honours `resumeSessionId` (and reports the
+   * handle through `onSessionId`). A sub-agent interrupted by a daemon
+   * restart resumes its conversation on such a backend; on any other it is
+   * re-briefed with its previous transcript instead.
+   */
+  readonly supportsResume?: boolean;
   evictOrphanSubprocesses?(contextLabel: string): Promise<{
     found: number;
     termed: number;
@@ -243,6 +250,74 @@ export interface UsageTelemetry {
    * plan concept; resolves `undefined` when the data can't be read.
    */
   getPlanUsage?(): Promise<PlanUsage | undefined>;
+  /**
+   * Why the backend's credential is known to be rejected (e.g. the usage
+   * endpoint returned 401), or `undefined` when nothing says it is.
+   * Synchronous and cheap: it reports what the last `getPlanUsage` saw.
+   * The router treats a backend that reports one as having no headroom.
+   */
+  getAuthFailure?(): string | undefined;
+  /**
+   * Banked one-shot limit resets, where the plan has them. Spending one is
+   * irreversible, so this is reachable only from a human-pressed confirm
+   * button — never exposed as an agent tool.
+   */
+  bankedResets?: BankedResetControl;
+}
+
+/** One banked reset grant, as the plan reports it. */
+export interface BankedResetGrant {
+  id: string;
+  label: string;
+  resetsLeft: number;
+  /** ISO deadline, when the grant has one. */
+  endsAt?: string;
+  /** Plan windows the reset clears (`five_hour`, `seven_day`, …). */
+  clears: string[];
+  /** Current utilisation per cleared window, 0-100. */
+  percentUsed: Record<string, number>;
+  /** The reset can only be spent while the account is at a limit. */
+  useRequiresLimit: boolean;
+}
+
+/** The grant a claim would spend, plus the account state around it. */
+export interface BankedResetOffer {
+  grant: BankedResetGrant;
+  atLimit: boolean;
+  /** ISO end of a post-claim cooldown, while one is running. */
+  cooldownUntil?: string;
+  /** Resets left across every usable grant. */
+  totalResetsLeft: number;
+}
+
+export type BankedResetResult =
+  | "reset"
+  | "already_used"
+  | "not_limited"
+  | "cooldown"
+  | "ineligible"
+  | "unavailable"
+  | "rate_limited"
+  | "auth_error"
+  | "error";
+
+export interface BankedResetClaim {
+  result: BankedResetResult;
+  /** Server-side reason code, when it gave one. */
+  reason?: string;
+  resetsLeft?: number;
+  cleared: string[];
+  weeklyResetsAt?: string;
+  cooldownUntil?: string;
+}
+
+export interface BankedResetControl {
+  getOffer(): Promise<BankedResetOffer | undefined>;
+  /**
+   * Spend one reset from `grantId`. `requestId` is the idempotency key:
+   * reuse it when retrying the same user action so a retry can't spend twice.
+   */
+  claim(grantId: string, requestId: string): Promise<BankedResetClaim>;
 }
 
 /** One subscription rate-limit window, as `/status` renders it. */
@@ -261,6 +336,8 @@ export interface PlanUsage {
   windows: PlanWindow[];
   /** How many one-shot rate-limit resets are still banked, when the plan has them. */
   resetsAvailable?: number;
+  /** ISO time the soonest-expiring banked reset must be used by, when the plan says. */
+  resetsExpireAt?: string;
   /** Epoch ms of the read, so renderers can flag figures as aged. */
   fetchedAt: number;
 }

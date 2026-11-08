@@ -21,6 +21,7 @@ import { log, logError } from "../util/log.js";
 import { recordError } from "../util/watchdog.js";
 import { files } from "../util/paths.js";
 import { importLegacyJson } from "./legacy-import.js";
+import { dbErrorFields } from "./db.js";
 import * as repo from "./repositories/chat-settings-repo.js";
 import type { ReasoningEffortLevel } from "../types/effort.js";
 
@@ -174,7 +175,11 @@ function persist(chatId: string): void {
     if (entry) repo.upsert(chatId, entry);
     else repo.remove(chatId);
   } catch (err) {
-    logError("settings", "Failed to persist chat settings", err);
+    logError(
+      "settings",
+      `Failed to persist chat settings chat=${chatId}${dbErrorFields(err)}`,
+      err,
+    );
     recordError(
       `Settings save failed: ${err instanceof Error ? err.message : err}`,
     );
@@ -303,6 +308,19 @@ export function clearAllChatModels(chatId: string): void {
   const entry = cache.get(chatId);
   if (!entry) return;
   delete entry.modelByBackend;
+  delete entry.model;
+  cleanupEmpty(chatId);
+  persist(chatId);
+}
+
+/**
+ * Drop only the legacy single-slot `model` field, keeping every
+ * per-backend pick. The boot reconcile uses it: a stale legacy value must
+ * go, but the picks the chat made on other backends are still good.
+ */
+export function clearLegacyChatModel(chatId: string): void {
+  const entry = cache.get(chatId);
+  if (!entry || entry.model === undefined) return;
   delete entry.model;
   cleanupEmpty(chatId);
   persist(chatId);

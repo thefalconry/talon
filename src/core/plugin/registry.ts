@@ -27,42 +27,29 @@ class PluginRegistry {
     return this.plugins.length;
   }
 
-  private getRegistrationSource(name: string): string | undefined {
-    const existingPlugin = this.plugins.find(
-      (entry) => entry.plugin.name === name,
+  /** True when `name` is free; warns and returns false on a duplicate. */
+  private isNameFree(name: string): boolean {
+    const source =
+      this.plugins.find((entry) => entry.plugin.name === name)?.path ??
+      (this.standaloneMcpServers.some((entry) => entry.name === name)
+        ? "standalone MCP entry"
+        : undefined);
+    if (!source) return true;
+    logWarn(
+      "plugin",
+      `Duplicate plugin/MCP name "${name}" — skipping (already registered from ${source})`,
     );
-    if (existingPlugin) return existingPlugin.path;
-
-    const existingMcpEntry = this.standaloneMcpServers.find(
-      (entry) => entry.name === name,
-    );
-    if (existingMcpEntry) return "standalone MCP entry";
-
-    return undefined;
+    return false;
   }
 
   register(loaded: LoadedPlugin): boolean {
-    const existingSource = this.getRegistrationSource(loaded.plugin.name);
-    if (existingSource) {
-      logWarn(
-        "plugin",
-        `Duplicate plugin/MCP name "${loaded.plugin.name}" — skipping (already registered from ${existingSource})`,
-      );
-      return false;
-    }
+    if (!this.isNameFree(loaded.plugin.name)) return false;
     this.plugins.push(loaded);
     return true;
   }
 
   registerMcpEntry(entry: PluginMcpEntry): boolean {
-    const existingSource = this.getRegistrationSource(entry.name);
-    if (existingSource) {
-      logWarn(
-        "plugin",
-        `Duplicate plugin/MCP name "${entry.name}" — skipping (already registered from ${existingSource})`,
-      );
-      return false;
-    }
+    if (!this.isNameFree(entry.name)) return false;
     this.standaloneMcpServers.push(entry);
     return true;
   }
@@ -98,14 +85,12 @@ class PluginRegistry {
   }
 }
 
-// Module-level singleton
 export const registry = new PluginRegistry();
 
 /**
- * Tracks the last reload timestamp. Injected into every MCP subprocess env as
- * TALON_RELOAD_AT so the Claude SDK sees a changed env on each reload and
- * spawns a fresh subprocess — picking up source-file changes without a full
- * Talon restart. On a holder object so other modules can read/update it.
+ * The last plugin reload time: the module cache-bust key (see
+ * `_deps.importModule`), also passed to every MCP child as TALON_RELOAD_AT.
+ * On a holder object so other modules can read/update it.
  */
 export const reloadState: { lastReloadAt: string } = {
   lastReloadAt: new Date().toISOString(),
@@ -125,9 +110,8 @@ export const _deps = {
     // URL forever, so without a changing query a hot reload re-imports the
     // *old* module object and the plugin's own source edits are invisible
     // until a full restart — silently, since the stale module still loads
-    // fine (observed 2026-09-16: a rewritten plugin kept reporting its
-    // previous version through three reloads). The timestamp only moves per
-    // reload, so every module in one load cycle shares a key.
+    // fine. The timestamp only moves per reload, so every module in one
+    // load cycle shares a key.
     const url = pathToFileURL(path);
     url.searchParams.set("talonReloadAt", reloadState.lastReloadAt);
     return import(url.href);

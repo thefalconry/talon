@@ -10,6 +10,7 @@ import {
   renderMeshPairLink,
   renderMeshReport,
 } from "../frontend/telegram/render/reports.js";
+import { BridgeLinks } from "../core/mesh/links/bridge-links.js";
 
 const grantInput = {
   bridgeUrl: "https://192.168.1.20:19880",
@@ -194,5 +195,30 @@ describe("the /mesh bridge footer", () => {
 
   it("stays silent when no reachability was passed", () => {
     expect(renderMeshReport([], Date.now())).not.toContain("Bridge");
+  });
+});
+
+describe("pairing from a container", () => {
+  it("points pairing links at native.publicUrl when one is configured", () => {
+    const links = new BridgeLinks(async () => {
+      throw new Error("unused");
+    });
+    // A container binds 0.0.0.0 and only knows its internal address; the
+    // configured public URL is what the phone must dial.
+    links.setBridgeInfo({
+      scheme: "https",
+      host: "0.0.0.0",
+      port: 19880,
+      token: "bearer-secret",
+      publicUrl: "https://truenas.lan:19880/",
+    });
+
+    const minted = links.makeCompanionPairLink("Phone");
+    expect(minted.ok && minted.url).toBe("https://truenas.lan:19880");
+    expect(minted.ok && minted.link).toMatch(
+      /^https:\/\/truenas\.lan:19880\/pair\?grant=/,
+    );
+    const reach = links.bridgeReachability();
+    expect(reach.ok && reach.url).toBe("https://truenas.lan:19880");
   });
 });

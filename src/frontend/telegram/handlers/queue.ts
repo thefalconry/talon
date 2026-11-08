@@ -146,6 +146,7 @@ async function flushQueue(chatId: string): Promise<void> {
       isGroup: last.isGroup,
       senderUsername: last.senderUsername,
       senderId: last.senderId,
+      senderKeys: batchSenderKeys(messages),
       chatTitle: last.chatTitle,
     });
 
@@ -248,4 +249,17 @@ export function buildGroupGapContextNotice(inputs: {
     "chat since your last handled turn. If this prompt is vague, ambiguous, " +
     "or asks what you think, use read_chat_history before answering.]"
   );
+}
+
+/**
+ * Tool-scope keys for a flushed batch: the sender's id when every message
+ * came from one person, otherwise none — a batch that mixes senders runs
+ * guest-scoped, so nobody's message rides on the operator's scope.
+ */
+export function batchSenderKeys(
+  messages: ReadonlyArray<{ senderId?: number }>,
+): string[] {
+  const first = messages[0]?.senderId;
+  if (first === undefined) return [];
+  return messages.every((m) => m.senderId === first) ? [String(first)] : [];
 }

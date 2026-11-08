@@ -1,9 +1,7 @@
 /**
  * Discord frontend runtime — the state every module of this frontend shares.
  *
- * `createDiscordFrontend` used to hold the client and config as closure
- * variables with every gateway-event handler nested inside `init`. It is
- * now one explicit object, constructed once, that each module (ready,
+ * One explicit object, constructed once, that each module (ready,
  * guild-policy, diagnostics, outbound, connection) takes as its first
  * parameter. The runtime carries state only; the modules own the behaviour.
  */

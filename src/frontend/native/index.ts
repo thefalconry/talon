@@ -17,7 +17,8 @@
 import type { TalonConfig } from "../../core/config/index.js";
 import type { ContextManager } from "../../core/types.js";
 import type { Gateway } from "../../core/engine/gateway.js";
-import { log, logError } from "../../util/log.js";
+import { log, logError, logWarn } from "../../util/log.js";
+import { notifyAdmin } from "../../core/frontend-runtime/admin-notify.js";
 import { createNativeActionHandler } from "./turn/actions.js";
 import { loadOrCreateBridgeToken } from "./bridge/auth.js";
 import { warmContextCache } from "./turn/context.js";
@@ -29,8 +30,16 @@ import { emitAssistant, emitPhoto } from "./turn/emit.js";
 import { startEmptyChatSweep } from "./chats/empty-chat-sweep.js";
 import { buildBridgeHandlers } from "./surface/handlers.js";
 import { createNativeRuntime, type NativeRuntime } from "./runtime.js";
-import { BridgeServer } from "./bridge/server.js";
+import { BridgeServer, type BridgeCredentials } from "./bridge/server.js";
+import { registerMeshTransport } from "./mesh-transport.js";
+import {
+  DEFAULT_COMPANION_SCOPES,
+  FORMER_COMPANION_SCOPES,
+  type MeshScope,
+} from "../../core/mesh/credentials/index.js";
 import { isLoopbackHost, loadOrCreateBridgeTlsIdentity } from "./bridge/tls.js";
+import { respawnRequested } from "../../core/daemon/respawn.js";
+import { advertisedEndpoints } from "../../core/mesh/links/endpoints.js";
 
 export { summarizeToolResult } from "./turn/tool-result.js";
 
@@ -50,6 +59,8 @@ type BridgeListen = {
   port: number;
   token: string | undefined;
   tls: boolean;
+  legacySharedToken: boolean;
+  companionScopes: readonly MeshScope[];
 };
 
 /** Where the bridge listens, and how it is secured, from `config.native`. */
@@ -71,34 +82,73 @@ function bridgeListen(config: TalonConfig): BridgeListen {
   const token =
     configuredToken ??
     (isLoopbackHost(host) ? undefined : loadOrCreateBridgeToken());
-  return { host, port: nativeCfg.port ?? 19880, token, tls };
+  return {
+    host,
+    port: nativeCfg.port ?? 19880,
+    token,
+    tls,
+    legacySharedToken: nativeCfg.legacySharedToken ?? true,
+    companionScopes: nativeCfg.companionScopes ?? DEFAULT_COMPANION_SCOPES,
+  };
 }
 
 /**
- * Plug this bridge in as the mesh's transport: locates and device commands
- * (from ANY frontend's mesh tool calls) leave as SSE events.
- *
- * A locate is a bare "who's there?" — no secret in the frame, and
- * pre-command app builds rely on receiving it — so it still fans out.
- * A command is the opposite: its params carry transfer tokens, exec
- * command lines and (on the chunked fallback) file bodies, so it goes
- * to the target device's own client(s) only.
+ * Per-device credentials for the bridge: only meaningful when the bridge
+ * authenticates at all (an open loopback bridge has nothing to scope).
  */
-function registerMeshTransport(
-  runtime: NativeRuntime,
-  server: BridgeServer,
-): () => void {
-  return runtime.mesh.registerTransport({
-    locate: (deviceId) => runtime.broadcast({ kind: "locate", deviceId }),
-    command: (command) =>
-      server.sendToDevice(command.deviceId, {
-        kind: "device_command",
-        id: command.id,
-        deviceId: command.deviceId,
-        name: command.name,
-        params: command.params,
-      }),
-  });
+function bridgeCredentials(
+  listen: BridgeListen,
+  mesh: NativeRuntime["mesh"],
+): BridgeCredentials | undefined {
+  if (!listen.token || !mesh.credentials) return undefined;
+  return {
+    authority: mesh.credentials,
+    policy: {
+      legacySharedToken: listen.legacySharedToken,
+      companionScopes: listen.companionScopes,
+    },
+  };
+}
+
+/**
+ * Companions paired while the default was device + client get the current
+ * default too — unless the operator set `native.companionScopes` (their
+ * choice then stands) or set that device's scopes by hand.
+ */
+async function adoptCompanionDefault(
+  config: TalonConfig,
+  mesh: NativeRuntime["mesh"],
+): Promise<void> {
+  if (config.native?.companionScopes || !mesh.credentials) return;
+  const moved = await mesh.credentials.adoptDefaultScopes(
+    FORMER_COMPANION_SCOPES,
+    DEFAULT_COMPANION_SCOPES,
+  );
+  if (moved > 0) {
+    log(
+      "native",
+      `Granted the default companion scopes (${DEFAULT_COMPANION_SCOPES.join(", ")}) to ${moved} credential(s) issued under the old device + client default; set native.companionScopes to narrow them.`,
+    );
+  }
+}
+
+/**
+ * When devices are told to come back after a restart. The successor binds
+ * the bridge about 10 s after this process lets go of it (measured over
+ * the restarts of 2026-10: 9.7–10.4 s, once 23 s), so this aims a little
+ * early: clients retry at a short interval from here on.
+ */
+const RESTART_RECONNECT_AFTER_MS = 5_000;
+
+/**
+ * How the bridge says goodbye. A /restart or /update says so, so devices
+ * come straight back to the successor instead of waiting out their
+ * reconnect backoff.
+ */
+function bridgeStopOptions(): Parameters<BridgeServer["stop"]>[0] {
+  return respawnRequested()
+    ? { restart: { reconnectAfterMs: RESTART_RECONNECT_AFTER_MS } }
+    : {};
 }
 
 export function createNativeFrontend(
@@ -116,8 +166,17 @@ export function createNativeFrontend(
       port: listen.port,
       token: listen.token,
       allowedOrigins: config.native?.allowedOrigins,
+      allowWeakToken: config.native?.allowWeakToken,
+      sseMaxLifetimeMs: config.native?.sseMaxLifetimeMs,
+      // Distributed token guessing should reach a human, not just the log.
+      onSecurityAlert: (message) => void notifyAdmin(message),
       startedAt: runtime.startedAt,
       ...(listen.tls ? { tls: () => loadOrCreateBridgeTlsIdentity() } : {}),
+      credentials: bridgeCredentials(listen, mesh),
+      endpoints: advertisedEndpoints(
+        config.native?.publicUrl,
+        config.native?.endpoints,
+      ),
     },
     buildBridgeHandlers(runtime),
   );
@@ -152,9 +211,11 @@ export function createNativeFrontend(
 
     async init() {
       await mesh.load();
+      await adoptCompanionDefault(config, mesh);
+      mesh.setCommandHoldMs(config.native?.commandHoldMs);
       unregisterMeshTransport = registerMeshTransport(runtime, server);
       // Mesh tool actions (list_devices / get_device_location) are shared
-      // gateway actions now — no native-only cases here.
+      // gateway actions — no native-only cases here.
       gateway.registerFrontendHandler(
         "native",
         createNativeActionHandler({
@@ -176,7 +237,20 @@ export function createNativeFrontend(
       );
       stopEmptyChatSweep = startEmptyChatSweep(runtime);
       await server.start();
+      if (
+        listen.token &&
+        listen.legacySharedToken &&
+        !isLoopbackHost(listen.host)
+      ) {
+        logWarn(
+          "native",
+          "native.legacySharedToken is on: remote clients may still use the shared bridge token. " +
+            "Devices trade it for their own credential on their next connect; once `talon mesh` " +
+            "lists none on the shared token, set native.legacySharedToken to false and rotate native.token.",
+        );
+      }
       const fingerprint = server.getFingerprint();
+      const spkiPin = server.getSpkiPin();
       // Tell the mesh how this bridge is reachable — everything a generated
       // node installer needs (make_node_install_link fails cleanly without it).
       mesh.setBridgeInfo({
@@ -185,6 +259,12 @@ export function createNativeFrontend(
         port: server.getPort(),
         ...(listen.token ? { token: listen.token } : {}),
         ...(fingerprint ? { fingerprint } : {}),
+        ...(spkiPin ? { spkiPin } : {}),
+        ...(config.native?.publicUrl
+          ? { publicUrl: config.native.publicUrl }
+          : {}),
+        legacySharedToken: listen.legacySharedToken,
+        companionScopes: listen.companionScopes,
       });
       await writeBridgeDiscovery({
         port: server.getPort(),
@@ -211,7 +291,7 @@ export function createNativeFrontend(
       unregisterMeshTransport = null;
       mesh.setBridgeInfo(null);
       await removeBridgeDiscovery();
-      await server.stop();
+      await server.stop(bridgeStopOptions());
       await gateway.stop();
     },
   };

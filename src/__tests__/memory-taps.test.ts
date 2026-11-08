@@ -85,9 +85,9 @@ import {
 import type { ContextManager } from "../core/types.js";
 
 /** A positive Telegram id — `chatScope` reads it as a DM. */
-const DM_CHAT = "352042062";
+const DM_CHAT = "424242420";
 /** A Telegram supergroup: negative id. */
-const GROUP_CHAT = "-1001426819337";
+const GROUP_CHAT = "-1009876543210";
 
 let seq = 0;
 /** A marker unique to one case, so its rows are findable by text. */
@@ -265,14 +265,14 @@ describe("the engine seam — every frontend feeds the tap", () => {
       chatId: DM_CHAT,
       numericChatId: Number(DM_CHAT),
       prompt: `from now on use ${m}`,
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       source: "message",
     });
     expect(spies.recordMessageSignal).toHaveBeenCalledWith({
       text: `from now on use ${m}`,
       chatKey: DM_CHAT,
-      actor: "Dylan",
+      actor: "Ada",
     });
     expect(live("directive", m)).toHaveLength(1);
   });

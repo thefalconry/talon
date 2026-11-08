@@ -6,7 +6,6 @@ import '../theme.dart';
 import 'chat_view.dart';
 import 'glass.dart';
 import 'quick_switcher.dart';
-import 'shortcuts_help.dart';
 import 'sidebar.dart';
 import 'voice_mode_screen.dart';
 
@@ -146,8 +145,6 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
               widget.state.newChat,
           const SingleActivator(LogicalKeyboardKey.keyN, control: true):
               widget.state.newChat,
-          const SingleActivator(LogicalKeyboardKey.slash, shift: true): () =>
-              openShortcutsHelp(context),
         },
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -232,8 +229,6 @@ class _ConversationScreen extends StatelessWidget {
             bindings: {
               const SingleActivator(LogicalKeyboardKey.escape): () =>
                   Navigator.of(context).maybePop(),
-              const SingleActivator(LogicalKeyboardKey.slash, shift: true):
-                  () => openShortcutsHelp(context),
             },
             child: ChatView(
               state: state,

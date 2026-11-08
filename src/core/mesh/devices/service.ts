@@ -49,7 +49,25 @@ import {
   resolveNodeBinary,
   type NodeBinaryResolver,
 } from "../links/node-binaries.js";
+import {
+  COMPUTER_COMMAND_TIMEOUT_MS,
+  computerCommandParams,
+  formatComputerResult,
+} from "./computer.js";
 import { MeshRegistry } from "./registry.js";
+import {
+  auditErrorText,
+  auditIssuer,
+  hashCommandArgs,
+  MeshAuditLog,
+  type MeshAuditEntry,
+  type MeshAuditQuery,
+} from "../audit.js";
+import { logDebug, logWarn } from "../../../util/log.js";
+import {
+  DeviceCredentialStore,
+  type CredentialAdminContext,
+} from "../credentials/index.js";
 import type {
   DeviceCommand,
   DeviceCommandResult,
@@ -61,11 +79,14 @@ import type {
 export type MeshTransport = {
   /** Ask one device (or all, when undefined) for a fresh location fix. */
   locate(deviceId?: string): void;
-  /** Deliver an on-demand command to its target device. */
-  command(command: DeviceCommand): void;
+  /**
+   * Deliver an on-demand command to its target device. Return `false` when
+   * the device has no live connection on this transport right now (it is
+   * reconnecting): the mesh then holds the command and offers it again on
+   * `MeshService.deviceConnected`. Anything else counts as handed off.
+   */
+  command(command: DeviceCommand): boolean | void;
 };
-
-export type { MeshToolResult } from "../tool-surface.js";
 
 /** Outcome of pinging one device (see {@link MeshService.pingAll}). */
 export type MeshPingResult = {
@@ -87,15 +108,50 @@ export type MeshServiceOptions = {
   commandTimeoutMs?: number;
   /** How often a long command re-checks that its device is still present. */
   presenceWatchIntervalMs?: number;
+  /**
+   * How long an undelivered command (no transport has a live connection to
+   * its device) waits for the device to reconnect before failing. Default
+   * {@link DEFAULT_COMMAND_HOLD_MS}; 0 fails it at once.
+   */
+  commandHoldMs?: number;
   /** Node-binary resolver override (tests — the real one builds/downloads). */
   nodeBinaryResolver?: NodeBinaryResolver;
+  /**
+   * Per-device credential store. With one, pairing links and installers
+   * carry a device's own credential and removing a device revokes it;
+   * without one (tests, embedders) links carry the shared bridge token.
+   */
+  credentials?: DeviceCredentialStore;
+  /**
+   * Where every dispatched command is recorded (who, which device, which
+   * command, an args hash, outcome, duration). Absent (tests, embedders) =
+   * nothing is recorded.
+   */
+  audit?: MeshAuditLog;
 };
-
-export type { MeshBridgeInfo } from "../links/bridge-links.js";
 
 const DEFAULT_FRESH_FIX_TIMEOUT_MS = 8_000;
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 12_000;
+/**
+ * Default hold for a command whose device is between connections. Nodes are
+ * back within ~1–16 s of a daemon restart; the companion's first retry
+ * lands in a few seconds. Longer than that and the device is not coming
+ * back soon, so the caller is better served by a clear failure.
+ */
+const DEFAULT_COMMAND_HOLD_MS = 20_000;
+/**
+ * A held command is never delivered with less than this much of its own
+ * timeout left: max(COMMAND_DELIVERY_MARGIN_MS, COMMAND_DELIVERY_MARGIN_SHARE
+ * × timeout). Delivered later than that, the device could still run it
+ * (ring, exec) after the caller was told it did not answer, and a retry
+ * would then run it twice. So the hold ends that much before the deadline
+ * and the command fails as undelivered instead: the caller knows it never
+ * ran and can safely retry. 3 s covers a round trip plus a typical
+ * command's own run time; 10% scales it for long budgets (exec, transfers).
+ */
+const COMMAND_DELIVERY_MARGIN_MS = 3_000;
+const COMMAND_DELIVERY_MARGIN_SHARE = 0.1;
 const MOBILE_PLATFORMS = new Set(["android", "ios"]);
 const DEFAULT_HISTORY_HOURS = 24;
 const MAX_HISTORY_LINES = 24;
@@ -118,6 +174,12 @@ export class MeshService {
     }
   >();
   /**
+   * Commands no transport could deliver yet, by id, in send order. Each is
+   * also in `pendingCommands`; `deviceConnected` offers it again, and its
+   * hold timer fails it when the device stays away.
+   */
+  private readonly heldCommands = new Map<string, HeldCommand>();
+  /**
    * Server-side receipt time (this process's clock) of the last fix per
    * device. Freshness is judged against THIS, never the device-supplied
    * `loc.ts` — a companion whose clock runs behind would otherwise have
@@ -134,7 +196,14 @@ export class MeshService {
   private readonly pollIntervalMs: number;
   private readonly commandTimeoutMs: number;
   private readonly presenceWatchIntervalMs: number;
+  private commandHoldMs: number;
   private loading: Promise<void> | null = null;
+  /** Per-device credentials (null = shared-token-only mesh). */
+  readonly credentials: DeviceCredentialStore | null;
+  /** The command audit (null = commands are not recorded). */
+  private readonly audit: MeshAuditLog | null;
+  /** `native.legacySharedToken` as the bridge last reported it. */
+  private legacySharedToken = true;
 
   constructor(
     private readonly registry = new MeshRegistry(),
@@ -147,6 +216,7 @@ export class MeshService {
       options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.presenceWatchIntervalMs =
       options.presenceWatchIntervalMs ?? PRESENCE_WATCH_INTERVAL_MS;
+    this.commandHoldMs = options.commandHoldMs ?? DEFAULT_COMMAND_HOLD_MS;
     this.resolveNode = options.nodeBinaryResolver ?? resolveNodeBinary;
     this.files = new DeviceFiles({
       load: () => this.load(),
@@ -156,18 +226,81 @@ export class MeshService {
       commandTimeoutMs: this.commandTimeoutMs,
       resolveNode: this.resolveNode,
     });
-    this.links = new BridgeLinks(this.resolveNode);
+    this.credentials = options.credentials ?? null;
+    this.audit = options.audit ?? null;
+    const store = this.credentials;
+    this.links = new BridgeLinks(
+      this.resolveNode,
+      store
+        ? (scopes, origin) =>
+            store.mintNow({ deviceId: null, scopes, origin }).token
+        : undefined,
+    );
+  }
+
+  /**
+   * `native.commandHoldMs`: how long an undelivered command waits for its
+   * device to reconnect. Undefined restores the default.
+   */
+  setCommandHoldMs(ms: number | undefined): void {
+    this.commandHoldMs = Math.max(0, ms ?? DEFAULT_COMMAND_HOLD_MS);
+  }
+
+  /**
+   * A transport reports that `deviceId` has a live connection again. Every
+   * command held for it is offered once more, oldest first; one that is
+   * still not taken stays held until its window ends.
+   */
+  deviceConnected(deviceId: string): void {
+    for (const [id, held] of Array.from(this.heldCommands)) {
+      const { command } = held;
+      if (command.deviceId !== deviceId) continue;
+      // Too close to its deadline to run safely (the hold timer may simply
+      // not have fired yet): fail it as undelivered instead.
+      if (Date.now() >= held.deliverBy) {
+        held.expire();
+        continue;
+      }
+      if (this.dispatchToTransports(command)) {
+        this.heldCommands.delete(id);
+        logDebug(
+          "mesh",
+          `mesh.command event=flushed device=${deviceId} command=${command.name} id=${id}`,
+        );
+      }
+    }
   }
 
   /** The native bridge reports its reachable identity here (null on stop). */
   setBridgeInfo(info: MeshBridgeInfo | null): void {
     this.links.setBridgeInfo(info);
+    this.legacySharedToken = info?.legacySharedToken ?? true;
+  }
+
+  /**
+   * What `talon mesh` operates on, or null for a shared-token-only mesh.
+   * Resolves registry names to ids, so callers should `load()` first.
+   */
+  credentialAdminContext(): CredentialAdminContext | null {
+    const store = this.credentials;
+    if (!store) return null;
+    return {
+      store,
+      resolveDeviceId: (query) => {
+        const resolved = this.resolveDevice(query);
+        return "error" in resolved ? undefined : resolved.target.id;
+      },
+      legacySharedToken: () => this.legacySharedToken,
+    };
   }
 
   /** Hydrate persisted devices/locations. Idempotent — safe to await from
    *  every entry point; the first caller does the read, the rest share it. */
   load(): Promise<void> {
-    this.loading ??= this.registry.load();
+    this.loading ??= Promise.all([
+      this.registry.load(),
+      this.credentials?.load(),
+    ]).then(() => undefined);
     return this.loading;
   }
 
@@ -238,17 +371,14 @@ export class MeshService {
    * whose deviceId names a DIFFERENT device is dropped (a confused or
    * misbehaving companion must not be able to answer for its peers).
    *
-   * An ABSENT deviceId is dropped too. It used to be tolerated "for older app
-   * builds", but omitting the field skipped the ownership check entirely —
-   * which is exactly what a spoofer would do to feed the model fabricated
-   * exec stdout or a fake install success. The alternative (accept it when
-   * only one command is pending) was rejected: it still cannot attribute the
-   * reply, it merely narrows the window to whenever the mesh is idle, which
-   * is most of the time. Nothing real is lost — `deviceId` has always been
-   * part of the command-result wire contract (protocol/fixtures/mesh_v1.json,
-   * asserted by daemon, node and companion alike) and both shipped clients
-   * send it. An unattributable reply now leaves the command to time out with
-   * the honest "did not answer" rather than resolving with someone's data.
+   * An ABSENT deviceId is dropped too: omitting the field would skip the
+   * ownership check, which is exactly what a spoofer would do to feed the
+   * model fabricated exec stdout or a fake install success. Accepting it
+   * when only one command is pending still cannot attribute the reply — it
+   * only narrows the window to whenever the mesh is idle. `deviceId` is part
+   * of the command-result wire contract (protocol/fixtures/mesh_v1.json) and
+   * every shipped client sends it, so an unattributable reply is left to
+   * time out with "did not answer" rather than resolving with someone's data.
    */
   completeCommand(body: Record<string, unknown>): boolean {
     const commandId = typeof body.commandId === "string" ? body.commandId : "";
@@ -272,6 +402,15 @@ export class MeshService {
         : {}),
     });
     return true;
+  }
+
+  /** Resolve every command still waiting on `deviceId` as failed. */
+  private failPendingCommands(deviceId: string, message: string): void {
+    for (const [commandId, pending] of this.pendingCommands) {
+      if (pending.deviceId !== deviceId) continue;
+      this.pendingCommands.delete(commandId);
+      pending.resolve({ commandId, deviceId, ok: false, message });
+    }
   }
 
   /**
@@ -309,7 +448,7 @@ export class MeshService {
   /**
    * Push one command to a device and await its result (or time out). The
    * low-level primitive under every command tool; exposed for tests and
-   * future tools.
+   * future tools. Every dispatch lands in the command audit.
    */
   sendCommand(
     device: DeviceInfo,
@@ -317,51 +456,170 @@ export class MeshService {
     params: Record<string, unknown> = {},
     timeoutMs = this.commandTimeoutMs,
   ): Promise<DeviceCommandResult> {
+    const finishAudit = this.beginAudit(device, name, params);
+    const pending = this.deliverCommand(device, name, params, timeoutMs);
+    if (!finishAudit) return pending;
+    // The delivery promise only ever resolves, so this adds no rejection.
+    return pending.then((result) => {
+      finishAudit(result);
+      return result;
+    });
+  }
+
+  /**
+   * Open the audit record for one dispatch. The issuer is read now, while
+   * the issuing turn's scope is live. Returns the completion hook, or null
+   * when nothing is audited. Never throws: a broken audit must not stop a
+   * command.
+   */
+  private beginAudit(
+    device: DeviceInfo,
+    name: string,
+    params: Record<string, unknown>,
+  ): ((result: DeviceCommandResult) => void) | null {
+    const audit = this.audit;
+    if (!audit) return null;
+    try {
+      const startedAt = Date.now();
+      const base = {
+        time: new Date(startedAt).toISOString(),
+        issuer: auditIssuer(),
+        deviceId: device.id,
+        deviceName: device.name,
+        command: name,
+        argsHash: hashCommandArgs(params),
+      };
+      return (result) => {
+        try {
+          audit.record({
+            ...base,
+            ok: result.ok,
+            ...(result.ok ? {} : { error: auditErrorText(result.message) }),
+            durationMs: Date.now() - startedAt,
+          });
+        } catch (err) {
+          logWarn("mesh", `mesh.audit event=record_failed err=${String(err)}`);
+        }
+      };
+    } catch (err) {
+      logWarn("mesh", `mesh.audit event=record_failed err=${String(err)}`);
+      return null;
+    }
+  }
+
+  /** `talon mesh audit`: the newest recorded dispatches, oldest first. */
+  readAudit(query: MeshAuditQuery = {}): Promise<MeshAuditEntry[]> {
+    return this.audit ? this.audit.read(query) : Promise.resolve([]);
+  }
+
+  /**
+   * Deliver one command; resolves with its result, a timeout, or a loss.
+   *
+   * When no transport has a live connection to the device (it is between
+   * streams: a daemon restart, a network change), the command is held for
+   * `commandHoldMs` and sent the moment the device reconnects
+   * (`deviceConnected`). If it does not come back in that window the
+   * command fails then, saying it was never delivered, instead of waiting
+   * out its whole timeout for an answer that cannot come.
+   */
+  private deliverCommand(
+    device: DeviceInfo,
+    name: string,
+    params: Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<DeviceCommandResult> {
     const command: DeviceCommand = {
       id: randomUUID(),
       deviceId: device.id,
       name,
       params,
     };
+    // The hold ends early enough that a late delivery still leaves the
+    // device time to answer (see COMMAND_DELIVERY_MARGIN_MS).
+    const holdMs = Math.max(
+      0,
+      Math.min(this.commandHoldMs, timeoutMs - deliveryMarginMs(timeoutMs)),
+    );
+    const undelivered = (): string =>
+      `${device.name} has no live connection to the bridge` +
+      (holdMs > 0
+        ? ` and did not reconnect within ${Math.round(holdMs / 1000)}s`
+        : "") +
+      `, so "${name}" was not delivered.`;
     return new Promise<DeviceCommandResult>((resolve) => {
+      let settled = false;
       let stopWatch: () => void = () => {};
-      const timer = setTimeout(() => {
+      let holdTimer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (result: DeviceCommandResult): void => {
+        if (settled) return;
+        settled = true;
         this.pendingCommands.delete(command.id);
+        this.heldCommands.delete(command.id);
+        clearTimeout(timer);
+        clearTimeout(holdTimer);
         stopWatch();
-        resolve({
+        resolve(result);
+      };
+      const fail = (message: string): void =>
+        finish({
           commandId: command.id,
           deviceId: device.id,
           ok: false,
-          message: `${device.name} did not answer within ${Math.round(timeoutMs / 1000)}s (device ${device.online ? "was online" : "appears offline"}).`,
+          message,
         });
+      const timer = setTimeout(() => {
+        fail(
+          this.heldCommands.has(command.id)
+            ? undelivered()
+            : `${device.name} did not answer within ${Math.round(timeoutMs / 1000)}s (device ${device.online ? "was online" : "appears offline"}).`,
+        );
       }, timeoutMs);
       timer.unref?.();
       stopWatch = this.watchPresence(device.id, timeoutMs, (current) => {
-        if (!this.pendingCommands.delete(command.id)) return;
-        clearTimeout(timer);
-        resolve({
-          commandId: command.id,
-          deviceId: device.id,
-          ok: false,
-          message: `${device.name} went offline (last seen ${age(Date.now() - current.lastSeen)}) before answering "${name}".`,
-        });
+        fail(
+          `${device.name} went offline (last seen ${age(Date.now() - current.lastSeen)}) before answering "${name}".`,
+        );
       });
       this.pendingCommands.set(command.id, {
         deviceId: device.id,
-        resolve: (result) => {
-          clearTimeout(timer);
-          stopWatch();
-          resolve(result);
-        },
+        resolve: finish,
       });
-      for (const transport of this.transports) {
-        try {
-          transport.command(command);
-        } catch {
-          // One broken transport must not stop the others.
-        }
+      if (this.dispatchToTransports(command) || settled) return;
+      if (holdMs <= 0) {
+        fail(undelivered());
+        return;
       }
+      this.heldCommands.set(command.id, {
+        command,
+        deliverBy: Date.now() + holdMs,
+        expire: () => fail(undelivered()),
+      });
+      logDebug(
+        "mesh",
+        `mesh.command event=held device=${device.id} command=${name} id=${command.id} holdMs=${holdMs}`,
+      );
+      holdTimer = setTimeout(() => {
+        if (this.heldCommands.has(command.id)) fail(undelivered());
+      }, holdMs);
+      holdTimer.unref?.();
     });
+  }
+
+  /**
+   * Offer a command to every transport. True when at least one took it —
+   * did not report "no live connection to that device". A transport that
+   * throws has not taken it.
+   */
+  private dispatchToTransports(command: DeviceCommand): boolean {
+    let taken = false;
+    for (const transport of this.transports) {
+      try {
+        if (transport.command(command) !== false) taken = true;
+      } catch {
+        // One broken transport must not stop the others.
+      }
+    }
+    return taken;
   }
 
   // ── Model-facing tool surface ──────────────────────────────────────────────
@@ -463,13 +721,29 @@ export class MeshService {
     if (!removed) {
       return { ok: false, text: this.noSuchDevice(query).text };
     }
+    // A removed device keeps no way back in: its own credential dies with
+    // the registry entry (its live sessions drop with it).
+    const revoked =
+      (await this.credentials?.revokeDevice(removed.id, "device removed")) ??
+      [];
+    // With its credential gone it can no longer post a result, and presence
+    // can't fail these for it (the registry entry is gone too) — without
+    // this, a command in flight waits out its whole budget.
+    if (revoked.length > 0) {
+      this.failPendingCommands(
+        removed.id,
+        `${removed.name} was removed from the mesh before it answered.`,
+      );
+    }
     return {
       ok: true,
       text:
         `Removed ${removed.name} [id: ${removed.id}] (${removed.platform}, last seen ${age(Date.now() - removed.lastSeen)}) from the mesh registry.` +
-        (target.online
-          ? " Note: it was still online — a connected companion re-registers within ~60s, so quit the app first if it keeps coming back."
-          : ""),
+        (revoked.length > 0
+          ? ` Revoked its ${revoked.length} per-device credential(s); it must be paired again to rejoin.`
+          : target.online
+            ? " Note: it was still online — a connected companion re-registers within ~60s, so quit the app first if it keeps coming back."
+            : ""),
     };
   }
 
@@ -544,6 +818,30 @@ export class MeshService {
       ok: dispatched.result.ok,
       text: formatExecResult(dispatched.target, dispatched.result),
     };
+  }
+
+  /**
+   * `device_computer`: look at and drive a device's desktop (screenshot,
+   * accessibility snapshot, pointer, keyboard). See devices/computer.ts.
+   */
+  async computerOnDevice(
+    query: unknown,
+    input: Record<string, unknown>,
+  ): Promise<MeshToolResult> {
+    const built = computerCommandParams(input);
+    if ("error" in built) return { ok: false, text: built.error };
+    const dispatched = await this.dispatchCommand(
+      query,
+      "computer",
+      built.params,
+      COMPUTER_COMMAND_TIMEOUT_MS,
+    );
+    if ("error" in dispatched) return { ok: false, text: dispatched.error };
+    return formatComputerResult(
+      dispatched.target,
+      built.action,
+      dispatched.result,
+    );
   }
 
   /** `device_list_dir`: list a directory on the device. */
@@ -671,8 +969,14 @@ export class MeshService {
     query: unknown,
     localApkPath: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
-    return this.files.updateDeviceApp(query, localApkPath, remotePath);
+    return this.files.updateDeviceApp(
+      query,
+      localApkPath,
+      remotePath,
+      allowDowngrade,
+    );
   }
 
   /** `update_node`: remote self-update for a headless talon-node. */
@@ -680,8 +984,14 @@ export class MeshService {
     query: unknown,
     localBinaryPath?: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
-    return this.files.updateNodeBinary(query, localBinaryPath, remotePath);
+    return this.files.updateNodeBinary(
+      query,
+      localBinaryPath,
+      remotePath,
+      allowDowngrade,
+    );
   }
 
   // ── Provisioning + pairing (see links/bridge-links.ts) ────────────────────
@@ -709,6 +1019,21 @@ export class MeshService {
     return this.links.makeCompanionPairLink(label, bridgeUrl);
   }
 
+  /** The bridge base URL a bridge-served link should use (secret drop). */
+  bridgeBaseUrl(
+    explicit?: unknown,
+  ): ReturnType<BridgeLinks["bridgeBaseUrlFor"]> {
+    return this.links.bridgeBaseUrlFor(explicit);
+  }
+
+  /** `make_companion_pair_link`: the pairing link as a tool result. */
+  makeCompanionPairLinkText(
+    label?: unknown,
+    bridgeUrl?: unknown,
+  ): MeshToolResult {
+    return this.links.makeCompanionPairLinkText(label, bridgeUrl);
+  }
+
   /** GET /pair — serve a pairing grant (single-use). */
   openCompanionPair(
     token: string,
@@ -723,8 +1048,12 @@ export class MeshService {
   }
 
   /** GET /node/install — serve a grant's installer script (single-use). */
-  openNodeInstall(token: string): { script: string; filename: string } | null {
-    return this.links.openNodeInstall(token);
+  openNodeInstall(
+    token: string,
+    os?: string | null,
+    arch?: string | null,
+  ): Promise<{ script: string; filename: string } | null> {
+    return this.links.openNodeInstall(token, os, arch);
   }
 
   /** GET /node/binary — serve a grant's binary (single-use). */
@@ -816,6 +1145,7 @@ export class MeshService {
       const q = raw.toLowerCase();
       const byId = devices.find((d) => d.id.toLowerCase() === q);
       if (byId) return { target: byId };
+
       const fold = (s: string): string =>
         s.toLowerCase().replace(/[^a-z0-9]+/g, "");
       const folded = fold(raw);
@@ -824,6 +1154,7 @@ export class MeshService {
       ): { target: DeviceInfo } | { error: string } | undefined => {
         if (candidates.length === 1) return { target: candidates[0]! };
         if (candidates.length > 1) {
+          const exactNames = new Set(candidates.map((d) => fold(d.name)));
           const online = candidates.filter((d) => d.online);
           if (online.length === 1) return { target: online[0]! };
           return {
@@ -832,13 +1163,32 @@ export class MeshService {
                 (d) =>
                   `${d.name} [id: ${d.id}, ${d.online ? "online" : "offline"}]`,
               )
-              .join(", ")}. Use the device id or full name.`,
+              .join(
+                ", ",
+              )}. Use the device id${exactNames.size > 1 ? " or full name" : ""}.`,
           };
         }
         return undefined;
       };
+
+      const exactMatch = pick(devices.filter((d) => fold(d.name) === folded));
+      if (exactMatch) return exactMatch;
+
+      if (q.length >= 6) {
+        const byPrefix = devices.filter((d) =>
+          d.id.toLowerCase().startsWith(q),
+        );
+        if (byPrefix.length === 1) return { target: byPrefix[0]! };
+        if (byPrefix.length > 1) {
+          return {
+            error: `Device id prefix "${raw}" matches ${byPrefix.length} devices: ${byPrefix
+              .map((d) => `${d.name} [id: ${d.id}]`)
+              .join(", ")}. Provide more characters of the id.`,
+          };
+        }
+      }
+
       return (
-        pick(devices.filter((d) => fold(d.name) === folded)) ??
         (folded
           ? pick(devices.filter((d) => fold(d.name).includes(folded)))
           : undefined) ?? { error: this.noSuchDevice(query).text }
@@ -1086,11 +1436,31 @@ let instance: MeshService | null = null;
 
 /** The daemon's shared mesh service (lazily created). */
 export function getMeshService(): MeshService {
-  instance ??= new MeshService();
+  instance ??= new MeshService(undefined, {
+    credentials: new DeviceCredentialStore(),
+    audit: new MeshAuditLog(),
+  });
   return instance;
 }
 
 /** Swap the shared instance — composition/test seam. Pass null to reset. */
 export function setMeshService(service: MeshService | null): void {
   instance = service;
+}
+
+/** A command waiting for its device to reconnect (see `heldCommands`). */
+type HeldCommand = {
+  command: DeviceCommand;
+  /** Epoch ms after which it must not be delivered any more. */
+  deliverBy: number;
+  /** Fail it as undelivered. */
+  expire: () => void;
+};
+
+/** How much of `timeoutMs` must remain for a held command to be delivered. */
+function deliveryMarginMs(timeoutMs: number): number {
+  return Math.max(
+    COMMAND_DELIVERY_MARGIN_MS,
+    COMMAND_DELIVERY_MARGIN_SHARE * timeoutMs,
+  );
 }

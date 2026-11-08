@@ -15,7 +15,6 @@ import 'glass.dart';
 import 'markdown.dart';
 import 'motion.dart';
 import 'settings_screen.dart';
-import 'shortcuts_help.dart';
 import 'status_pill.dart';
 
 /// The chat list. Two presentations from one widget:
@@ -207,13 +206,6 @@ class _SidebarState extends State<Sidebar> {
               Row(
                 children: [
                   Expanded(child: StatusPill(state: widget.state)),
-                  if (!_isTouch)
-                    IconButton(
-                      tooltip: 'Keyboard shortcuts (Shift+?)',
-                      onPressed: () => openShortcutsHelp(context),
-                      icon: Icon(Icons.keyboard_outlined,
-                          size: 20, color: TalonColors.textDim),
-                    ),
                   IconButton(
                     tooltip: 'Settings',
                     onPressed: () => _openSettings(context),
@@ -384,111 +376,145 @@ class _SidebarState extends State<Sidebar> {
     var freshOrdinal = 0;
     final reduceMotion = MediaQuery.of(context).disableAnimations;
 
-    final list = ListView(
+    // Flattened rows for a lazy ListView.builder: only the tiles on screen
+    // are built. The list used to build every tile (and parse every preview)
+    // on every AppState notification.
+    final items = <Object>[
+      for (final group in groups) ...[
+        _GroupHeader(group.label),
+        ...group.chats,
+      ],
+      if (searchingMessages) ...[
+        const _MessagesHeader(),
+        if (!_searching && _hits.isEmpty) const _NoHits(),
+        ..._hits.take(12),
+      ],
+    ];
+
+    // Freshness is decided for every chat up front, in list order, exactly
+    // as when the whole list was built eagerly — the lazy builder only
+    // decides which tiles get built, never which ones count as new.
+    final freshOrder = <String, int>{};
+    for (final group in groups) {
+      for (final chat in group.chats) {
+        if (_seen.add(chat.id)) freshOrder[chat.id] = freshOrdinal++;
+      }
+    }
+
+    Widget chatTile(ClientChat chat) {
+      final ordinal = freshOrder[chat.id];
+      final isFresh = ordinal != null;
+      // Stagger only the fresh tiles; the delay is fixed at the tile's
+      // first appearance and latched inside EntranceFx, so later
+      // rebuilds never restart or truncate the cascade.
+      final delay = ordinal != null
+          ? TalonMotion.stagger * ordinal.clamp(0, 12)
+          : Duration.zero;
+      Widget tile = _ChatTile(
+        chat: chat,
+        selected: chat.id == widget.state.selectedChatId,
+        unread: widget.state.hasUnread(chat),
+        onTap: () => (widget.onSelect ?? widget.state.selectChat)(chat.id),
+        // Touch path to every chat action (rename/export/reset/
+        // delete) — the hover-only delete affordance doesn't
+        // exist on a phone.
+        onLongPress: () => showChatActionsSheet(context, widget.state, chat),
+        onDelete: () => confirmDeleteChat(context, widget.state, chat),
+      );
+      // Mobile: swipe a tile left to delete (with the usual confirm).
+      // confirmDismiss always resolves false — deletion happens via
+      // AppState and the rebuild removes the tile, which sidesteps
+      // Dismissible's "must be gone once dismissed" contract when a
+      // slow round-trip would otherwise leave it in the tree.
+      if (_isTouch) {
+        tile = Dismissible(
+          key: ValueKey('swipe-${chat.id}'),
+          direction: DismissDirection.endToStart,
+          confirmDismiss: (_) async {
+            Haptics.medium();
+            await confirmDeleteChat(context, widget.state, chat);
+            return false;
+          },
+          background: Container(
+            alignment: Alignment.centerRight,
+            padding: const EdgeInsets.only(right: TalonSpace.lg),
+            decoration: BoxDecoration(
+              borderRadius: TalonRadius.rSm,
+              color: TalonColors.bad.withValues(alpha: 0.18),
+            ),
+            child: Icon(Icons.delete_outline, size: 18, color: TalonColors.bad),
+          ),
+          child: tile,
+        );
+      }
+      return EntranceFx(
+        key: ValueKey('tile-${chat.id}'),
+        enabled: isFresh && !reduceMotion,
+        from: const Offset(-0.12, 0),
+        delay: delay,
+        child: tile,
+      );
+    }
+
+    Widget item(int i) => switch (items[i]) {
+          _GroupHeader(:final label) => Padding(
+              key: ValueKey('group-$label'),
+              padding: const EdgeInsets.fromLTRB(
+                  TalonSpace.sm, TalonSpace.sm, TalonSpace.sm, 6),
+              child: Text(label.toUpperCase(), style: TalonType.eyebrow),
+            ),
+          final ClientChat chat => chatTile(chat),
+          // Full-text hits from the daemon, below the title matches — brings
+          // the desktop quick switcher's message search to every layout.
+          _MessagesHeader() => Padding(
+              key: const ValueKey('messages-header'),
+              padding: const EdgeInsets.fromLTRB(
+                  TalonSpace.sm, TalonSpace.md, TalonSpace.sm, 6),
+              child: Row(
+                children: [
+                  Text('MESSAGES', style: TalonType.eyebrow),
+                  const SizedBox(width: TalonSpace.sm),
+                  if (_searching)
+                    const SizedBox(
+                      width: 10,
+                      height: 10,
+                      child: CircularProgressIndicator(strokeWidth: 1.6),
+                    ),
+                ],
+              ),
+            ),
+          _NoHits() => Padding(
+              key: const ValueKey('no-hits'),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: TalonSpace.sm, vertical: TalonSpace.xs),
+              child: Text('No message matches.', style: TalonType.caption),
+            ),
+          final SearchHit hit => _HitTile(
+              hit: hit,
+              onTap: () =>
+                  (widget.onSelect ?? widget.state.selectChat)(hit.chatId),
+            ),
+          _ => const SizedBox.shrink(),
+        };
+
+    // Key → index, so a tile keeps its element (hover state, entrance) when
+    // chats above it are added, removed or reordered.
+    final keyIndex = <Object, int>{
+      for (var i = 0; i < items.length; i++)
+        if (items[i] is ClientChat) 'tile-${(items[i] as ClientChat).id}': i,
+    };
+
+    final list = ListView.builder(
       // Room under the last tile for the floating action button AND for the
       // navigation bar the list now scrolls beneath — without it the last
       // chat would come to rest under the gesture pill.
       padding: widget.mobile
           ? EdgeInsets.only(bottom: 84 + MediaQuery.of(context).padding.bottom)
           : EdgeInsets.zero,
-      children: [
-        for (final group in groups) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                TalonSpace.sm, TalonSpace.sm, TalonSpace.sm, 6),
-            child: Text(group.label.toUpperCase(), style: TalonType.eyebrow),
-          ),
-          for (final chat in group.chats)
-            Builder(builder: (context) {
-              final isFresh = _seen.add(chat.id);
-              // Stagger only the fresh tiles; the delay is fixed at the tile's
-              // first appearance and latched inside EntranceFx, so later
-              // streaming rebuilds never restart or truncate the cascade.
-              final delay = isFresh
-                  ? TalonMotion.stagger * (freshOrdinal++).clamp(0, 12)
-                  : Duration.zero;
-              Widget tile = _ChatTile(
-                chat: chat,
-                selected: chat.id == widget.state.selectedChatId,
-                unread: widget.state.hasUnread(chat),
-                onTap: () =>
-                    (widget.onSelect ?? widget.state.selectChat)(chat.id),
-                // Touch path to every chat action (rename/export/reset/
-                // delete) — the hover-only delete affordance doesn't
-                // exist on a phone.
-                onLongPress: () =>
-                    showChatActionsSheet(context, widget.state, chat),
-                onDelete: () => confirmDeleteChat(context, widget.state, chat),
-              );
-              // Mobile: swipe a tile left to delete (with the usual confirm).
-              // confirmDismiss always resolves false — deletion happens via
-              // AppState and the rebuild removes the tile, which sidesteps
-              // Dismissible's "must be gone once dismissed" contract when a
-              // slow round-trip would otherwise leave it in the tree.
-              if (_isTouch) {
-                tile = Dismissible(
-                  key: ValueKey('swipe-${chat.id}'),
-                  direction: DismissDirection.endToStart,
-                  confirmDismiss: (_) async {
-                    Haptics.medium();
-                    await confirmDeleteChat(context, widget.state, chat);
-                    return false;
-                  },
-                  background: Container(
-                    alignment: Alignment.centerRight,
-                    padding: const EdgeInsets.only(right: TalonSpace.lg),
-                    decoration: BoxDecoration(
-                      borderRadius: TalonRadius.rSm,
-                      color: TalonColors.bad.withValues(alpha: 0.18),
-                    ),
-                    child: Icon(Icons.delete_outline,
-                        size: 18, color: TalonColors.bad),
-                  ),
-                  child: tile,
-                );
-              }
-              return EntranceFx(
-                key: ValueKey('tile-${chat.id}'),
-                enabled: isFresh && !reduceMotion,
-                from: const Offset(-0.12, 0),
-                delay: delay,
-                child: tile,
-              );
-            }),
-        ],
-        // Full-text hits from the daemon, below the title matches — brings
-        // the desktop quick switcher's message search to every layout.
-        if (searchingMessages) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                TalonSpace.sm, TalonSpace.md, TalonSpace.sm, 6),
-            child: Row(
-              children: [
-                Text('MESSAGES', style: TalonType.eyebrow),
-                const SizedBox(width: TalonSpace.sm),
-                if (_searching)
-                  const SizedBox(
-                    width: 10,
-                    height: 10,
-                    child: CircularProgressIndicator(strokeWidth: 1.6),
-                  ),
-              ],
-            ),
-          ),
-          if (!_searching && _hits.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: TalonSpace.sm, vertical: TalonSpace.xs),
-              child: Text('No message matches.', style: TalonType.caption),
-            ),
-          for (final hit in _hits.take(12))
-            _HitTile(
-              hit: hit,
-              onTap: () =>
-                  (widget.onSelect ?? widget.state.selectChat)(hit.chatId),
-            ),
-        ],
-      ],
+      itemCount: items.length,
+      itemBuilder: (context, i) => item(i),
+      findChildIndexCallback: (key) =>
+          key is ValueKey<String> ? keyIndex[key.value] : null,
     );
 
     // Pull-to-refresh: re-sync chats/models (or retry the connection when
@@ -545,6 +571,20 @@ class _Group {
   final String label;
   final List<ClientChat> chats;
   _Group(this.label, this.chats);
+}
+
+/// Row kinds in the lazy chat list besides chats and search hits.
+class _GroupHeader {
+  final String label;
+  const _GroupHeader(this.label);
+}
+
+class _MessagesHeader {
+  const _MessagesHeader();
+}
+
+class _NoHits {
+  const _NoHits();
 }
 
 /// Per-chat identity gradient, derived from the title so every conversation

@@ -1,12 +1,12 @@
 {
   "name": "talon-agent",
-  "version": "5.5.0",
+  "version": "5.39.5",
   "description": "Multi-frontend AI agent with full tool access, streaming, cron jobs, and plugin system",
-  "author": "Dylan Neve",
-  "license": "MIT",
+  "author": "The Falconry",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/dylanneve1/talon.git"
+    "url": "https://github.com/thefalconry/talon.git"
   },
   "keywords": [
     "telegram",
@@ -52,6 +52,8 @@
     "src/login.ts",
     "prompts/",
     "README.md",
+    "NOTICE",
+    "LICENSE-MIT",
     "tsconfig.json"
   ],
   "scripts": {
@@ -88,6 +90,8 @@
     "knip": "knip",
     "format": "prettier --write src/ prompts/",
     "format:check": "prettier --check src/ prompts/",
+    "preflight": "bash scripts/preflight.sh",
+    "worktree": "node scripts/worktree.mjs",
     "ci:protect": "node .github/scripts/enforce-ci-gate.mjs",
     "build:gleam": "cd native/scheduler-core && gleam build --target javascript && node embed.mjs",
     "build:zig": "node native/textops-wasm/build.mjs",
@@ -99,7 +103,7 @@
     "build:fusefs": "node native/talon-fusefs/build.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.277",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.284",
     "@anthropic-ai/sdk": "^0.104.1",
     "@brave/brave-search-mcp-server": "^2.0.75",
     "@clack/prompts": "^1.2.0",
@@ -107,8 +111,8 @@
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@kilocode/sdk": "^7.2.22",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openai/agents": "^0.18.0",
-    "@openai/codex-sdk": "^0.155.0",
+    "@openai/agents": "^0.20.0",
+    "@openai/codex-sdk": "^0.162.0",
     "@opencode-ai/sdk": "^1.17.4",
     "@playwright/mcp": "0.0.56",
     "@types/cross-spawn": "^6.0.6",
@@ -156,6 +160,9 @@
   },
   "overrides": {
     "@anthropic-ai/sdk": "^0.104.1",
+    "@brave/brave-search-mcp-server": {
+      "@modelcontextprotocol/sdk": "^1.32.1"
+    },
     "ip-address": "^10.1.1",
     "fast-uri": "^3.1.2",
     "link-preview-js": "^5.0.0"

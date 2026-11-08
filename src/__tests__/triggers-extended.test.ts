@@ -790,3 +790,73 @@ describe("triggers — finalizeExit with null exit code", () => {
     expect(executeSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── operator alert for broken triggers ────────────────────────────────────
+
+describe("triggers — trigger.<id> alert", () => {
+  const sent: string[] = [];
+
+  async function running(name: string): Promise<Trigger> {
+    const t: Trigger = {
+      id: generateTriggerId(),
+      chatId: "chat-alert",
+      numericChatId: 13,
+      name,
+      language: "bash",
+      scriptPath: "/tmp/alert.sh",
+      logPath: "/tmp/alert.log",
+      status: "running",
+      createdAt: Date.now(),
+      timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
+      fireCount: 0,
+    };
+    addTrigger(t);
+    return t;
+  }
+
+  beforeEach(async () => {
+    sent.length = 0;
+    const { resetAlertsForTest } =
+      await import("../core/frontend-runtime/alerts.js");
+    resetAlertsForTest(async (text) => {
+      sent.push(text);
+    });
+  });
+
+  it("warns when the command could not run (exit 127) and clears on a clean fire", async () => {
+    const t = await running("watch-logs");
+    _internals.handleStdoutLine(t.id, "bash: jq: command not found");
+    await _internals.finalizeExit(t.id, 127, null);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(
+      /Trigger "watch-logs" \[.+\] could not run its command \(exit 127: command not found\)/,
+    );
+
+    updateTrigger(t.id, { status: "running" });
+    await _internals.finalizeExit(t.id, 0, null);
+    expect(sent.at(-1)).toMatch(
+      /Trigger "watch-logs" is firing normally again/,
+    );
+  });
+
+  it("warns on a crash signal nobody sent", async () => {
+    const t = await running("crashy");
+    await _internals.finalizeExit(t.id, null, "SIGSEGV");
+    expect(sent[0]).toMatch(/Trigger "crashy" \[.+\] crashed \(SIGSEGV\)/);
+  });
+
+  it("stays quiet for an ordinary non-zero exit (the chat gets the wake)", async () => {
+    const t = await running("verdict");
+    await _internals.finalizeExit(t.id, 1, null);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("warns when the trigger fails to spawn", async () => {
+    const { failTrigger } = await import("../core/background/triggers/exit.js");
+    const t = await running("no-spawn");
+    failTrigger(t, "spawn python3 ENOENT");
+    expect(sent[0]).toMatch(
+      /Trigger "no-spawn" \[.+\] failed to start: spawn python3 ENOENT/,
+    );
+  });
+});

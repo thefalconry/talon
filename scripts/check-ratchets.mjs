@@ -34,7 +34,11 @@ const RATCHETS = [
     // naked throws in the repo is unchanged; two of them are now inside
     // `src/core/`, which is what this ratchet measures. No engine code
     // gained a throw.
-    baseline: 38,
+    //
+    // 38 → 35 with the stability sweep: dead code that carried three
+    // throws was deleted (the backend-controller legacy alias layer and the
+    // agent-runtime event helpers).
+    baseline: 35,
     why:
       "core/ should throw classified errors (core/errors.ts) so retry and " +
       "interrupt behaviour stays well-defined at the engine boundary. " +

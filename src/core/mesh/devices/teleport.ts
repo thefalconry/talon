@@ -44,6 +44,12 @@ function stateFile(): string {
 }
 
 let cache: TeleportStore | undefined;
+/**
+ * The in-flight first read. Shared so concurrent cold callers all get the
+ * one store: separate reads would each build their own, and the last to
+ * finish would replace the cache — dropping any teleport set on another.
+ */
+let loading: Promise<TeleportStore> | undefined;
 
 function emptyStore(): TeleportStore {
   return { chats: Object.create(null) as Record<string, TeleportState> };
@@ -69,8 +75,13 @@ function parseState(value: unknown): TeleportState | null {
   };
 }
 
-async function readStore(): Promise<TeleportStore> {
-  if (cache !== undefined) return cache;
+function readStore(): Promise<TeleportStore> {
+  if (cache !== undefined) return Promise.resolve(cache);
+  loading ??= loadStore();
+  return loading;
+}
+
+async function loadStore(): Promise<TeleportStore> {
   try {
     const raw = await readFile(stateFile(), "utf8");
     const parsed = JSON.parse(raw) as unknown;
@@ -155,4 +166,5 @@ export async function clearTeleport(
 /** Test seam — drop the in-memory cache so the next read hits disk. */
 export function resetTeleportCache(): void {
   cache = undefined;
+  loading = undefined;
 }

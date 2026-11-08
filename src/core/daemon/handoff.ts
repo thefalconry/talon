@@ -27,6 +27,7 @@
 import { dirname, resolve } from "node:path";
 import { log, logError, logWarn } from "../../util/log.js";
 import { startDaemon, type StartOutcome } from "./control.js";
+import { writeCrashMarker } from "./crash-marker.js";
 import { findRunningInstance, type RunningInstance } from "./discovery.js";
 import { isProcessAlive } from "./pidfile.js";
 
@@ -131,6 +132,19 @@ function toOutcome(started: StartOutcome, why: string): HandoffOutcome {
 }
 
 /**
+ * Leave a crash marker so whichever daemon comes up next tells the
+ * operator the restart failed. A successor that crashed on its own left
+ * a more specific marker already; that one is kept.
+ */
+function markHandoffFailure(why: string): void {
+  try {
+    writeCrashMarker("handoff", why, { keepExisting: true });
+  } catch {
+    /* EEXIST (the successor's own marker) or a full disk — nothing to add */
+  }
+}
+
+/**
  * Verify the handoff, and repair it if it failed. Never throws: this
  * process exists only to make the outcome known.
  */
@@ -153,6 +167,7 @@ export async function watchHandoff(
     "shutdown",
     `Handoff failed — ${why}; starting Talon the way \`talon start\` does`,
   );
+  markHandoffFailure(why);
   const start = opts.start ?? startDaemon;
   const started = await start({
     pkgRoot: opts.pkgRoot,

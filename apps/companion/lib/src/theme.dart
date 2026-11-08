@@ -72,13 +72,14 @@ class TalonPalette {
     required Color accent,
     required Color accent2,
     required Color accentDeep,
+    Color? surfaceHi,
   }) =>
       TalonPalette(
         brightness: brightness,
         void0: void0,
         void1: void1,
         surface: surface,
-        surfaceHi: surfaceHi,
+        surfaceHi: surfaceHi ?? this.surfaceHi,
         glassFill: glassFill,
         glassStroke: glassStroke,
         accent: accent,
@@ -192,10 +193,15 @@ class TalonAccents {
     final aHsl = HSLColor.fromColor(accent);
     final accentDeep =
         aHsl.withLightness((aHsl.lightness - 0.12).clamp(0.14, 1.0)).toColor();
+    final surfaceHi = Color.alphaBlend(
+      accent.withValues(alpha: dark ? 0.08 : 0.06),
+      dark ? const Color(0xFF141522) : const Color(0xFFF2F4FB),
+    );
     return base.copyWithAccent(
       accent: accent,
       accent2: accent2,
       accentDeep: accentDeep,
+      surfaceHi: surfaceHi,
     );
   }
 }
@@ -539,11 +545,18 @@ ThemeData buildTalonTheme() {
           // themselves — TalonType styles do. A bare TextStyle here silently
           // drops the family for everything that inherits bodyMedium.
           bodyMedium: TalonType.body,
-          titleMedium: const TextStyle(
+          // Carries its own colour: DropdownButton draws its closed label
+          // and menu items in titleMedium, and a colourless style here fell
+          // back to white on the light menu.
+          titleMedium: TextStyle(
             fontFamily: _fontFamily,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
+            color: TalonColors.text,
           ),
         ),
+    // Dropdown menus paint on canvasColor — match the popup menus.
+    canvasColor: TalonColors.surfaceHi,
     splashFactory: InkSparkle.splashFactory,
     // Predictive back on Android: route pops (conversation → chat list,
     // Settings → home) track the back gesture and peel away with the system
@@ -598,25 +611,54 @@ ThemeData buildTalonTheme() {
       thickness: const WidgetStatePropertyAll(6),
       radius: const Radius.circular(8),
     ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: TalonColors.surfaceHi,
+      surfaceTintColor: Colors.transparent,
+      elevation: 6,
+      shape: RoundedRectangleBorder(
+        borderRadius: TalonRadius.rMd,
+        side: BorderSide(color: TalonColors.glassStroke),
+      ),
+      textStyle: TextStyle(
+        color: TalonColors.text,
+        fontSize: 13.5,
+        fontFamily: _fontFamily,
+      ),
+    ),
     // Material 3's default selected-track has no outline and a thumb that
     // can end up the same color as the track (see settings_screen.dart's
     // _switchRow), reading as a solid undifferentiated pill against this
     // theme's glass surfaces. Give both states an explicit border and
     // a thumb that always contrasts against its track.
+    // Every colour resolves the disabled state too. Without it a switch with
+    // onChanged: null rendered exactly like a live one — it swallowed taps
+    // while still looking on, which reads as a stuck control.
     switchTheme: SwitchThemeData(
-      trackColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected)
-              ? TalonColors.accent
-              : TalonColors.surfaceHi),
-      trackOutlineColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected)
-              ? TalonColors.accentDeep
-              : TalonColors.glassStroke),
+      trackColor: WidgetStateProperty.resolveWith((states) {
+        final c = states.contains(WidgetState.selected)
+            ? TalonColors.accent
+            : TalonColors.surfaceHi;
+        return states.contains(WidgetState.disabled)
+            ? c.withValues(alpha: 0.30)
+            : c;
+      }),
+      trackOutlineColor: WidgetStateProperty.resolveWith((states) {
+        final c = states.contains(WidgetState.selected)
+            ? TalonColors.accentDeep
+            : TalonColors.glassStroke;
+        return states.contains(WidgetState.disabled)
+            ? c.withValues(alpha: 0.30)
+            : c;
+      }),
       trackOutlineWidth: const WidgetStatePropertyAll(1.4),
-      thumbColor: WidgetStateProperty.resolveWith((states) =>
-          states.contains(WidgetState.selected)
-              ? Colors.white
-              : TalonColors.textDim),
+      thumbColor: WidgetStateProperty.resolveWith((states) {
+        final c = states.contains(WidgetState.selected)
+            ? Colors.white
+            : TalonColors.textDim;
+        return states.contains(WidgetState.disabled)
+            ? c.withValues(alpha: 0.45)
+            : c;
+      }),
     ),
   );
 }

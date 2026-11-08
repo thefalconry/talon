@@ -19,12 +19,12 @@ import {
   validateTimeout,
   writeScriptFile,
   DEFAULT_TIMEOUT_SECONDS,
-  MAX_ACTIVE_PER_CHAT,
   type TriggerLanguage,
 } from "../../../storage/triggers.js";
 import {
   cancelTrigger,
   spawnTrigger,
+  triggerCapError,
 } from "../../background/triggers/index.js";
 import { log } from "../../../util/log.js";
 import { validateJobModelOverride } from "./validation.js";
@@ -61,13 +61,11 @@ export const triggerHandlers: SharedActionHandlers = {
         error: `A trigger named "${name}" already exists in this chat. Cancel it first or pick a different name.`,
       };
     }
-    const active = getActiveTriggersForChat(chatKey);
-    if (active.length >= MAX_ACTIVE_PER_CHAT) {
-      return {
-        ok: false,
-        error: `Per-chat trigger cap reached (${MAX_ACTIVE_PER_CHAT} active). Cancel one before creating another.`,
-      };
-    }
+    const capErr = triggerCapError(
+      getActiveTriggersForChat(chatKey),
+      persistent,
+    );
+    if (capErr) return { ok: false, error: capErr };
 
     // Validate the model up front so a bad id is rejected here instead of
     // silently failing at fire time.

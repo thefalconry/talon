@@ -9,14 +9,13 @@
  *   - `delivery` — HTML send, streaming drafts, the agent run pipeline
  *   - `queue`    — per-chat debounce queue + per-user rate limiting
  *   - `messages` — per-message-type handlers (text/photo/voice/…/callback)
- *
- * Re-exports the same public surface the old single-file module exposed.
  */
 
 export {
   setAccessControl,
   shouldHandleInGroup,
   extractUnauthorizedPreview,
+  registerCommandAccessGate,
 } from "./access.js";
 export {
   getSenderName,

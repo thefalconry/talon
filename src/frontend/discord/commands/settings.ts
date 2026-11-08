@@ -169,6 +169,18 @@ export async function handleEffort(
     config,
   });
 
+  // Reset first: adaptive needs no model levels, so it must stay
+  // reachable on a model that registers none.
+  if (level === "adaptive" || level === "reset" || level === "default") {
+    setChatEffort(chatId, undefined);
+    await reply(
+      i,
+      "Effort reset to **adaptive** (model decides when to think)",
+      true,
+    );
+    return;
+  }
+
   if (reasoning.levels.length === 0) {
     await reply(
       i,
@@ -202,15 +214,6 @@ export async function handleEffort(
     return;
   }
 
-  if (level === "adaptive") {
-    setChatEffort(chatId, undefined);
-    await reply(
-      i,
-      "Effort reset to **adaptive** (model decides when to think)",
-      true,
-    );
-    return;
-  }
   if (supportsReasoningLevel(level, reasoning.levels)) {
     setChatEffort(chatId, level as EffortLevel);
     await reply(i, `Effort set to **${level}**`, true);

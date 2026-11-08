@@ -12,6 +12,7 @@ import {
   type BridgeServerHandlers,
 } from "../frontend/native/bridge/server.js";
 import type { BridgeEvent } from "../frontend/native/protocol.js";
+import { connect, type Socket } from "node:net";
 
 const handlers: BridgeServerHandlers = {
   status: () => ({
@@ -61,6 +62,7 @@ const handlers: BridgeServerHandlers = {
   control: async () => ({ ok: true, message: "" }),
   logs: () => [],
   liveTurnEvents: () => [],
+  listCommands: () => [],
   mediaPath: () => null,
   registerDevice: async () => ({}) as never,
   storeLocation: async () => ({}) as never,
@@ -71,6 +73,9 @@ const handlers: BridgeServerHandlers = {
   openNodeInstall: () => null,
   openCompanionPair: () => null,
   openNodeBinary: () => null,
+  openSecretDrop: () => null,
+  isLiveSecretDrop: () => false,
+  submitSecretDrop: async () => ({ status: 404, html: "" }),
 };
 
 describe("bridge server security posture", () => {
@@ -81,9 +86,17 @@ describe("bridge server security posture", () => {
     server = null;
   });
 
+  // Backoff off so the lockout tests can fire 20 wrong tokens quickly; the
+  // backoff itself is covered in native-bridge-auth-guard.test.ts.
   async function startServer(token?: string): Promise<number> {
     server = new BridgeServer(
-      { host: "127.0.0.1", port: 0, token, startedAt: "boot" },
+      {
+        host: "127.0.0.1",
+        port: 0,
+        token,
+        startedAt: "boot",
+        authPolicy: { backoffBaseMs: 0 },
+      },
       handlers,
     );
     return server.start();
@@ -397,5 +410,72 @@ describe("bridge server device addressing", () => {
     const port = await server.start();
     const res = await get(port, "/pair");
     expect(res.status).toBe(404);
+  });
+});
+
+/**
+ * A client that stops reading without closing its socket (phone asleep,
+ * network switch) must not buffer the whole event stream in daemon memory
+ * until TCP gives up on it.
+ */
+describe("bridge server event-stream backlog", () => {
+  let server: BridgeServer | null = null;
+  const sockets: Socket[] = [];
+
+  afterEach(async () => {
+    for (const s of sockets.splice(0)) s.destroy();
+    await server?.stop();
+    server = null;
+  });
+
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /** A raw /events connection; `read: false` never consumes a byte. */
+  async function rawEvents(
+    port: number,
+    read: boolean,
+  ): Promise<{ socket: Socket; text: () => string }> {
+    const socket = connect(port, "127.0.0.1");
+    sockets.push(socket);
+    socket.on("error", () => {});
+    await new Promise<void>((resolve) => socket.once("connect", resolve));
+    socket.write("GET /events HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    let text = "";
+    if (read) socket.on("data", (d: Buffer) => (text += d.toString()));
+    else socket.pause();
+    await wait(100);
+    return { socket, text: () => text };
+  }
+
+  it("drops a stalled client once its backlog passes the cap, keeping live ones", async () => {
+    server = new BridgeServer(
+      { host: "127.0.0.1", port: 0, startedAt: "boot" },
+      handlers,
+    );
+    const port = await server.start();
+    const stalled = await rawEvents(port, false);
+    const live = await rawEvents(port, true);
+
+    // ~25 MB of turn traffic, paced so a reading client keeps up.
+    const bulk = "x".repeat(64 * 1024);
+    for (let batch = 0; batch < 40; batch++) {
+      for (let i = 0; i < 10; i++) {
+        server.broadcast({ kind: "delta", chatId: "c1", text: bulk });
+      }
+      await wait(5);
+    }
+    server.broadcast({ kind: "typing", chatId: "c1", on: true });
+
+    // The stalled socket was cut: reading what the kernel holds reaches EOF.
+    const closed = new Promise<boolean>((resolve) => {
+      stalled.socket.once("close", () => resolve(true));
+      setTimeout(() => resolve(false), 3_000).unref();
+    });
+    stalled.socket.resume();
+    expect(await closed).toBe(true);
+
+    await wait(100);
+    expect(live.socket.destroyed).toBe(false);
+    expect(live.text()).toContain('"kind":"typing"');
   });
 });

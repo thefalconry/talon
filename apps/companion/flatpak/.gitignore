@@ -1,0 +1,6 @@
+# Local flatpak-builder state (see README.md)
+shared-modules/
+build-dir/
+repo/
+.flatpak-builder/
+*.flatpak

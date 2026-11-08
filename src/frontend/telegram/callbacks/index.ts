@@ -11,7 +11,8 @@
  *   - `model`    — `model:*` (menu / backend / browse controller)
  *   - `auth`     — `auth:*` (backend sign-in panel, admin only)
  *   - `whatsapp` — `whatsapp:*` (WhatsApp link panel, admin only)
- *   - `backup`   — `backup:*` (restore confirmation, admin only)
+ *   - `backup`   — `backup:*` (the /backup panel + restore confirmation, admin only)
+ *   - `usage-reset` — `ureset:*` (spend a banked limit reset, admin DM only)
  *
  * `registerCallbacks` installs one `callback_query:data` listener that
  * dispatches on the data prefix, preserving the original order and the
@@ -31,6 +32,7 @@ import { handleModelCallback } from "./model.js";
 import { handleAuthCallback } from "./auth.js";
 import { handleWhatsAppCallback } from "./whatsapp.js";
 import { handleBackupCallback } from "./backup.js";
+import { handleUsageResetCallback } from "./usage-reset.js";
 
 export { answerCallbackQuerySafe } from "./query.js";
 
@@ -52,9 +54,15 @@ export function registerCallbacks(
       return;
     }
 
-    // Restore confirmation — destructive, so it is behind its own tap.
+    // The /backup panel. Restore, the destructive one, is behind its own tap.
     if (data.startsWith("backup:")) {
       await handleBackupCallback(ctx, data);
+      return;
+    }
+
+    // Spending a banked limit reset — irreversible, so confirm-gated.
+    if (data.startsWith("ureset:")) {
+      await handleUsageResetCallback(ctx, data);
       return;
     }
 

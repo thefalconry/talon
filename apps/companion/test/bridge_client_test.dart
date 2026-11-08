@@ -139,6 +139,64 @@ void main() {
       addTearDown(good.dispose);
       await expectLater(good.send('c1', ''), throwsA(isA<BridgeException>()));
     });
+
+    test('a non-401 rejection carries the server error, not "Unauthorized"',
+        () async {
+      final bridge = await MockBridge.start(token: 'secret');
+      addTearDown(bridge.close);
+      bridge.configPostStatus = 403;
+      final client = BridgeClient(configFor(bridge, token: 'secret'));
+      addTearDown(client.dispose);
+      await expectLater(
+        client.setConfig({'pulse': true}),
+        throwsA(
+          isA<BridgeException>()
+              .having((e) => e.unauthorized, 'unauthorized', isFalse)
+              .having((e) => e.message, 'message', 'injected (403)'),
+        ),
+      );
+    });
+  });
+
+  group('BridgeClient connection reuse', () {
+    test('idle connections outlive the mesh heartbeat', () {
+      // MeshService re-registers every 60 s; a pool that drops idle
+      // connections sooner opens a fresh TCP + TLS connection every time.
+      expect(
+        BridgeClient.restIdleTimeout,
+        greaterThan(const Duration(seconds: 60)),
+      );
+    });
+
+    test('back-to-back REST calls share one connection', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final ports = <int>{};
+      unawaited(
+        server.listen((req) async {
+          ports.add(req.connectionInfo!.remotePort);
+          req.response
+            ..statusCode = 200
+            ..headers.contentType = ContentType.json
+            ..write('{}');
+          await req.response.close();
+        }).asFuture<void>(),
+      );
+      final client = BridgeClient(
+        ConnectionConfig(
+          host: '127.0.0.1',
+          port: server.port,
+          manageLocalDaemon: false,
+          localAutoDiscover: false,
+        ),
+      );
+      addTearDown(client.dispose);
+
+      await client.registerDevice({'id': 'd1'});
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      await client.registerDevice({'id': 'd1'});
+      expect(ports, hasLength(1));
+    });
   });
 
   group('BridgeClient SSE', () {
@@ -179,6 +237,22 @@ void main() {
       },
     );
 
+    test('authorises the stream with the header, never a URL token', () async {
+      final bridge = await MockBridge.start(token: 'secret');
+      addTearDown(bridge.close);
+      final client = BridgeClient(configFor(bridge, token: 'secret'))
+        ..meshDeviceId = 'dev-1';
+      addTearDown(client.dispose);
+
+      await client.connect();
+      await _waitFor(() => bridge.streamCount == 1);
+
+      final (uri, auth) = bridge.eventRequests.single;
+      expect(uri.queryParameters, {'deviceId': 'dev-1'});
+      expect(uri.toString(), isNot(contains('secret')));
+      expect(auth, 'Bearer secret');
+    });
+
     test('stream close surfaces an error', () async {
       final bridge = await MockBridge.start();
       addTearDown(bridge.close);
@@ -196,6 +270,60 @@ void main() {
         await error.future.timeout(const Duration(seconds: 1)),
         isA<BridgeException>(),
       );
+    });
+
+    test('a stalled event stream errors after the idle deadline', () async {
+      // The mock sends `hello` and then nothing: a half-open socket as seen
+      // from the client — no bytes, no FIN, no error.
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final client = BridgeClient(
+        configFor(bridge),
+        eventStreamIdle: const Duration(milliseconds: 300),
+      );
+      addTearDown(client.dispose);
+      final error = Completer<Object>();
+      final sub = client.events.listen((_) {}, onError: error.complete);
+      addTearDown(sub.cancel);
+
+      expect(client.lastRx, isNull);
+      await client.connect();
+      expect(client.lastRx, isNotNull);
+
+      final e = await error.future.timeout(const Duration(seconds: 3));
+      expect(
+        e,
+        isA<BridgeException>().having(
+          (e) => e.message,
+          'message',
+          contains('Event stream idle'),
+        ),
+      );
+    });
+
+    test('keep-alive pings hold the stream open and advance lastRx', () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final client = BridgeClient(
+        configFor(bridge),
+        eventStreamIdle: const Duration(milliseconds: 400),
+      );
+      addTearDown(client.dispose);
+      final errors = <Object>[];
+      final sub = client.events.listen((_) {}, onError: errors.add);
+      addTearDown(sub.cancel);
+
+      await client.connect();
+      await _waitFor(() => bridge.streamCount == 1);
+      final opened = client.lastRx!;
+      for (var i = 0; i < 8; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await bridge.writeRaw(': ping\n\n');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      expect(errors, isEmpty);
+      expect(client.lastRx!.isAfter(opened), isTrue);
     });
 
     test('connect timeout closes the half-open client', () async {

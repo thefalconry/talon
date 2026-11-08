@@ -32,6 +32,7 @@ import {
 import {
   getRepoRoot,
   runSelfUpdate,
+  describeCheckpoint,
 } from "../../../core/update/self-update.js";
 import { reply } from "./interaction.js";
 
@@ -153,7 +154,8 @@ export async function handleDream(
 }
 
 /**
- * /update — pull, reinstall, run setup, restart. Only reachable on developer
+ * /update [force] — pull, reinstall, run setup, restart. Refused when the
+ * pre-update checkpoint fails unless `force` is set. Only reachable on developer
  * builds running from a git checkout; the command is not registered at all
  * otherwise (see buildCommandDefinitions).
  */
@@ -172,8 +174,13 @@ export async function handleUpdate(
   }
   const remote = config.update?.remote ?? "origin";
   const branch = config.update?.branch ?? "main";
+  const force = i.options.getBoolean("force") ?? false;
   await i.deferReply({ flags: MessageFlags.Ephemeral });
-  await i.editReply(`⏳ Updating from \`${remote}/${branch}\`…`);
+  await i.editReply(
+    `⏳ Updating from \`${remote}/${branch}\`` +
+      (force ? " (forced: a failed checkpoint will not stop it)" : "") +
+      "…",
+  );
   const edit = (text: string) => i.editReply(safeSlice(text, DISCORD_MAX_TEXT));
 
   // Fire-and-forget so the gateway keeps processing other interactions.
@@ -182,12 +189,24 @@ export async function handleUpdate(
     branch,
     setup: config.update?.setup,
     repoRoot,
+    force,
   })
     .then(async (res) => {
+      if (res.checkpointRefused) {
+        await edit(
+          `🛑 Update refused: ${res.error ?? "the pre-update checkpoint failed"}\n\n` +
+            "Run `/update force:true` to update without a checkpoint.",
+        );
+        return;
+      }
+      const note = res.checkpoint
+        ? `\n${describeCheckpoint(res.checkpoint)}`
+        : "";
       if (!res.ok) {
         const tail = res.steps[res.steps.length - 1]?.output ?? "";
         await edit(
           `⚠️ Update failed: ${res.error ?? "unknown error"}` +
+            note +
             (tail
               ? `\n\`\`\`\n${escapeForCodeBlock(tail.slice(-1200))}\n\`\`\``
               : ""),
@@ -201,7 +220,7 @@ export async function handleUpdate(
         return;
       }
       await edit(
-        `✅ Updated \`${res.before ?? "?"}\` → \`${res.after ?? "?"}\`. ♻️ Restarting…`,
+        `✅ Updated \`${res.before ?? "?"}\` → \`${res.after ?? "?"}\`.${note}\n♻️ Restarting…`,
       );
       // The successor documents any provisioning changes (plugin runtime
       // upgrades, migrations) back to this channel once it's up.

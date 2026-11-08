@@ -13,6 +13,7 @@ import '../../models/bridge_models.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
 import '../glass.dart';
+import '../effects.dart';
 
 /// Severity for a diagnostics check row.
 enum SettingsHealth { ok, warn, bad, info }
@@ -35,10 +36,7 @@ Widget healthRow(SettingsHealth h, String label, String detail) {
           width: 118,
           child: Text(
             label,
-            style: const TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w600,
-            ),
+            style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
           ),
         ),
         Expanded(
@@ -53,31 +51,35 @@ Widget healthRow(SettingsHealth h, String label, String detail) {
 }
 
 Widget infoRow(String label, String value) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 5),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 128,
-            child: Text(
-              label,
-              style: TextStyle(fontSize: 13, color: TalonColors.textDim),
-            ),
-          ),
-          Expanded(
-            child: SelectableText(
-              value.isEmpty ? '—' : value,
-              style: const TextStyle(fontSize: 13.5),
-            ),
-          ),
-        ],
+  padding: const EdgeInsets.symmetric(vertical: 5),
+  child: Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        width: 128,
+        child: Text(
+          label,
+          style: TextStyle(fontSize: 13, color: TalonColors.textDim),
+        ),
       ),
-    );
+      Expanded(
+        child: SelectableText(
+          value.isEmpty ? '—' : value,
+          style: const TextStyle(fontSize: 13.5),
+        ),
+      ),
+    ],
+  ),
+);
 
 /// A compact stat tile: an indigo icon square, a small uppercase label, and a
 /// bold value (or a green "Good" pill for the health readout).
-Widget statTile(IconData icon, String label, String value,
-    {bool pill = false}) {
+Widget statTile(
+  IconData icon,
+  String label,
+  String value, {
+  bool pill = false,
+}) {
   return Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
     decoration: BoxDecoration(
@@ -117,8 +119,10 @@ Widget statTile(IconData icon, String label, String value,
               const SizedBox(height: 1),
               if (pill)
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: TalonColors.ok.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(999),
@@ -191,31 +195,37 @@ Widget settingsSwitchRow(
   bool value,
   ValueChanged<bool>? onChanged,
 ) {
+  // A disabled row dims as a whole — title and subtitle too, not just the
+  // switch — so it's obvious at a glance that it can't be changed right now.
   return Padding(
     padding: const EdgeInsets.symmetric(vertical: 7),
     child: Row(
       children: [
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
+          child: AnimatedOpacity(
+            opacity: onChanged == null ? 0.5 : 1,
+            duration: const Duration(milliseconds: 150),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.35,
-                  color: TalonColors.textFaint,
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: TalonColors.textFaint,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         const SizedBox(width: 12),
@@ -303,27 +313,30 @@ class SettingsSkeleton extends StatelessWidget {
         ),
       );
       if (reduceMotion) return box;
-      return box.animate(onPlay: (c) => c.repeat()).shimmer(
+      return box
+          .animate(onPlay: (c) => c.repeat())
+          .shimmer(
             duration: 1200.ms,
             color: Colors.white.withValues(alpha: 0.08),
-          );
+          )
+          .wrapAmbient();
     }
 
     Widget card(int rows) => Glass(
-          radius: TalonRadius.md,
-          padding: const EdgeInsets.all(TalonSpace.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              bar(120, 12),
-              const SizedBox(height: TalonSpace.lg),
-              for (var i = 0; i < rows; i++) ...[
-                if (i > 0) const SizedBox(height: TalonSpace.md),
-                bar(double.infinity, 16),
-              ],
-            ],
-          ),
-        );
+      radius: TalonRadius.md,
+      padding: const EdgeInsets.all(TalonSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          bar(120, 12),
+          const SizedBox(height: TalonSpace.lg),
+          for (var i = 0; i < rows; i++) ...[
+            if (i > 0) const SizedBox(height: TalonSpace.md),
+            bar(double.infinity, 16),
+          ],
+        ],
+      ),
+    );
 
     return Column(
       children: [
@@ -349,10 +362,16 @@ class SettingsSkeleton extends StatelessWidget {
 /// chapter is ever constructed. Building all of them eagerly to show one would
 /// throw away the main win of this layout, and several cards are not free: the
 /// Mesh card walks the device list, the Status card formats uptime.
+///
+/// [group] clusters chapters on the settings home (one card per group) and
+/// spaces them apart in the rail. [versionFooter] ends the chapter's phone
+/// page with the version line (the desktop rail always carries it).
 class SettingsChapter {
   final String title;
   final String subtitle;
   final IconData icon;
+  final int group;
+  final bool versionFooter;
   final List<List<Widget>> Function() columns;
 
   const SettingsChapter({
@@ -360,7 +379,128 @@ class SettingsChapter {
     required this.subtitle,
     required this.icon,
     required this.columns,
+    this.group = 0,
+    this.versionFooter = false,
   });
+}
+
+/// One row on the settings home: the rail's glyph square, the chapter name,
+/// a one-line summary of its current value, and a chevron. Pushes the
+/// chapter's page.
+class SettingsNavRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String summary;
+  final VoidCallback onTap;
+  const SettingsNavRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.summary,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: TalonRadius.rMd,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+              horizontal: TalonSpace.md, vertical: 11),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: TalonColors.accent.withValues(alpha: 0.12),
+                  borderRadius: TalonRadius.rSm,
+                ),
+                child: Icon(icon, size: 18, color: TalonColors.accent),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      summary,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.3,
+                        color: TalonColors.textFaint,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.chevron_right,
+                size: 20,
+                color: TalonColors.textFaint,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A card of [SettingsNavRow]s on the settings home: the section card's
+/// surface, hairline dividers inset past the glyph.
+class SettingsNavGroup extends StatelessWidget {
+  final List<Widget> rows;
+  const SettingsNavGroup({super.key, required this.rows});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      decoration: BoxDecoration(
+        color: TalonColors.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: TalonColors.glassStroke, width: 1),
+        boxShadow: TalonShadows.soft,
+      ),
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final (i, row) in rows.indexed) ...[
+              if (i > 0)
+                Divider(
+                  height: 1,
+                  thickness: 1,
+                  indent: TalonSpace.md + 34 + 14,
+                  endIndent: TalonSpace.md,
+                  color: TalonColors.glassStroke,
+                ),
+              row,
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// A rail entry, wearing the sidebar chat tile's hover / selected / pressed
@@ -404,8 +544,8 @@ class _RailTileState extends State<RailTile> {
     final border = selected
         ? TalonColors.accent.withValues(alpha: 0.35)
         : (_focused
-            ? TalonColors.accent.withValues(alpha: 0.55)
-            : Colors.transparent);
+              ? TalonColors.accent.withValues(alpha: 0.55)
+              : Colors.transparent);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: TalonSpace.xxs),
       child: Semantics(
@@ -454,8 +594,9 @@ class _RailTileState extends State<RailTile> {
                     child: Icon(
                       widget.icon,
                       size: 18,
-                      color:
-                          selected ? TalonColors.accent : TalonColors.textDim,
+                      color: selected
+                          ? TalonColors.accent
+                          : TalonColors.textDim,
                     ),
                   ),
                   const SizedBox(width: TalonSpace.md - 2),
@@ -469,8 +610,9 @@ class _RailTileState extends State<RailTile> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 13.5,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w600,
+                            fontWeight: selected
+                                ? FontWeight.w700
+                                : FontWeight.w600,
                             color: selected
                                 ? TalonColors.text
                                 : TalonColors.textDim,
@@ -479,7 +621,7 @@ class _RailTileState extends State<RailTile> {
                         const SizedBox(height: TalonSpace.xxs),
                         Text(
                           widget.subtitle,
-                          maxLines: 2,
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11.5,
@@ -530,14 +672,18 @@ class SettingsSection extends StatelessWidget {
   }
 }
 
-/// A full-width action row for daemon controls (restart / dream): icon,
-/// label + subtitle, and a trailing spinner while the action is in flight.
+/// A full-width action row (restart / dream / logs / sub-screens): icon,
+/// title + dim description, and a trailing chevron — or a spinner while the
+/// action is in flight. Flat, like a switch row, so every row in Settings
+/// shares one anatomy instead of some being boxed buttons. [destructive]
+/// tints the icon and title red; those rows go last in their section.
 class ControlButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final String subtitle;
   final bool pending;
   final VoidCallback? onTap;
+  final bool destructive;
   const ControlButton({
     super.key,
     required this.icon,
@@ -545,34 +691,33 @@ class ControlButton extends StatelessWidget {
     required this.subtitle,
     required this.pending,
     required this.onTap,
+    this.destructive = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final tint = destructive ? TalonColors.bad : null;
     return Semantics(
       button: true,
       child: InkWell(
         onTap: onTap,
         borderRadius: TalonRadius.rMd,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          decoration: BoxDecoration(
-            borderRadius: TalonRadius.rMd,
-            border: Border.all(color: TalonColors.glassStroke),
-          ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 9),
           child: Row(
             children: [
-              Icon(icon, size: 20, color: TalonColors.textDim),
-              const SizedBox(width: 12),
+              Icon(icon, size: 20, color: tint ?? TalonColors.textDim),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       label,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
+                        color: tint,
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -587,6 +732,7 @@ class ControlButton extends StatelessWidget {
                   ],
                 ),
               ),
+              const SizedBox(width: 12),
               if (pending)
                 const SizedBox(
                   width: 16,
@@ -594,8 +740,11 @@ class ControlButton extends StatelessWidget {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               else
-                Icon(Icons.chevron_right,
-                    size: 18, color: TalonColors.textFaint),
+                Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: TalonColors.textFaint,
+                ),
             ],
           ),
         ),

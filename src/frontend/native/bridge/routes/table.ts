@@ -1,4 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type {
+  BridgePrincipal,
+  BridgeRouteAuth,
+  BridgeScope,
+} from "../credentials/principal.js";
+
+export type { BridgeRouteAuth };
 
 /**
  * ok: request carries the right token (or none is required).
@@ -7,22 +14,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
  */
 export type AuthState = "ok" | "anonymous" | "bad";
 
-/**
- * "public": served without a bearer token. Every entry is gated some other
- * way — a single-use grant minted by the daemon, or (for /health) by
- * answering only what pairing needs until a token is presented.
- * "bearer": the request must carry the bridge token.
- */
-export type BridgeRouteAuth = "public" | "bearer";
+/** Any authenticated caller — the route itself decides what it may see. */
+const ANY: readonly BridgeScope[] = ["device", "client", "operator"];
 
 /**
  * The bridge's routes and the auth tier of each — declared once, here,
  * rather than implied by where an `if` sits relative to the auth check.
  * The security posture of the transport is this table: a route is
- * pre-auth only by appearing in it as "public", and the route test walks
- * every entry and proves the tier holds on the wire. Adding a route
- * without an entry is a type error (`buildRoutes` is exhaustive over
- * these keys); adding one as "public" is a diff a reviewer sees.
+ * pre-auth only by appearing in it as "public", reachable by a per-device
+ * credential only through the scope written next to it, and the route
+ * tests walk every entry and prove each tier holds on the wire. Adding a
+ * route without an entry is a type error (`buildRoutes` is exhaustive over
+ * these keys); widening one is a diff a reviewer sees.
  */
 export const BRIDGE_ROUTE_AUTH = {
   // Pre-auth by design. /health serves pairing data (identity, protocol,
@@ -34,56 +37,95 @@ export const BRIDGE_ROUTE_AUTH = {
   "GET /pair": "public",
   "GET /node/install": "public",
   "GET /node/binary": "public",
+  // Secret drop: a browser with no credential pastes one value, once. GET
+  // shows the form without spending the grant (link previews fetch it);
+  // POST spends it, and its body is read only after the grant checks out.
+  "GET /secret": "public",
+  "POST /secret": "public",
 
-  // Everything a client can do once paired.
-  "GET /events": "bearer",
-  "GET /chats": "bearer",
-  "POST /chats": "bearer",
-  "POST /chats/rename": "bearer",
-  "POST /chats/delete": "bearer",
-  "POST /chats/reset": "bearer",
-  "POST /chats/interrupt": "bearer",
-  "POST /chats/pulse": "bearer",
-  "POST /queue": "bearer",
-  "GET /history": "bearer",
-  "GET /search": "bearer",
+  // Credential self-service. Any credential may ask who it is, and trade
+  // itself (or the shared legacy token) for a fresh per-device credential
+  // bound to ONE device id — the in-band upgrade and rotation path.
+  "GET /auth/whoami": ANY,
+  "POST /auth/upgrade": ANY,
+
+  // The event stream. A device-only credential receives only what is
+  // addressed to its own device (commands, locates) — never chat traffic.
+  "GET /events": ["device", "client"],
+
+  // The chat UI.
+  "GET /chats": "client",
+  "POST /chats": "client",
+  "POST /chats/rename": "client",
+  "POST /chats/delete": "client",
+  "POST /chats/reset": "client",
+  "POST /chats/interrupt": "client",
+  "POST /chats/pulse": "client",
+  "POST /queue": "client",
+  "GET /history": "client",
+  "GET /search": "client",
 
   // Memory — read-only. The typed memory store is readable over the
   // bridge but never writable from it: asserting and dropping stay with
   // the daemon's own write path.
-  "GET /memory": "bearer",
-  "GET /memory/why": "bearer",
+  "GET /memory": "client",
+  "GET /memory/why": "client",
 
-  "POST /send": "bearer",
-  "POST /upload": "bearer",
-  "GET /media": "bearer",
-  "GET /models": "bearer",
-  "POST /model": "bearer",
-  "GET /backends": "bearer",
-  "POST /backend": "bearer",
-  "GET /effort": "bearer",
-  "POST /effort": "bearer",
-  "GET /logs": "bearer",
-  "GET /plugins": "bearer",
-  "POST /plugins/toggle": "bearer",
-  "GET /skills": "bearer",
-  "POST /skills/toggle": "bearer",
-  "GET /config": "bearer",
-  "POST /config": "bearer",
-  "POST /control": "bearer",
+  "POST /send": "client",
+  // The slash commands /send answers itself — names and one-liners for
+  // autocomplete. Operator-only ones are listed (flagged `admin`) and
+  // refused at /send time for a credential without the scope.
+  "GET /commands": "client",
+  "POST /upload": "client",
+  "GET /media": "client",
+  "GET /models": "client",
+  "POST /model": "client",
+  "GET /backends": "client",
+  "POST /backend": "client",
+  "GET /effort": "client",
+  "POST /effort": "client",
+  // Reads of the non-secret, allowlisted settings snapshot and the
+  // extension lists are the UI's; changing any of it is the operator's.
+  "GET /plugins": "client",
+  "GET /skills": "client",
+  "GET /config": "client",
 
-  // Mesh. The one-time `transfer` token on /devices/file authorizes one
-  // direction+path, but the route still sits behind the bearer like every
-  // device route — the token is a scope, not a credential.
-  "POST /devices/register": "bearer",
-  "POST /location": "bearer",
-  "GET /devices": "bearer",
-  "POST /devices/command-result": "bearer",
-  "POST /devices/file": "bearer",
-  "GET /devices/file": "bearer",
+  // Operator. Logs carry command lines, paths and device output, so they
+  // are not a chat-UI read.
+  "GET /logs": "operator",
+  "POST /plugins/toggle": "operator",
+  "POST /skills/toggle": "operator",
+  "POST /config": "operator",
+  "POST /control": "operator",
+
+  // Mesh — a device acting as itself. Every body/query naming a device id
+  // is checked against the credential's own device (credentials/claims.ts).
+  // The one-time `transfer` token on /devices/file authorizes one
+  // direction+path for one device; the credential still has to be that
+  // device's.
+  "POST /devices/register": "device",
+  "POST /location": "device",
+  "POST /devices/command-result": "device",
+  "POST /devices/file": "device",
+  "GET /devices/file": "device",
+  // The fleet view (every device and its last location) is the UI's.
+  "GET /devices": "client",
 } as const satisfies Record<string, BridgeRouteAuth>;
 
 export type BridgeRouteKey = keyof typeof BRIDGE_ROUTE_AUTH;
+
+/**
+ * The only routes that take the credential as a `?token=` query parameter.
+ * Everywhere else it must come as `Authorization: Bearer`. A token in a URL
+ * ends up in proxy logs, browser history and screenshots, so it is accepted
+ * only where a client can't set a header: an EventSource stream, and media
+ * handed to an image widget or an external viewer. Those are the only two
+ * places shipped companions put it; talon-node never does.
+ */
+export const QUERY_TOKEN_ROUTES: ReadonlySet<BridgeRouteKey> = new Set([
+  "GET /events",
+  "GET /media",
+]);
 
 /** What a route handler receives; `auth` is already evaluated. */
 export type RouteContext = {
@@ -91,6 +133,8 @@ export type RouteContext = {
   res: ServerResponse;
   url: URL;
   auth: AuthState;
+  /** Who is calling — null only on a public route hit without a credential. */
+  principal: BridgePrincipal | null;
 };
 
 export type RouteHandler = (ctx: RouteContext) => void | Promise<void>;

@@ -6,9 +6,11 @@ import '../models/connection.dart';
 import '../services/log.dart';
 import '../services/pair_links.dart';
 import '../state/app_state.dart';
+import 'app_lock/app_lock_gate.dart';
 import 'app_shell.dart';
 import 'connect_screen.dart';
 import 'glass.dart';
+import 'pair_confirm_dialog.dart';
 
 /// Decides between the first-run connect screen and the main app shell, and
 /// paints the global backdrop + ambient glow behind everything.
@@ -66,14 +68,39 @@ class _RootViewState extends State<RootView> with WidgetsBindingObserver {
       final config = ConnectionConfig.fromPairLink(link);
       if (config == null) {
         AppLog.warn('pair', 'ignored an unusable pairing link');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Ignored a pairing link that does not pin its bridge.',
+              ),
+            ),
+          );
+        }
         return;
       }
-      // Nothing to lose on first run — apply and get on with it. Once there
-      // IS a working connection, silently repointing the app at a different
-      // daemon is the kind of surprise that reads as a bug.
-      if (widget.state.prefs.onboarded && !await _confirm(link, config)) {
+      // A locked app shows nothing until it is unlocked — a pairing prompt
+      // included (#1051). Hold the link until the user is back in.
+      final lock = AppLockScope.peek(context);
+      if (lock != null) await lock.whenUnlocked();
+      if (!mounted) return;
+      // Any app or web page can open a talon:// link, so it never changes
+      // the connection on its own — first run included. Only an explicit
+      // "Connect" in the dialog does.
+      final replacing = widget.state.prefs.onboarded;
+      final confirmed = await PairConfirmDialog.ask(
+        context,
+        config,
+        replacing: replacing,
+        deviceControl: widget.state.prefs.meshDeviceControlOnPairing,
+      );
+      if (!confirmed) {
+        AppLog.info('pair', 'pairing link declined');
         return;
       }
+      // Device control carries over to the new bridge unless the user
+      // opted into per-pairing grants (Settings → Mesh).
+      await widget.state.prefs.resetMeshGrantsForPairing();
       await widget.state.prefs.setOnboarded(true);
       await widget.state.applyConfig(config);
       if (!mounted) return;
@@ -85,32 +112,6 @@ class _RootViewState extends State<RootView> with WidgetsBindingObserver {
     } finally {
       _checking = false;
     }
-  }
-
-  Future<bool> _confirm(String link, ConnectionConfig config) async {
-    final label = ConnectionConfig.pairLinkLabel(link);
-    final answer = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Switch connection?'),
-        content: Text(
-          'This link points Talon at ${config.host}:${config.port}'
-          '${label == null ? '' : ' ($label)'}, replacing the current '
-          'connection.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Switch'),
-          ),
-        ],
-      ),
-    );
-    return answer ?? false;
   }
 
   @override

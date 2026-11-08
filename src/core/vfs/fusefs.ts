@@ -90,11 +90,6 @@ export function namespaceFsStatus(): FuseStatus {
   return status;
 }
 
-/** Test seam — force a status without a real mount. */
-function _setNamespaceFsStatusForTesting(next: FuseStatus): void {
-  status = next;
-}
-
 /** Test seam — drive one watchdog tick synchronously (no interval wait). */
 export async function _checkNamespaceFsHealthForTesting(): Promise<void> {
   await checkNamespaceFsHealth();

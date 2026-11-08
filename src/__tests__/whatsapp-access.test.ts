@@ -20,7 +20,7 @@ import {
 } from "../frontend/whatsapp/access.js";
 import { createWhatsAppRuntime } from "../frontend/whatsapp/runtime.js";
 
-const SELF = ["353851722396", "123456789012345"];
+const SELF = ["447700900101", "123456789012345"];
 
 function groupMessage(contextInfo?: {
   mentionedJid?: string[];
@@ -42,7 +42,7 @@ function runtimeFor(whatsapp: Record<string, unknown>) {
 describe("isAddressedToSelf", () => {
   it("matches an @-mention by either of our ids, ignoring the JID suffix", () => {
     const byPhone = groupMessage({
-      mentionedJid: ["353851722396@s.whatsapp.net"],
+      mentionedJid: ["447700900101@s.whatsapp.net"],
     });
     const byLid = groupMessage({ mentionedJid: ["123456789012345@lid"] });
     expect(isAddressedToSelf(SELF, byPhone)).toBe(true);
@@ -50,7 +50,7 @@ describe("isAddressedToSelf", () => {
   });
 
   it("matches a quote of one of our messages", () => {
-    const msg = groupMessage({ participant: "353851722396@s.whatsapp.net" });
+    const msg = groupMessage({ participant: "447700900101@s.whatsapp.net" });
     expect(isAddressedToSelf(SELF, msg)).toBe(true);
   });
 
@@ -59,7 +59,7 @@ describe("isAddressedToSelf", () => {
     expect(isAddressedToSelf(SELF, other)).toBe(false);
     expect(isAddressedToSelf(SELF, groupMessage())).toBe(false);
     const self = groupMessage({
-      mentionedJid: ["353851722396@s.whatsapp.net"],
+      mentionedJid: ["447700900101@s.whatsapp.net"],
     });
     expect(isAddressedToSelf([], self)).toBe(false);
   });

@@ -13,6 +13,7 @@ import '../../services/log.dart';
 import '../../state/app_state.dart';
 import '../../theme.dart';
 import '../connect_screen.dart';
+import '../shortcuts_help.dart';
 import 'settings_widgets.dart';
 
 class StatusCard extends StatelessWidget {
@@ -314,6 +315,19 @@ class AboutCard extends StatefulWidget {
   State<AboutCard> createState() => _AboutCardState();
 }
 
+/// Commit the build came from, stamped by CI via
+/// `--dart-define=TALON_COMMIT=<sha7>`. Empty for local builds.
+const String _buildCommit = String.fromEnvironment('TALON_COMMIT');
+
+/// 'v5.20.0+520000 (e6f3cde)'. The version alone is identical for a release
+/// and for any test build cut from the same package.json, so the commit is
+/// what tells them apart.
+@visibleForTesting
+String formatAppVersion(String version, String build, String commit) {
+  final base = 'v$version+$build';
+  return commit.isEmpty ? base : '$base ($commit)';
+}
+
 class _AboutCardState extends State<AboutCard> {
   /// This app's own version, for the About card ('' until loaded).
   String _appVersion = '';
@@ -323,7 +337,8 @@ class _AboutCardState extends State<AboutCard> {
     super.initState();
     PackageInfo.fromPlatform().then((info) {
       if (mounted) {
-        setState(() => _appVersion = 'v${info.version}+${info.buildNumber}');
+        setState(() => _appVersion = formatAppVersion(
+            info.version, info.buildNumber, _buildCommit));
       }
     }).catchError((_) {});
   }
@@ -391,6 +406,90 @@ class ConnectionCard extends StatelessWidget {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Help: access to keyboard navigation shortcuts and application help.
+class HelpCard extends StatelessWidget {
+  const HelpCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return SettingsSection(
+      title: 'Help',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Keyboard navigation shortcuts and help.',
+            style: TextStyle(fontSize: 13, color: TalonColors.textDim),
+          ),
+          const SizedBox(height: 12),
+          OutlinedButton.icon(
+            onPressed: () => openShortcutsHelp(context),
+            icon: const Icon(Icons.keyboard_outlined, size: 16),
+            label: const Text('Keyboard shortcuts'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The quiet line at the very end of Settings: this app's version (and
+/// build commit) plus what it is talking to. The place people look for
+/// "which version am I on" when filing a bug.
+class VersionFooter extends StatefulWidget {
+  final AppState state;
+  const VersionFooter({super.key, required this.state});
+
+  @override
+  State<VersionFooter> createState() => _VersionFooterState();
+}
+
+class _VersionFooterState extends State<VersionFooter> {
+  String _appVersion = '';
+
+  @override
+  void initState() {
+    super.initState();
+    PackageInfo.fromPlatform().then((info) {
+      if (mounted) {
+        setState(() => _appVersion = formatAppVersion(
+            info.version, info.buildNumber, _buildCommit));
+      }
+    }).catchError((_) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.state.status;
+    final style = TextStyle(fontSize: 11.5, color: TalonColors.textFaint);
+    return Padding(
+      key: const Key('settings-version-footer'),
+      padding: const EdgeInsets.symmetric(vertical: TalonSpace.md),
+      child: Column(
+        children: [
+          Text(
+            _appVersion.isEmpty
+                ? 'Talon Companion'
+                : 'Talon Companion $_appVersion',
+            textAlign: TextAlign.center,
+            style: style.copyWith(fontWeight: FontWeight.w600),
+          ),
+          if (s.backend.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            Text(
+              '${s.botName} · ${s.backend}'
+              '${s.model.isEmpty ? '' : ' · ${s.model}'}'
+              ' · bridge protocol v$kBridgeProtocolVersion',
+              textAlign: TextAlign.center,
+              style: style,
+            ),
+          ],
         ],
       ),
     );

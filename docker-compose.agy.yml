@@ -1,0 +1,37 @@
+# Antigravity (`backend: "agy"`) add-on for the root docker-compose.yml.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.agy.yml up -d --build
+#
+# The image already carries everything agy shells out to (git, ripgrep);
+# this file adds the two things only the host can provide:
+#
+#   1. The `agy` binary. There is no npm package for it. Either bind-mount
+#      the host's (below; set AGY_BINARY_HOST if it isn't at
+#      /usr/local/bin/agy), or bake it into the image at build time with
+#      AGY_DOWNLOAD_URL + AGY_SHA256 and delete the binary mount.
+#   2. Optionally the host's ~/.gemini — the OAuth sign-in cache AND the
+#      shared MCP config Talon writes into (it otherwise lives in the data
+#      root's .gemini/). agy has no API key: sign in once interactively (see
+#      docs/docker.md), and the cached refresh token keeps working headless.
+#
+# Then set "backend": "agy" in ~/.talon/config.json (or switch per chat).
+
+services:
+  talon:
+    build:
+      args:
+        # Leave empty to rely on the bind mount below.
+        AGY_DOWNLOAD_URL: ${AGY_DOWNLOAD_URL:-}
+        AGY_SHA256: ${AGY_SHA256:-}
+    volumes:
+      # Optional: share the HOST's ~/.gemini (reuse a sign-in you already
+      # have there). Without this line agy keeps its sign-in in the data
+      # root's .gemini/, like every other backend. Read-write on purpose:
+      # agy refreshes its access token in place and Talon rewrites
+      # ~/.gemini/config/mcp_config.json per chat.
+      - ${HOME}/.gemini:/data/.gemini
+      # The host's agy binary. Remove this line if you baked it in with
+      # AGY_DOWNLOAD_URL — a mount here would shadow the baked copy.
+      - ${AGY_BINARY_HOST:-/usr/local/bin/agy}:/usr/local/bin/agy:ro
+    # agy keeps one warm Go process (a few hundred MB) per active chat.
+    mem_limit: 2g

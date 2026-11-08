@@ -7,7 +7,7 @@
  */
 
 import pc from "picocolors";
-import { formatUsd } from "../presentation/format.js";
+import { formatTokenCount, formatUsd } from "../presentation/format.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,22 +68,6 @@ export function wrap(text: string, indent: number, maxWidth: number): string {
       return wrapped.join("\n");
     })
     .join("\n");
-}
-
-export function formatTimeAgo(ts: number): string {
-  const sec = Math.floor((Date.now() - ts) / 1000);
-  if (sec < 60) return "just now";
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  return `${Math.floor(hr / 24)}d ago`;
-}
-
-function fmtTok(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 export function extractToolDetail(
@@ -189,7 +173,7 @@ export function createRenderer(cols?: number, displayName = "Talon"): Renderer {
     if (info.sessionName) p.push(`"${info.sessionName}"`);
     p.push(
       `${info.turns} turn${info.turns !== 1 ? "s" : ""}`,
-      `${fmtTok(info.inputTokens + info.outputTokens)} tok`,
+      `${formatTokenCount(info.inputTokens + info.outputTokens)} tok`,
     );
     if (typeof info.cacheHitPct === "number") {
       p.push(`${info.cacheHitPct}% cache`);

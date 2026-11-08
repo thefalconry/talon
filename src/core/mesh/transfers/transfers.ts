@@ -12,15 +12,21 @@
  *     daemon → device (command): upload_file { token, path }
  *     device → daemon (HTTP):    POST /devices/file?transfer=token  (raw body)
  *     bridge route:              acceptUpload(token, stream) → tmp+rename
- *     device → daemon (command result): ok + bytes — the command round trip
- *     doubles as the completion signal.
+ *     device → daemon (command result): ok + bytes + sha256 — the command
+ *     round trip doubles as the completion signal, and the daemon checks the
+ *     device's digest against the one it computed while receiving.
  *
  *   push (daemon → device):
  *     daemon: token = createPush(deviceId, sourcePath)
- *     daemon → device (command): download_file { token, path }
+ *     daemon → device (command): download_file { token, path, sha256 }
  *     device → daemon (HTTP):    GET /devices/file?transfer=token
  *     bridge route:              openDownload(token) → stream the source
- *     device writes to its path, answers the command with ok + bytes.
+ *     device hashes while writing its temp file, refuses to rename it into
+ *     place on a digest mismatch, and answers with ok + bytes + sha256.
+ *
+ * The digests are additive: a device build that predates them ignores the
+ * push param and omits the pull result key, and the daemon then skips the
+ * check.
  *
  * Tokens are single-use, bound to one device + one path, and expire unused.
  * The registry never trusts the HTTP caller with a path — the token IS the
@@ -30,7 +36,7 @@
  * itself must name the device the token was minted for (see take()).
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -39,6 +45,10 @@ import type { Readable } from "node:stream";
 
 /** Unused tokens die after this long (transfer not started). */
 const TOKEN_TTL_MS = 10 * 60 * 1000;
+
+/** What a finished pull delivered: its size and the SHA-256 (hex) of the
+ *  bytes as they arrived, hashed in stream. */
+export type PullReceipt = { bytes: number; sha256: string };
 
 type Transfer = {
   token: string;
@@ -49,28 +59,31 @@ type Transfer = {
   createdAt: number;
   /** Set once the HTTP leg has started (single-use latch). */
   consumed: boolean;
-  /** pull only — resolved by acceptUpload with the byte count. */
+  /** pull only — resolved by acceptUpload with what arrived. */
   uploadDone?: {
-    promise: Promise<number>;
-    resolve: (bytes: number) => void;
+    promise: Promise<PullReceipt>;
+    resolve: (receipt: PullReceipt) => void;
     reject: (err: Error) => void;
   };
+  /** pull only — tears down the upload once its HTTP leg is streaming. */
+  abort?: AbortController;
 };
 
 export class TransferStore {
   private readonly transfers = new Map<string, Transfer>();
 
   /** Arrange a device→daemon transfer. Returns the token to send to the
-   *  device and a promise that resolves (bytes) when the upload lands. */
+   *  device and a promise that resolves (bytes + digest) when the upload
+   *  lands. */
   createPull(
     deviceId: string,
     destPath: string,
-  ): { token: string; done: Promise<number> } {
+  ): { token: string; done: Promise<PullReceipt> } {
     this.sweep();
     const token = randomBytes(24).toString("base64url");
-    let resolve!: (bytes: number) => void;
+    let resolve!: (receipt: PullReceipt) => void;
     let reject!: (err: Error) => void;
-    const promise = new Promise<number>((res, rej) => {
+    const promise = new Promise<PullReceipt>((res, rej) => {
       resolve = res;
       reject = rej;
     });
@@ -104,19 +117,27 @@ export class TransferStore {
     return { token };
   }
 
-  /** Drop a token (transfer arrangement failed before the HTTP leg). */
+  /**
+   * Drop a token — the arrangement failed, or the daemon gave up waiting.
+   * An upload already streaming is aborted too: otherwise a peer that
+   * stalls mid-body holds the request (and its temp file) open until the
+   * bridge's whole-request deadline, and one that finishes late renames a
+   * file into place after the caller was told the pull failed.
+   */
   cancel(token: string): void {
     const t = this.transfers.get(token);
     if (t?.uploadDone && !t.consumed) {
       t.uploadDone.reject(new Error("transfer cancelled"));
     }
+    t?.abort?.abort(new Error("transfer cancelled"));
     this.transfers.delete(token);
   }
 
   /**
    * Bridge route: a device is streaming a pull's file body up. Writes to a
    * temp file and renames into place, so a dropped connection can't leave a
-   * half-written destination. Resolves the pull's `done` promise.
+   * half-written destination. Resolves the pull's `done` promise with the
+   * SHA-256 of the bytes, hashed as they stream through (no second read).
    *
    * `fromDeviceId` is the device the HTTP caller says it is (see take()).
    */
@@ -129,14 +150,23 @@ export class TransferStore {
     if (!t)
       return { ok: false, error: "Unknown or already-used transfer token." };
     const tmp = `${t.localPath}.part-${randomBytes(4).toString("hex")}`;
+    const abort = new AbortController();
+    t.abort = abort;
     try {
       await mkdir(dirname(t.localPath), { recursive: true });
       let bytes = 0;
-      body.on("data", (d: Buffer) => (bytes += d.length));
-      await pipeline(body, createWriteStream(tmp, { mode: 0o600 }));
+      const hash = createHash("sha256");
+      body.on("data", (d: Buffer) => {
+        bytes += d.length;
+        hash.update(d);
+      });
+      await pipeline(body, createWriteStream(tmp, { mode: 0o600 }), {
+        signal: abort.signal,
+      });
+      abort.signal.throwIfAborted();
       await rename(tmp, t.localPath);
       this.transfers.delete(token);
-      t.uploadDone?.resolve(bytes);
+      t.uploadDone?.resolve({ bytes, sha256: hash.digest("hex") });
       return { ok: true, bytes };
     } catch (err) {
       await rm(tmp, { force: true }).catch(() => {});
@@ -162,7 +192,6 @@ export class TransferStore {
       if (!s.isFile()) throw new Error("not a file");
       return { path: t.localPath, size: s.size };
     } catch {
-      this.transfers.delete(token);
       return null;
     } finally {
       // Single-use either way; the device retries by re-arranging.

@@ -6,11 +6,17 @@
  *   - `health`     — stats / errors / logs / daily
  *   - `background` — cron / pulse
  * Anything else (including no subcommand) gets the usage listing.
+ * chats / daily / errors / logs answer only in the admin's DM.
  */
 
 import type { Bot, Context } from "grammy";
 import type { TalonConfig } from "../../core/config/index.js";
-import { replyActiveChats, broadcast, killSession } from "./admin/sessions.js";
+import {
+  replyActiveChats,
+  broadcast,
+  killSession,
+  type AdminGateway,
+} from "./admin/sessions.js";
 import {
   replyStats,
   replyRecentErrors,
@@ -24,6 +30,7 @@ type AdminSubcommand = (
   rest: string[],
   bot: Bot,
   config: TalonConfig,
+  gateway?: AdminGateway,
 ) => Promise<void>;
 
 // Null-prototype so `/admin constructor` can't resolve an inherited
@@ -42,6 +49,19 @@ const ADMIN_SUBCOMMANDS: Record<string, AdminSubcommand> = Object.assign(
     daily: replyDailyLog,
   } satisfies Record<string, AdminSubcommand>,
 );
+
+/**
+ * Subcommands whose output is operator-only material — log lines, the
+ * day's interactions from every chat, the list of chats, raw errors.
+ * The admin is authorized everywhere, but running these in a group would
+ * post that material to every member, so they answer only in a DM.
+ */
+const DM_ONLY_SUBCOMMANDS: ReadonlySet<string> = new Set([
+  "chats",
+  "daily",
+  "errors",
+  "logs",
+]);
 
 async function replyUsage(ctx: Context): Promise<void> {
   await ctx.reply(
@@ -66,6 +86,7 @@ export async function handleAdminCommand(
   ctx: Context,
   bot: Bot,
   config: TalonConfig,
+  gateway?: AdminGateway,
 ): Promise<void> {
   const args = ((ctx.match as string) ?? "").trim();
   const [subcommand, ...rest] = args.split(/\s+/);
@@ -74,5 +95,11 @@ export async function handleAdminCommand(
     await replyUsage(ctx);
     return;
   }
-  await run(ctx, rest, bot, config);
+  if (DM_ONLY_SUBCOMMANDS.has(subcommand) && ctx.chat?.type !== "private") {
+    await ctx.reply(
+      `/admin ${subcommand} only works in a private chat with the bot — it would show operator data to everyone here.`,
+    );
+    return;
+  }
+  await run(ctx, rest, bot, config, gateway);
 }

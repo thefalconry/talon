@@ -170,6 +170,17 @@ export function getBackendIdForChat(chatId: string): string {
   return bindings.get(chatHolder(chatId)) ?? getBackendIdForRole("chat");
 }
 
+/** Chats whose per-chat override is bound to backend `id` right now. */
+export function chatsBoundTo(id: string): string[] {
+  const prefix = chatHolder("");
+  const chats: string[] = [];
+  for (const [holder, bound] of bindings) {
+    if (bound === id && holder.startsWith(prefix))
+      chats.push(holder.slice(prefix.length));
+  }
+  return chats;
+}
+
 /** Whether this chat has an override pinning a non-default backend. */
 export function hasChatBackendOverride(chatId: string): boolean {
   return bindings.has(chatHolder(chatId));

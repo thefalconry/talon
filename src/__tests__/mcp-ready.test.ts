@@ -60,6 +60,15 @@ describe("waitForMcpServersReady", () => {
     expect(Date.now() - start).toBeLessThan(2_000);
   });
 
+  it("gives up after the timeout even when a status call never answers", async () => {
+    // A wedged CLI never answers the control request; the deadline must
+    // bound the wait itself, not just the gap between polls.
+    const qi = { mcpServerStatus: vi.fn(() => new Promise<never>(() => {})) };
+    const start = Date.now();
+    await waitForMcpServersReady(qi as never, ["stuck"], 30, 5);
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+
   it("does not throw when mcpServerStatus returns a non-array (unsupported shape)", async () => {
     const qi = {
       mcpServerStatus: vi.fn(async () => undefined as never),

@@ -66,15 +66,17 @@ export async function handleMessage(
   if (msg.attachments.size > 0) {
     for (const att of msg.attachments.values()) {
       try {
-        const savedPath = await downloadAttachment(att, config.workspace);
+        const downloadedPath = await downloadAttachment(att, config.workspace);
         const cls = classifyAttachment(att);
-        setMessageFilePath(chatId, numericMessageId, savedPath);
-        addMedia({
+        setMessageFilePath(chatId, numericMessageId, downloadedPath);
+        // addMedia may dedupe onto an existing identical file and delete
+        // the fresh download — prompt with the path it resolves to.
+        const savedPath = await addMedia({
           chatId,
           msgId: numericMessageId,
           senderName: sender,
           type: cls.type,
-          filePath: savedPath,
+          filePath: downloadedPath,
           caption: cleanedContent || undefined,
           timestamp: Date.now(),
         });

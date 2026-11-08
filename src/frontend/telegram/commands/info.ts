@@ -16,7 +16,50 @@ import { getLoadedPlugins } from "../../../core/plugin/index.js";
 import { getMeshService } from "../../../core/mesh/index.js";
 import type { MeshPingResult } from "../../../core/mesh/devices/service.js";
 
-export function registerInfoCommands(bot: Bot): void {
+/**
+ * `/ping` — Bot API round trip, plus live bridge and userbot state. The
+ * reply landing at all is the Bot API check; its round trip is the
+ * latency. The Bridge field is omitted when no health source is wired.
+ */
+function registerPingCommand(
+  bot: Bot,
+  bridgeListening: (() => boolean) | undefined,
+): void {
+  bot.command("ping", async (ctx) => {
+    const start = Date.now();
+    const sent = await ctx.reply("...");
+    const latency = Date.now() - start;
+
+    const userbotOk = isUserClientReady();
+    const uptime = formatDuration(process.uptime() * 1000);
+
+    const statusLine = [
+      ...(bridgeListening ? [`Bridge: ${bridgeListening() ? "✓" : "✗"}`] : []),
+      `Userbot: ${userbotOk ? "✓" : "✗"}`,
+      `Uptime: ${uptime}`,
+    ].join(" | ");
+
+    try {
+      await bot.api.editMessageText(
+        ctx.chat.id,
+        sent.message_id,
+        `Pong! ${latency}ms\n${statusLine}`,
+      );
+    } catch {
+      // ignore edit failure
+    }
+  });
+}
+
+export type InfoCommandDeps = {
+  /** Tool-bridge health; the Bridge field is omitted when absent. */
+  bridgeListening?: () => boolean;
+};
+
+export function registerInfoCommands(
+  bot: Bot,
+  { bridgeListening }: InfoCommandDeps = {},
+): void {
   bot.command("start", (ctx) =>
     ctx.reply(
       [
@@ -87,31 +130,7 @@ export function registerInfoCommands(bot: Bot): void {
     ),
   );
 
-  bot.command("ping", async (ctx) => {
-    const start = Date.now();
-    const sent = await ctx.reply("...");
-    const latency = Date.now() - start;
-
-    const bridgeOk = true;
-    const userbotOk = isUserClientReady();
-    const uptime = formatDuration(process.uptime() * 1000);
-
-    const statusLine = [
-      `Bridge: ${bridgeOk ? "✓" : "✗"}`,
-      `Userbot: ${userbotOk ? "✓" : "✗"}`,
-      `Uptime: ${uptime}`,
-    ].join(" | ");
-
-    try {
-      await bot.api.editMessageText(
-        ctx.chat.id,
-        sent.message_id,
-        `Pong! ${latency}ms\n${statusLine}`,
-      );
-    } catch {
-      // ignore edit failure
-    }
-  });
+  registerPingCommand(bot, bridgeListening);
 
   /** True only in a 1:1 chat with the bot — never a group or channel. */
   const isPrivate = (ctx: Context): boolean => ctx.chat?.type === "private";

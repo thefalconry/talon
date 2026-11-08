@@ -109,6 +109,99 @@ describe("buildSdkOptions", () => {
     expect(options.model).toBe("sonnet[1m]");
   });
 
+  it("the default account inherits the daemon's environment", async () => {
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-default-account");
+    expect(options.env).toBeUndefined();
+  });
+
+  it("an extra account's spawn gets its CLAUDE_CONFIG_DIR; the daemon env is untouched", async () => {
+    const before = process.env.CLAUDE_CONFIG_DIR;
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions(
+      "chat-account-2",
+      undefined,
+      undefined,
+      undefined,
+      {
+        backendId: "claude-2",
+        label: "Claude (account 2)",
+        configDir: "/srv/talon-test/accounts/claude-2",
+      },
+    );
+    expect(options.env?.CLAUDE_CONFIG_DIR).toBe(
+      "/srv/talon-test/accounts/claude-2",
+    );
+    // Starts from the daemon's env (the SDK replaces, not merges, `env`).
+    expect(options.env?.PATH).toBe(process.env.PATH);
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(before);
+  });
+
+  it("pins transcript retention so the CLI's sweep never deletes chats", async () => {
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-retention");
+
+    expect(options.settings).toEqual({ cleanupPeriodDays: 100_000 });
+  });
+
+  describe("Claude Code's own sub-agent tool", () => {
+    const baseConfig = {
+      model: "claude-sonnet-4-6",
+      frontend: "terminal",
+      systemPrompt: "test prompt",
+      workspace: "/tmp/workspace",
+    };
+
+    it("is withheld and explicitly disallowed by default", async () => {
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-default");
+      expect(options.disallowedTools).toEqual(["Agent", "Task"]);
+      expect(options.tools).not.toContain("Agent");
+      expect(options.tools).not.toContain("Task");
+      // The rest of the chat whitelist is untouched.
+      expect(options.tools).toEqual(
+        expect.arrayContaining(["Bash", "Read", "Skill"]),
+      );
+    });
+
+    it("blocks only the built-in names, never an MCP tool like spawn_agent", async () => {
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-mcp");
+      for (const name of options.disallowedTools ?? []) {
+        expect(name).not.toMatch(/^mcp__|spawn_agent/);
+      }
+    });
+
+    it("is offered again with allowNativeSubagents: true", async () => {
+      mockGetConfig.mockReturnValue({
+        ...baseConfig,
+        allowNativeSubagents: true,
+      });
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-opt-in");
+      expect(options.disallowedTools).toBeUndefined();
+      expect(options.tools).toContain("Agent");
+    });
+
+    it("stays off under nativeTools even when opted in", async () => {
+      mockGetConfig.mockReturnValue({
+        ...baseConfig,
+        nativeTools: true,
+        allowNativeSubagents: true,
+      });
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-native");
+      expect(options.tools).not.toContain("Agent");
+    });
+  });
+
   describe("systemPrompt cache boundary", () => {
     it("falls back to the plain string when config has no parts", async () => {
       const { buildSdkOptions } =
@@ -772,10 +865,13 @@ describe("buildMcpServers (heartbeat-tier paths)", () => {
     mockGetBridgePort.mockReturnValue(31337);
     const { buildMcpServers } =
       await import("../backend/claude-sdk/options.js");
-    const servers = buildMcpServers("352042062");
+    const servers = buildMcpServers("424242420");
     expect(servers["telegram-tools"]).toEqual({
       type: "http",
-      url: "http://127.0.0.1:31337/mcp/talon/telegram/352042062",
+      url: "http://127.0.0.1:31337/mcp/talon/telegram/424242420",
+      // A reference the CLI expands from its env — the token itself never
+      // rides the CLI's command line.
+      headers: { Authorization: "Bearer ${TALON_GATEWAY_TOKEN}" },
       alwaysLoad: true,
       // Sits above the bridge's 1h transfer budget so the bridge's
       // descriptive timeout error fires before the SDK's generic one.
@@ -828,5 +924,56 @@ describe("buildMcpServers (heartbeat-tier paths)", () => {
     const { buildMcpServers } =
       await import("../backend/claude-sdk/options.js");
     expect(Object.keys(buildMcpServers("heartbeat"))).toEqual(["brave-search"]);
+  });
+});
+
+describe("buildSdkOptions — guest turn scope", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockGetSession.mockReturnValue({ sessionId: null });
+    mockGetChatSettings.mockReturnValue({});
+    mockGetPluginMcpServers.mockReturnValue({
+      "email-tools": { command: "x" },
+      "extras-tools": { command: "x" },
+      "ssh-tools": { command: "x" },
+    });
+    mockGetConfig.mockReturnValue({
+      model: "claude-sonnet-4-6",
+      frontend: "telegram",
+      systemPrompt: "test prompt",
+      workspace: "/tmp/workspace",
+      nativeTools: true,
+    });
+    mockGetBridgePort.mockReturnValue(19876);
+  });
+
+  it("drops SDK built-ins and non-guest plugins for a guest turn", async () => {
+    const { initGuestDmScope, enterTurnScope } =
+      await import("../core/mcp-hub/guest-scope.js");
+    initGuestDmScope({ enabled: true }, 111);
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const release = enterTurnScope("999", "guest");
+    const { options } = buildSdkOptions("999");
+    release();
+    expect(options.tools).toEqual([]);
+    const servers = Object.keys(options.mcpServers ?? {});
+    expect(servers).toContain("extras-tools");
+    expect(servers).not.toContain("email-tools");
+    expect(servers).not.toContain("ssh-tools");
+  });
+
+  it("keeps everything for an operator turn", async () => {
+    const { initGuestDmScope, enterTurnScope } =
+      await import("../core/mcp-hub/guest-scope.js");
+    initGuestDmScope({ enabled: true }, 111);
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const release = enterTurnScope("-100123", "operator");
+    const { options } = buildSdkOptions("-100123");
+    release();
+    expect((options.tools as string[]).length).toBeGreaterThan(0);
+    expect(Object.keys(options.mcpServers ?? {})).toContain("email-tools");
   });
 });

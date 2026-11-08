@@ -93,10 +93,10 @@ describe("isCronDue — window semantics", () => {
     expect(due).toBe(false);
   });
 
-  it("honors timezones — the Dublin yearly one-shot regression case", () => {
-    // "0 9 13 7 *" Europe/Dublin fires 2026-07-13T08:00:00Z. A tick pair
+  it("honors timezones — the London yearly one-shot regression case", () => {
+    // "0 9 13 7 *" Europe/London fires 2026-07-13T08:00:00Z. A tick pair
     // spanning that instant must catch it.
-    const job = makeJob({ schedule: "0 9 13 7 *", timezone: "Europe/Dublin" });
+    const job = makeJob({ schedule: "0 9 13 7 *", timezone: "Europe/London" });
     const windowStart = Date.UTC(2026, 6, 13, 7, 59, 30);
     const now = new Date(Date.UTC(2026, 6, 13, 8, 1, 10));
     expect(isCronDue(job, now, windowStart)).toBe(true);

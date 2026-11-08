@@ -1,12 +1,16 @@
 import 'dart:io' show Platform;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../models/connection.dart';
+import '../services/bridge_client.dart' show CertificateProbe;
+import '../services/log.dart';
 import '../state/app_state.dart';
 import '../theme.dart';
 import 'brand.dart';
+import 'certificate_confirm_dialog.dart';
 import 'glass.dart';
 
 /// First-run onboarding and the Settings page for the connection profile.
@@ -28,13 +32,27 @@ class _ConnectScreenState extends State<ConnectScreen> {
   late final TextEditingController _host;
   late final TextEditingController _port;
   late final TextEditingController _token;
+  late final TextEditingController _localUrl;
   bool _tls = false;
+
+  /// Imported client certificate (.p12/.pfx as base64) and its password,
+  /// for servers behind a reverse proxy that demands one.
+  String? _clientP12;
+  String? _clientP12Password;
 
   /// Inline validation messages for the remote fields. Set only by [_connect];
   /// cleared as soon as the offending field is edited, so the error never
   /// outlives the mistake.
   String? _hostError;
   String? _portError;
+
+  /// The profile from the last pasted pairing link: its fingerprint pins
+  /// the bridge it names, so connecting to that same address needs no
+  /// first-use confirmation.
+  ConnectionConfig? _pairLink;
+
+  /// Looking at the bridge's certificate before the token is sent.
+  bool _probing = false;
 
   bool get _isDesktop {
     try {
@@ -50,16 +68,27 @@ class _ConnectScreenState extends State<ConnectScreen> {
     final c = widget.state.config;
     _remote = !c.isLoopback || !_isDesktop;
     _tls = c.tls;
+    _clientP12 = c.clientP12;
+    _clientP12Password = c.clientP12Password;
     _host = TextEditingController(text: c.isLoopback ? '' : c.host);
     _port = TextEditingController(text: c.port.toString());
     _token = TextEditingController(text: c.token ?? '');
+    _localUrl = TextEditingController(text: c.localUrl ?? '');
+    // The plain-HTTP warning follows what is typed.
+    _host.addListener(_rebuild);
+  }
+
+  void _rebuild() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _host.removeListener(_rebuild);
     _host.dispose();
     _port.dispose();
     _token.dispose();
+    _localUrl.dispose();
     super.dispose();
   }
 
@@ -129,17 +158,99 @@ class _ConnectScreenState extends State<ConnectScreen> {
       port = 19880;
     }
 
+    final keepCert = _remote && tls && _clientP12 != null;
+    final localUrl = _localUrl.text.trim();
     final config = ConnectionConfig(
       host: host,
       port: port,
       token: _remote && token.isNotEmpty ? token : null,
       tls: tls,
+      clientP12: keepCert ? _clientP12 : null,
+      clientP12Password: keepCert ? _clientP12Password : null,
+      localUrl: _remote && localUrl.isNotEmpty ? localUrl : null,
       manageLocalDaemon: false,
       localAutoDiscover: !_remote && _isDesktop,
     );
+    final confirmed = await _confirmCertificate(config);
+    if (confirmed == null || !mounted) return;
     await widget.state.prefs.setOnboarded(true);
-    await widget.state.applyConfig(config);
+    await widget.state.applyConfig(confirmed);
     if (mounted && !widget.firstRun) Navigator.of(context).maybePop();
+  }
+
+  /// Trust on first use, confirmed: before a hand-typed TLS bridge that
+  /// nothing has pinned gets the token, look at the certificate it presents
+  /// (no token sent) and let the user compare the fingerprint. Returns the
+  /// profile to apply, pinned to what the user accepted, or null when they
+  /// cancelled.
+  ///
+  /// Skipped when the pin is already known: a pasted pairing link for the
+  /// same address, or the certificate this profile already pinned. A
+  /// certificate the platform already trusts (a CA-backed reverse proxy)
+  /// needs no pin and no question.
+  Future<ConnectionConfig?> _confirmCertificate(ConnectionConfig config) async {
+    // With a LAN address the pin belongs to the bridge that address reaches.
+    final target = config.localEndpoint() ?? config;
+    if (!_remote || !target.tls) return config;
+    final paired = _pairPinFor(target);
+    if (paired != null) return config.copyWith(fingerprint: paired);
+
+    setState(() => _probing = true);
+    final CertificateProbe probe;
+    try {
+      probe = await widget.state.probeCertificate(target);
+    } finally {
+      if (mounted) setState(() => _probing = false);
+    }
+    if (!mounted) return null;
+    final seen = probe.fingerprint;
+    if (seen == null && probe.reached) return config;
+    final previous = _savedPinFor(target);
+    // The pin already held for this address stands: the certificate matches
+    // it, or nothing answered (the pin is then enforced on connect).
+    if (previous != null && (seen == previous || seen == null)) {
+      return config.copyWith(fingerprint: previous);
+    }
+    final ok = await CertificateConfirmDialog.ask(
+      context,
+      address: target.baseUrl,
+      fingerprint: seen,
+      previous: seen == null ? null : previous,
+    );
+    if (!ok) {
+      AppLog.info('connect', 'certificate not confirmed; nothing sent');
+      return null;
+    }
+    return seen == null ? config : config.copyWith(fingerprint: seen);
+  }
+
+  /// The fingerprint a pasted pairing link pinned for [target]'s address.
+  String? _pairPinFor(ConnectionConfig target) {
+    final link = _pairLink;
+    if (link == null || !link.tls) return null;
+    return link.bridgeKey == target.bridgeKey ? link.fingerprint : null;
+  }
+
+  /// The pin the saved profile holds for [target]'s address, if any.
+  String? _savedPinFor(ConnectionConfig target) {
+    final saved = widget.state.config;
+    final pinned = saved.localEndpoint() ?? saved;
+    return pinned.tls && pinned.bridgeKey == target.bridgeKey
+        ? saved.fingerprint
+        : null;
+  }
+
+  /// A warning when the typed host is a public name or address and the
+  /// connection would be plain HTTP. Advice only: connecting still works.
+  String? get _plainHttpWarning {
+    if (!_remote) return null;
+    final parsed = ConnectionConfig.parseHostInput(_host.text);
+    final host = parsed.host.toLowerCase();
+    if (host.isEmpty || (parsed.tls ?? _tls)) return null;
+    if (ConnectionConfig.isPrivateAddress(host)) return null;
+    return 'Plain HTTP to $host: the token and your chats cross the network '
+        'unencrypted. Turn on HTTPS unless this name only resolves on your '
+        'own network.';
   }
 
   @override
@@ -195,7 +306,8 @@ class _ConnectScreenState extends State<ConnectScreen> {
                     children: [
                       _ConnectButton(
                         onTap: _connect,
-                        busy: widget.state.conn == ConnState.connecting,
+                        busy: _probing ||
+                            widget.state.conn == ConnState.connecting,
                       ),
                       if (widget.state.conn == ConnState.error &&
                           widget.state.connError != null) ...[
@@ -331,19 +443,26 @@ class _ConnectScreenState extends State<ConnectScreen> {
   Future<void> _pastePairLink() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text?.trim() ?? '';
-    final config =
-        text.isEmpty ? null : ConnectionConfig.fromPairLink(text);
+    final link = ConnectionConfig.findPairLink(text);
+    final config = link == null ? null : ConnectionConfig.fromPairLink(link);
     if (config == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('No talon://pair link on the clipboard.'),
+        SnackBar(
+          content: Text(
+            ConnectionConfig.isPairPageUrl(text)
+                ? 'That is the pairing page. Open it in a browser, then use '
+                    'its "Open in Talon" button or copy the talon://pair link '
+                    'it shows.'
+                : 'No usable talon://pair link on the clipboard.',
+          ),
         ),
       );
       return;
     }
     setState(() {
       _remote = true;
+      _pairLink = config;
       _host.text = config.host;
       _port.text = config.port.toString();
       _token.text = config.token ?? '';
@@ -351,6 +470,64 @@ class _ConnectScreenState extends State<ConnectScreen> {
       _hostError = null;
       _portError = null;
     });
+  }
+
+  /// Import a client certificate (.p12/.pfx) for a server behind a reverse
+  /// proxy that demands one — the same step Immich's app has.
+  Future<void> _importCertificate() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      withData: true,
+    );
+    final files = result?.files ?? const <PlatformFile>[];
+    final file = files.isEmpty ? null : files.first;
+    final bytes = file?.bytes;
+    if (file == null || bytes == null || !mounted) return;
+    final password = await _askPassword(file.name);
+    if (password == null || !mounted) return;
+    try {
+      final p12 = ConnectionConfig.importP12(bytes, password);
+      setState(() {
+        _clientP12 = p12;
+        _clientP12Password = password;
+        // A client certificate only means anything over TLS.
+        _tls = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Certificate imported from ${file.name}.')),
+      );
+    } on FormatException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    }
+  }
+
+  Future<String?> _askPassword(String fileName) {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Certificate password'),
+        content: TextField(
+          controller: controller,
+          obscureText: true,
+          autofocus: true,
+          decoration: InputDecoration(hintText: 'Password for $fileName'),
+          onSubmitted: (v) => Navigator.of(context).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(controller.text),
+            child: const Text('Import'),
+          ),
+        ],
+      ),
+    );
   }
 
   List<Widget> _remoteFields() => [
@@ -384,6 +561,37 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 : (_) => setState(() => _portError = null)),
         const SizedBox(height: 12),
         _field(_token, 'Token', hint: 'shared secret', obscure: true),
+        const SizedBox(height: 12),
+        _field(_localUrl, 'Local network address (optional)',
+            hint: 'https://192.168.1.20:19880 — used whenever it answers'),
+        const SizedBox(height: 4),
+        if (_clientP12 != null)
+          Row(
+            children: [
+              const Expanded(
+                child: _Hint(
+                  'Client certificate installed — presented to servers '
+                  'behind a reverse proxy that requires one.',
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() {
+                  _clientP12 = null;
+                  _clientP12Password = null;
+                }),
+                child: const Text('Remove'),
+              ),
+            ],
+          )
+        else
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: _importCertificate,
+              icon: const Icon(Icons.verified_user_outlined, size: 16),
+              label: const Text('Import certificate (.p12 / .pfx)'),
+            ),
+          ),
         const SizedBox(height: 6),
         // Wrapped in a transparent Material: the nearest ancestor is Glass's
         // DecoratedBox, which would swallow the tile's ink splash (Flutter
@@ -404,12 +612,31 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 style: TextStyle(fontSize: 12, color: TalonColors.textFaint)),
           ),
         ),
+        if (_plainHttpWarning case final warning?) ...[
+          const SizedBox(height: 4),
+          Row(
+            key: const ValueKey('plain-http-warning'),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.warning_amber_rounded,
+                  size: 16, color: TalonColors.warn),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  warning,
+                  style: TextStyle(
+                      fontSize: 12.5, color: TalonColors.warn, height: 1.5),
+                ),
+              ),
+            ],
+          ),
+        ],
         if (_pinnedFingerprint != null) ...[
           const SizedBox(height: 4),
           _Hint(
             'Pinned certificate ${_prettyFingerprint(_pinnedFingerprint!)}. '
-            'Connecting from this screen resets the pin, so the next '
-            'connect adopts the certificate the daemon presents.',
+            'Connecting from this screen checks the certificate again and '
+            'asks before trusting a different one.',
           ),
         ],
       ];

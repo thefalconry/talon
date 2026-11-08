@@ -16,22 +16,28 @@
  * `cli/index.ts`. Everything else lives under `cli/`.
  */
 
-import {
-  MCP_LAUNCH_SUBCOMMAND,
-  runSupervisor,
-} from "./core/mcp-hub/launcher.js";
-import { LUA_RUN_SUBCOMMAND, runLuaMain } from "./core/scripts/lua.js";
-
 // Hidden subcommand dispatch — must run before anything else. Talon
-// supervises MCP stdio children (`_mcp-launch`) and runs WASM-sandboxed
-// Lua trigger scripts (`_lua-run`) by re-invoking its own entrypoint
-// (see core/mcp-hub/launcher.ts). Neither call resolves; the helper process
-// exits from its own handlers.
-if (process.argv[2] === MCP_LAUNCH_SUBCOMMAND) {
+// supervises MCP stdio children (`_mcp-launch`, `_mcp-reaper`) and runs
+// WASM-sandboxed Lua trigger scripts (`_lua-run`) by re-invoking its own
+// entrypoint (see core/mcp-hub/launcher.ts). None of these calls resolves;
+// the helper process exits from its own handlers. Names are literals and
+// modules load dynamically so a helper process only evaluates its own
+// module (pinned to the exported constants by entry-dispatch.test.ts).
+const subcommand = process.argv[2];
+if (subcommand === "_mcp-launch") {
+  const { runSupervisor } = await import("./core/mcp-hub/launcher.js");
   await runSupervisor(process.argv.slice(3));
-} else if (process.argv[2] === LUA_RUN_SUBCOMMAND) {
+} else if (subcommand === "_mcp-reaper") {
+  const { runReaper } = await import("./core/mcp-hub/reaper.js");
+  await runReaper();
+} else if (subcommand === "_lua-run") {
+  const { runLuaMain } = await import("./core/scripts/lua.js");
   await runLuaMain(process.argv.slice(3));
 } else {
   const { runCli } = await import("./cli/index.js");
   await runCli();
 }
+
+// No static imports (see above) — mark the file as an ES module so
+// top-level await type-checks.
+export {};

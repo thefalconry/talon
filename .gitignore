@@ -59,7 +59,6 @@ native/talon-warden/dist/
 bin/talon-blake3.node
 native/blake3-napi/target/
 native/blake3-napi/dist/
-src/plugins/npuw/
 
 
 # talon-fusefs addon — per-arch .node library like blake3-napi: built
@@ -71,3 +70,6 @@ native/talon-fusefs/dist/
 
 # talon-node build outputs
 apps/node/build/
+
+# Pre-flight lane output (scripts/preflight.sh)
+.preflight/

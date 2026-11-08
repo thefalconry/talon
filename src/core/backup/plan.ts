@@ -21,8 +21,8 @@
 
 import { lstat, readdir, readlink } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { homedir } from "node:os";
 import type { BackupSettings } from "./types.js";
+import { userHome } from "../../util/fs-path.js";
 
 /**
  * The workspace is mostly machine-generated bulk (uploads, media, build
@@ -51,7 +51,12 @@ export const DEFAULT_BACKUP_SETTINGS = {
   intervalHours: 6,
   keepLocal: 12,
   keepRemote: 30,
+  keepDaily: 7,
+  keepWeekly: 4,
+  keepCheckpoints: 10,
   includePalace: true,
+  loginSessions: "local",
+  includeSessions: true,
   workspaceInclude: DEFAULT_WORKSPACE_INCLUDE,
   extraPaths: [] as readonly string[],
   checkpointBeforeUpdate: true,
@@ -70,12 +75,29 @@ export const HOME_INCLUDES: readonly string[] = [
   "prompts",
   "data",
   "keys",
-  "whatsapp-auth",
-  ".user-session",
+  // Operator secrets (~/.talon/secrets, the secret drop's folder). Held to
+  // the same rule as keys/ and workspace/secrets: in the snapshot, so
+  // encrypt backups (docs/backup-security.md).
+  "secrets",
+  "google",
+  "plugins",
   "mesh-devices.json",
+  "mesh-credentials.json",
   "mesh-history.json",
+  "mesh-locations.json",
   "teleport-state.json",
   "agent-workspace",
+];
+
+/**
+ * Login sessions — the WhatsApp pairing and the userbot's Telegram login
+ * (the operator's own account). They get their own part so they can stay
+ * on this machine: a stolen remote copy must not be a logged-in session.
+ * Re-linking after a disaster is a QR scan; losing the account is not.
+ */
+export const LOGIN_INCLUDES: readonly string[] = [
+  "whatsapp-auth",
+  ".user-session",
 ];
 
 /** The exclusion rules, in the words the manifest records them by. */
@@ -86,8 +108,9 @@ export const EXCLUDE_RULES: readonly string[] = [
   "*venv*/",
   "ns/ (FUSE mount — never stat()ed)",
   "backups/",
-  "data/traces/**",
+  "data/traces/** (in the sessions part)",
   "data/talon.db* (the database is added via VACUUM INTO)",
+  "plugin-src/**/{dist,build,.venv,cache,.cache,__pycache__}/",
   "*.tmp-*",
   "workspace/palace/** (its own part)",
 ];
@@ -101,7 +124,6 @@ export function isExcluded(path: string): boolean {
   const segments = path.split("/").filter(Boolean);
   if (segments.length === 0) return true;
   const first = segments[0];
-  const last = segments[segments.length - 1];
   // Anchored rules — only at the root of the archive.
   if (first === "ns" || first === "backups") return true;
   if (
@@ -118,17 +140,56 @@ export function isExcluded(path: string): boolean {
   }
   if (path === "workspace/palace" || path.startsWith("workspace/palace/"))
     return true;
-  // Rules that hold at any depth: build output, virtualenvs, half-written
-  // files from an atomic write that never landed.
-  if (
+  if (isExcludedAnywhere(path)) return true;
+  // Plugin sources: the code and its lockfiles, not what a build or an
+  // install regenerates from them.
+  if (first === "plugin-src" && segments.some((s) => PLUGIN_BUILD_DIRS.has(s)))
+    return true;
+  return false;
+}
+
+/** Build and cache output inside a plugin checkout — regenerated on install. */
+const PLUGIN_BUILD_DIRS = new Set([
+  "dist",
+  "build",
+  ".venv",
+  "cache",
+  ".cache",
+  "__pycache__",
+]);
+
+/** Archive roots that live in their own part, exempt from {@link isExcluded}. */
+const OWN_PART_ROOTS = ["workspace/palace", "data/traces"] as const;
+
+/**
+ * The exclusion rule for one include root. The palace and the traces are
+ * kept out of the state part by {@link isExcluded} because they travel in
+ * parts of their own; walking those roots (to build their part, or to
+ * restore them) must therefore not apply that same rule to them.
+ */
+export function excludeForRoot(root: string): (archivePath: string) => boolean {
+  const own = OWN_PART_ROOTS.find(
+    (prefix) => root === prefix || root.startsWith(`${prefix}/`),
+  );
+  if (!own) return isExcluded;
+  return (archivePath) =>
+    archivePath === own || archivePath.startsWith(`${own}/`)
+      ? isExcludedAnywhere(archivePath)
+      : isExcluded(archivePath);
+}
+
+/**
+ * The rules that hold at any depth: build output, virtualenvs, and
+ * half-written files from an atomic write that never landed.
+ */
+function isExcludedAnywhere(path: string): boolean {
+  const segments = path.split("/").filter(Boolean);
+  const last = segments[segments.length - 1] ?? "";
+  return (
     segments.some(
       (s) => s === "node-bin" || s === "node_modules" || s.includes("venv"),
-    )
-  ) {
-    return true;
-  }
-  if (last.includes(".tmp-")) return true;
-  return false;
+    ) || last.includes(".tmp-")
+  );
 }
 
 /**
@@ -162,9 +223,9 @@ export function workspaceRoots(patterns: readonly string[]): string[] {
 /** Expand a leading `~` and resolve against the home directory. */
 export function expandUserPath(path: string): string {
   const trimmed = path.trim();
-  if (trimmed === "~") return homedir();
-  if (trimmed.startsWith("~/")) return resolve(homedir(), trimmed.slice(2));
-  return isAbsolute(trimmed) ? resolve(trimmed) : resolve(homedir(), trimmed);
+  if (trimmed === "~") return userHome();
+  if (trimmed.startsWith("~/")) return resolve(userHome(), trimmed.slice(2));
+  return isAbsolute(trimmed) ? resolve(trimmed) : resolve(userHome(), trimmed);
 }
 
 /** One member the builder will hand to the tar writer. */

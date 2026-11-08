@@ -17,9 +17,21 @@ vi.mock("../util/log.js", () => ({
   logDebug: vi.fn(),
 }));
 
-vi.mock("write-file-atomic", () => ({
-  default: { sync: vi.fn() },
-}));
+// Real writes inside the tmp workspace (skills/scripts save through
+// write-file-atomic); anything else — config, the real ~/.talon — is a no-op.
+vi.mock("write-file-atomic", async () => {
+  const real = (await vi.importActual("write-file-atomic")) as {
+    default: { sync: (...args: unknown[]) => void };
+  };
+  return {
+    default: {
+      sync: vi.fn((path: string, ...rest: unknown[]) => {
+        if (!String(path).startsWith(workspaceDir)) return;
+        real.default.sync(path, ...rest);
+      }),
+    },
+  };
+});
 
 let workspaceDir: string;
 vi.mock("../util/paths.js", async () => {

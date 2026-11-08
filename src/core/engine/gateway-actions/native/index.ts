@@ -36,6 +36,7 @@ import { readHandlers } from "./read.js";
 import { writeHandlers } from "./write.js";
 import { searchHandlers } from "./search.js";
 import type { SharedActionHandlers } from "../types.js";
+import type { ActionResult } from "../../../types.js";
 
 export const nativeHandlers: SharedActionHandlers = {
   ...teleportHandlers,
@@ -44,3 +45,26 @@ export const nativeHandlers: SharedActionHandlers = {
   ...writeHandlers,
   ...searchHandlers,
 };
+
+/**
+ * Whether the native tool actions may run at all. Off unless
+ * `config.nativeTools` turns them on (bootstrap calls the setter): with the
+ * option off the tools are never offered to the model, so a request for
+ * one can only come from outside the daemon's own tool surface.
+ */
+let nativeToolsEnabled = false;
+
+export function setNativeToolsEnabled(enabled: boolean): void {
+  nativeToolsEnabled = enabled;
+}
+
+/** The refusal for a native action while native tools are off, else null. */
+export function nativeActionRefusal(action: string): ActionResult | null {
+  if (nativeToolsEnabled || !Object.hasOwn(nativeHandlers, action)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: `${action} is unavailable: native tools are disabled (set "nativeTools": true in config.json to enable them).`,
+  };
+}

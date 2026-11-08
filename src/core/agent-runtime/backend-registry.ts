@@ -32,6 +32,7 @@
 import type { Backend } from "./capabilities.js";
 import type { DoctorCheck, DoctorConfigSlice } from "../doctor/types.js";
 import type { TalonConfig } from "../config/index.js";
+import type { ClaudeAccount } from "../config/claude-accounts.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -76,6 +77,37 @@ export interface BackendFactory {
   id: string;
   /** Display label used in `/status` and agent logs (e.g. "Kilo"). */
   label: string;
+  /**
+   * Can this backend run a guest-scoped turn (a non-operator sender) with
+   * nothing but the hub's conversation-only tools? `"enforced"` means its
+   * own built-ins (shell, file tools) are dropped for guest turns;
+   * `"refused"` means they can't be, so the weaver refuses guest turns on
+   * it. Absent is treated as `"refused"` — fail closed.
+   */
+  guestToolScope?: "enforced" | "refused";
+  /**
+   * Backends that are the same provider under different logins (the
+   * default `claude` backend and every `claudeAccounts` entry) share an
+   * account group. The headroom router never moves work between members
+   * of a group: spreading load across one provider's subscriptions is the
+   * operator's explicit choice, never Talon's (docs/claude-accounts.md).
+   * Absent = a group of one.
+   */
+  accountGroup?: string;
+  /**
+   * Only ever used when chosen explicitly (config, `/backend`, a tool's
+   * `backend` argument): the router never picks it as an alternate for
+   * work defaulting to some other backend. Set on every extra Claude
+   * account, so headroom routing from, say, Codex can land on the default
+   * Claude account but never shops between Claude subscriptions.
+   */
+  explicitOnly?: boolean;
+  /**
+   * Backends that resume sessions from the same transcript store. A chat
+   * switched between two of them keeps its session instead of starting a
+   * fresh one. Absent = sessions don't port to any other backend.
+   */
+  sessionStore?: string;
   /** Initialise the backend; called exactly once per Talon process. */
   init(config: TalonConfig, ctx: BackendInitContext): Promise<BackendInstance>;
   /**
@@ -129,6 +161,15 @@ export function listBackends(): BackendFactory[] {
 }
 
 /**
+ * Remove a backend from the registry — a Claude account deleted at
+ * runtime. Whatever the pool still holds of it is the caller's to
+ * release. Returns whether the id was registered.
+ */
+export function unregisterBackend(id: string): boolean {
+  return backends.delete(id);
+}
+
+/**
  * Clear the registry. Test-only utility — production code should never
  * call this.
  */
@@ -136,7 +177,75 @@ export function clearBackends(): void {
   backends.clear();
 }
 
+/**
+ * Whether guest-scoped turns may run on this backend. Unknown ids and
+ * factories that don't declare `guestToolScope` fail closed.
+ */
+export function backendEnforcesGuestScope(id: string): boolean {
+  return backends.get(id)?.guestToolScope === "enforced";
+}
+
+/**
+ * Whether `a` and `b` are two different logins of one provider — the pair
+ * the router must never choose between on its own. False for the same id
+ * and for any unregistered id.
+ */
+export function inSameAccountGroup(a: string, b: string): boolean {
+  if (a === b) return false;
+  const group = backends.get(a)?.accountGroup;
+  return group !== undefined && backends.get(b)?.accountGroup === group;
+}
+
+/**
+ * May the router send work defaulting to `callerId` to `id` on its own?
+ * Never to another login of the caller's provider, never to an
+ * explicit-only backend. (The caller's own backend is always allowed.)
+ */
+export function isRoutingAlternate(id: string, callerId: string): boolean {
+  if (id === callerId) return true;
+  if (inSameAccountGroup(id, callerId)) return false;
+  return backends.get(id)?.explicitOnly !== true;
+}
+
+/**
+ * Whether a chat's session id stays valid when it moves from backend `a`
+ * to backend `b`. True for the same id; otherwise only when both declare
+ * the same `sessionStore`.
+ */
+export function sharesSessionStore(a: string, b: string): boolean {
+  if (a === b) return true;
+  const store = backends.get(a)?.sessionStore;
+  return store !== undefined && backends.get(b)?.sessionStore === store;
+}
+
 /** Whether a backend with this id is currently registered. */
 export function hasBackend(id: string): boolean {
   return backends.has(id);
+}
+
+// ── Claude account factory seam ─────────────────────────────────────────────
+
+/**
+ * Builds the backend for one `claudeAccounts` entry. Core adds accounts at
+ * runtime (core/auth/claude-accounts-admin.ts) but may not import the
+ * Claude SDK driver that implements them, so the driver installs its
+ * maker here when its factory module loads. Unset (a CLI process that
+ * never loaded the driver) means an added account is only registered at
+ * the next start.
+ */
+type ClaudeAccountFactoryMaker = (account: ClaudeAccount) => BackendFactory;
+
+let claudeAccountFactoryMaker: ClaudeAccountFactoryMaker | undefined;
+
+export function setClaudeAccountFactoryMaker(
+  make: ClaudeAccountFactoryMaker | undefined,
+): void {
+  claudeAccountFactoryMaker = make;
+}
+
+/** The backend for an account, or undefined when no driver is loaded. */
+export function makeClaudeAccountFactory(
+  account: ClaudeAccount,
+): BackendFactory | undefined {
+  return claudeAccountFactoryMaker?.(account);
 }

@@ -182,7 +182,7 @@ describe("import → render → import", () => {
         "",
         "- Never force-push main",
         "",
-        `## User: Dylan ${tag}`,
+        `## User: Ada ${tag}`,
         "",
         "- Prefers terse answers",
         "",

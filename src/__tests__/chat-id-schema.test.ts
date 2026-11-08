@@ -6,14 +6,14 @@
  * Background: PR #150 shipped heartbeat outbound `send` / `react`
  * with `chat_id: idSchema`, but `idSchema` is `.positive()` — meant
  * for message/user/reply IDs which are always positive. Supergroup
- * chat IDs (`-1001426819337` shape) failed validation at the MCP
+ * chat IDs (`-1009876543210` shape) failed validation at the MCP
  * tool-schema layer with `expected number, received string` style
  * errors before the request ever reached the gateway — even though
  * the gateway-http tests already proved negative chat_ids route
  * correctly end-to-end. This test pins the new `chatIdSchema` to
  * accept both signs while still rejecting zero and non-integers.
  *
- * The exact -1001426819337 case below is the one Dylan asked the
+ * The exact -1009876543210 case below is the one Ada asked the
  * heartbeat to test in chat at 2026-05-12 18:13Z. The
  * old schema rejected it; this test ensures the new schema doesn't.
  */
@@ -33,11 +33,11 @@ function getToolField(toolName: string, field: string): z.ZodTypeAny {
 describe("chatIdSchema (standalone)", () => {
   describe("accepts", () => {
     it("a positive integer (user DM)", () => {
-      expect(chatIdSchema.parse(352042062)).toBe(352042062);
+      expect(chatIdSchema.parse(424242420)).toBe(424242420);
     });
 
     it("a negative integer (Telegram supergroup)", () => {
-      expect(chatIdSchema.parse(-1001426819337)).toBe(-1001426819337);
+      expect(chatIdSchema.parse(-1009876543210)).toBe(-1009876543210);
     });
 
     it("a negative integer (Telegram basic group)", () => {
@@ -45,11 +45,11 @@ describe("chatIdSchema (standalone)", () => {
     });
 
     it("a positive integer string", () => {
-      expect(chatIdSchema.parse("352042062")).toBe(352042062);
+      expect(chatIdSchema.parse("424242420")).toBe(424242420);
     });
 
     it("a negative integer string", () => {
-      expect(chatIdSchema.parse("-1001426819337")).toBe(-1001426819337);
+      expect(chatIdSchema.parse("-1009876543210")).toBe(-1009876543210);
     });
   });
 
@@ -95,8 +95,8 @@ describe("chatIdSchema (standalone)", () => {
 
   describe("does not conflict with idSchema", () => {
     it("idSchema still rejects negatives (chatIdSchema is the negative-aware variant)", () => {
-      expect(() => idSchema.parse(-1001426819337)).toThrow();
-      expect(() => idSchema.parse("-1001426819337")).toThrow();
+      expect(() => idSchema.parse(-1009876543210)).toThrow();
+      expect(() => idSchema.parse("-1009876543210")).toThrow();
     });
 
     it("idSchema still accepts the same positives chatIdSchema accepts", () => {
@@ -108,13 +108,13 @@ describe("chatIdSchema (standalone)", () => {
 
 describe("chat_id tool params (wired into send/react)", () => {
   // The exact two tool fields PR #150 wired to idSchema by mistake.
-  // After the fix they must accept both Dylan's DM (positive) AND
-  // the Pandario group (negative).
+  // After the fix they must accept both Ada's DM (positive) AND
+  // a group chat (negative).
   const cases: Array<[string, number]> = [
-    ["send", 352042062], // Dylan DM
-    ["send", -1001426819337], // Pandario group
-    ["react", 352042062],
-    ["react", -1001426819337],
+    ["send", 424242420], // Ada DM
+    ["send", -1009876543210], // group chat
+    ["react", 424242420],
+    ["react", -1009876543210],
   ];
 
   for (const [tool, chatId] of cases) {
@@ -126,7 +126,7 @@ describe("chat_id tool params (wired into send/react)", () => {
 
   it("send.chat_id accepts stringified negative supergroup ID", () => {
     const s = getToolField("send", "chat_id");
-    expect(s.parse("-1001426819337")).toBe(-1001426819337);
+    expect(s.parse("-1009876543210")).toBe(-1009876543210);
   });
 
   it("react.chat_id rejects zero", () => {
@@ -184,12 +184,12 @@ describe("send.execute threads chat_id through to bridge", () => {
   const cases: Array<[string, Record<string, unknown>, string]> = [
     [
       "text (plain)",
-      { type: "text", text: "hi", chat_id: -1001426819337 },
+      { type: "text", text: "hi", chat_id: -1009876543210 },
       "send_message",
     ],
     [
       "text (with reply_to)",
-      { type: "text", text: "hi", reply_to: 100, chat_id: -1001426819337 },
+      { type: "text", text: "hi", reply_to: 100, chat_id: -1009876543210 },
       "send_message",
     ],
     [
@@ -198,7 +198,7 @@ describe("send.execute threads chat_id through to bridge", () => {
         type: "text",
         text: "pick",
         buttons: [[{ text: "A", callback_data: "a" }]],
-        chat_id: -1001426819337,
+        chat_id: -1009876543210,
       },
       "send_message_with_buttons",
     ],
@@ -208,43 +208,43 @@ describe("send.execute threads chat_id through to bridge", () => {
         type: "text",
         text: "later",
         delay_seconds: 60,
-        chat_id: -1001426819337,
+        chat_id: -1009876543210,
       },
       "schedule_message",
     ],
     [
       "photo",
-      { type: "photo", file_path: "/x.jpg", chat_id: -1001426819337 },
+      { type: "photo", file_path: "/x.jpg", chat_id: -1009876543210 },
       "send_photo",
     ],
     [
       "file",
-      { type: "file", file_path: "/x.pdf", chat_id: -1001426819337 },
+      { type: "file", file_path: "/x.pdf", chat_id: -1009876543210 },
       "send_file",
     ],
     [
       "video",
-      { type: "video", file_path: "/x.mp4", chat_id: -1001426819337 },
+      { type: "video", file_path: "/x.mp4", chat_id: -1009876543210 },
       "send_video",
     ],
     [
       "voice",
-      { type: "voice", file_path: "/x.ogg", chat_id: -1001426819337 },
+      { type: "voice", file_path: "/x.ogg", chat_id: -1009876543210 },
       "send_voice",
     ],
     [
       "audio",
-      { type: "audio", file_path: "/x.mp3", chat_id: -1001426819337 },
+      { type: "audio", file_path: "/x.mp3", chat_id: -1009876543210 },
       "send_audio",
     ],
     [
       "animation",
-      { type: "animation", file_path: "/x.gif", chat_id: -1001426819337 },
+      { type: "animation", file_path: "/x.gif", chat_id: -1009876543210 },
       "send_animation",
     ],
     [
       "sticker",
-      { type: "sticker", file_id: "CAAC", chat_id: -1001426819337 },
+      { type: "sticker", file_id: "CAAC", chat_id: -1009876543210 },
       "send_sticker",
     ],
     [
@@ -253,7 +253,7 @@ describe("send.execute threads chat_id through to bridge", () => {
         type: "poll",
         question: "?",
         options: ["a", "b"],
-        chat_id: -1001426819337,
+        chat_id: -1009876543210,
       },
       "send_poll",
     ],
@@ -263,7 +263,7 @@ describe("send.execute threads chat_id through to bridge", () => {
         type: "location",
         latitude: 37.7,
         longitude: -122.4,
-        chat_id: -1001426819337,
+        chat_id: -1009876543210,
       },
       "send_location",
     ],
@@ -273,13 +273,13 @@ describe("send.execute threads chat_id through to bridge", () => {
         type: "contact",
         phone_number: "+1",
         first_name: "Sur",
-        chat_id: -1001426819337,
+        chat_id: -1009876543210,
       },
       "send_contact",
     ],
     [
       "dice",
-      { type: "dice", emoji: "🎲", chat_id: -1001426819337 },
+      { type: "dice", emoji: "🎲", chat_id: -1009876543210 },
       "send_dice",
     ],
   ];
@@ -288,7 +288,7 @@ describe("send.execute threads chat_id through to bridge", () => {
     it(`send ${label} forwards chat_id to bridge ${expectedAction}`, async () => {
       const [action, payload] = await runSend(params);
       expect(action).toBe(expectedAction);
-      expect(payload.chat_id).toBe(-1001426819337);
+      expect(payload.chat_id).toBe(-1009876543210);
     });
   }
 
@@ -296,10 +296,10 @@ describe("send.execute threads chat_id through to bridge", () => {
     const [action, payload] = await runSend({
       type: "text",
       text: "hi sur",
-      chat_id: 352042062,
+      chat_id: 424242420,
     });
     expect(action).toBe("send_message");
-    expect(payload.chat_id).toBe(352042062);
+    expect(payload.chat_id).toBe(424242420);
   });
 
   it("send without chat_id passes undefined (chat-mode default path)", async () => {

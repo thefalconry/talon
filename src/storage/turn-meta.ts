@@ -14,11 +14,11 @@
  * actually fetch.
  */
 
-import { inTransaction } from "./db.js";
+import { dbErrorFields, inTransaction } from "./db.js";
 import * as repo from "./repositories/turn-meta-repo.js";
 import { importLegacyJson } from "./legacy-import.js";
 import { files } from "../util/paths.js";
-import { logError } from "../util/log.js";
+import { logError, logWarn } from "../util/log.js";
 
 /** Per-chat cap — matches the /history page ceiling. */
 const MAX_PER_CHAT = 500;
@@ -83,7 +83,11 @@ export function recordTurnMeta(
       repo.prune(chatId, MAX_PER_CHAT);
     });
   } catch (err) {
-    logError("db", "Failed to persist turn meta", err);
+    logError(
+      "db",
+      `Failed to persist turn meta chat=${chatId} msg=${msgId}${dbErrorFields(err)}`,
+      err,
+    );
   }
 }
 
@@ -96,23 +100,37 @@ export function getTurnMeta<T>(chatId: string, msgId: string): T | null {
   } catch (err) {
     // Reads are hydration-only — a storage fault must degrade to
     // "no meta", not break the caller (matching recordTurnMeta).
-    logError("db", "Failed to read turn meta", err);
+    logError(
+      "db",
+      `Failed to read turn meta chat=${chatId} msg=${msgId}${dbErrorFields(err)}`,
+      err,
+    );
     return null;
   }
   if (raw === undefined) return null;
   try {
     return JSON.parse(raw) as T;
-  } catch {
-    return null; // corrupt row — treat as absent rather than throw
+  } catch (err) {
+    // Corrupt row — treat as absent rather than throw, but say so: the
+    // caller sees "no meta" and can't tell it from a message never tagged.
+    logWarn(
+      "db",
+      `Corrupt turn meta chat=${chatId} msg=${msgId} bytes=${raw.length}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
   }
 }
 
-/** Forget a chat entirely (chat deleted / history cleared). */
+/** Forget a chat's turn meta — only the operator's history purge does. */
 export function clearTurnMeta(chatId: string): void {
   ensureLoaded();
   try {
     repo.removeChat(chatId);
   } catch (err) {
-    logError("db", "Failed to clear turn meta", err);
+    logError(
+      "db",
+      `Failed to clear turn meta chat=${chatId}${dbErrorFields(err)}`,
+      err,
+    );
   }
 }

@@ -30,6 +30,17 @@ import type { Manifest, SnapshotPart } from "./types.js";
 /** The daemon's chat id for plugin actions that belong to no conversation. */
 const SYSTEM_CHAT = "system";
 
+/**
+ * How long a target may take to answer. A plugin that never answers would
+ * otherwise hold the backup queue forever — every later snapshot, and the
+ * pre-update checkpoint `/update` waits on, queued behind it. Part uploads
+ * get a base allowance plus time for the bytes at a slow uplink's pace.
+ */
+const CONTROL_DEADLINE_MS = 10 * 60_000;
+const TRANSFER_BASE_MS = 30 * 60_000;
+/** 64 KiB/s — well under any link a remote backup is usable over. */
+const TRANSFER_FLOOR_BYTES_PER_MS = 64;
+
 /** A part as the upload call describes it: metadata plus where to read it. */
 type UploadPart = SnapshotPart & { path: string };
 
@@ -101,6 +112,37 @@ function targetError(
   });
 }
 
+/** setTimeout's ceiling; a longer delay would fire at once. */
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * Send one body, failing with `target`'s name once `deadlineMs` passes.
+ * A null deadline sends it unbounded.
+ */
+async function dispatchWithin(
+  deps: TargetDeps,
+  plugin: string,
+  body: Record<string, unknown>,
+  target: string,
+  deadlineMs: number | null,
+): Promise<ActionResult | null> {
+  if (deadlineMs === null) return deps.dispatch(plugin, body);
+  const ms = Math.min(deadlineMs, MAX_TIMER_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const action = String(body.action).replace(/^backup\.target\./, "");
+      const minutes = Math.round(ms / 60_000);
+      reject(targetError(target, action, `no answer within ${minutes} min`));
+    }, ms);
+  });
+  try {
+    return await Promise.race([deps.dispatch(plugin, body), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Unwrap `{ ok, data }`, turning every failure shape into one error. */
 function dataOf(
   result: ActionResult | null,
@@ -128,8 +170,11 @@ class PluginTarget implements BackupTarget {
     readonly detail?: string,
   ) {}
 
-  private send(body: Record<string, unknown>): Promise<ActionResult | null> {
-    return this.deps.dispatch(this.plugin, body);
+  private send(
+    body: Record<string, unknown>,
+    deadlineMs: number | null = CONTROL_DEADLINE_MS,
+  ): Promise<ActionResult | null> {
+    return dispatchWithin(this.deps, this.plugin, body, this.id, deadlineMs);
   }
 
   async upload(
@@ -138,12 +183,10 @@ class PluginTarget implements BackupTarget {
     manifest: Manifest,
   ): Promise<{ remoteId: string; deduplicated?: boolean }> {
     const data = dataOf(
-      await this.send({
-        action: "backup.target.upload",
-        snapshotId,
-        part,
-        manifest,
-      }),
+      await this.send(
+        { action: "backup.target.upload", snapshotId, part, manifest },
+        TRANSFER_BASE_MS + part.bytes / TRANSFER_FLOOR_BYTES_PER_MS,
+      ),
       this.id,
       "upload",
     );
@@ -206,12 +249,17 @@ class PluginTarget implements BackupTarget {
     destPath: string,
   ): Promise<void> {
     dataOf(
-      await this.send({
-        action: "backup.target.download",
-        snapshotId,
-        part: { name: partName },
-        destPath,
-      }),
+      // Unbounded: only an interactive restore downloads, the size is not
+      // known here, and the operator can interrupt it.
+      await this.send(
+        {
+          action: "backup.target.download",
+          snapshotId,
+          part: { name: partName },
+          destPath,
+        },
+        null,
+      ),
       this.id,
       "download",
     );
@@ -231,9 +279,13 @@ export async function discoverTargets(
   for (const plugin of deps.plugins()) {
     let result: ActionResult | null;
     try {
-      result = await deps.dispatch(plugin, {
-        action: "backup.target.describe",
-      });
+      result = await dispatchWithin(
+        deps,
+        plugin,
+        { action: "backup.target.describe" },
+        plugin,
+        CONTROL_DEADLINE_MS,
+      );
     } catch (err) {
       logWarn(
         "backup",

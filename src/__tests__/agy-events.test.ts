@@ -124,7 +124,7 @@ describe("agy events — MCP tool unwrapping", () => {
     expect(shape).toEqual({
       name: "check_time",
       server: "__talon_probe",
-      input: { timezone: "Europe/Dublin" },
+      input: { timezone: "Europe/London" },
     });
   });
 

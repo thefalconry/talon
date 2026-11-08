@@ -25,6 +25,8 @@ export type ProcessAndReplyParams = {
   isGroup: boolean;
   senderUsername?: string;
   senderId: string;
+  /** False when the batch mixes senders — the turn is then guest-scoped. */
+  singleSender?: boolean;
   channel: TextBasedChannel;
   chatTitle?: string;
 };
@@ -53,6 +55,7 @@ export async function processAndReply(p: ProcessAndReplyParams): Promise<void> {
     prompt: p.prompt,
     senderName: p.senderName,
     senderHandle: p.senderUsername,
+    senderKeys: p.singleSender === false ? [] : [`discord:${p.senderId}`],
     isGroup: p.isGroup,
     // Use the real Discord snowflake string, not the hashed numeric.
     // The hash collides with Telegram-style 32-bit IDs and Discord's API

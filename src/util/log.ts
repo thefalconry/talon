@@ -19,8 +19,10 @@ import {
   openSync,
   writeSync,
   closeSync,
+  fstatSync,
 } from "node:fs";
 import { dirs, files } from "./paths.js";
+import { currentTurnId } from "./logging/turn-scope.js";
 
 export type LogComponent =
   | "bot"
@@ -31,8 +33,10 @@ export type LogComponent =
   | "kv"
   | "media"
   | "notify"
+  | "alert"
   | "agent"
   | "agents"
+  | "tasks"
   | "pulse"
   | "userbot"
   | "users"
@@ -68,8 +72,10 @@ export type LogComponent =
   | "memory"
   | "stickers"
   | "backup"
+  | "secrets"
   | "router"
-  | "backend-controller";
+  | "backend-controller"
+  | "fetch";
 
 const LOG_FILE = files.log;
 
@@ -106,6 +112,47 @@ function rotateIfLarge(path: string): void {
 }
 
 rotateIfLarge(LOG_FILE);
+
+/**
+ * Runtime retention for talon.log: once the live file passes the cap the
+ * sink shifts it to `talon.log.1` (…`.1` → `.2`, oldest dropped), so a
+ * long-running daemon keeps a bounded, numbered history instead of one
+ * ever-growing file. The start-time `.old` rule above stays as it was;
+ * readers treat `.old` as one more generation.
+ */
+const LOG_ROTATE_KEEP = 5;
+
+/** The disk name of rotated generation `n` (1 = newest) of `path`. */
+function rotatedLogPath(path: string, n: number): string {
+  return `${path}.${n}`;
+}
+
+/**
+ * Shift `path` into the numbered generations: drop `.keep`, move each
+ * `.n` to `.n+1`, then `path` to `.1`. Every step is one rename, so a
+ * crash part-way leaves a gap in the numbering, never a lost line — the
+ * only file ever deleted is the oldest generation. Throws on the first
+ * failure other than a missing generation.
+ */
+export function shiftLogGenerations(
+  path: string,
+  keep: number = LOG_ROTATE_KEEP,
+): void {
+  const skipMissing = (step: () => void): void => {
+    try {
+      step();
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+  };
+  skipMissing(() => unlinkSync(rotatedLogPath(path, keep)));
+  for (let n = keep - 1; n >= 1; n--) {
+    skipMissing(() =>
+      renameSync(rotatedLogPath(path, n), rotatedLogPath(path, n + 1)),
+    );
+  }
+  renameSync(path, rotatedLogPath(path, 1));
+}
 
 // Suppress console output for terminal frontend (stdout belongs to the REPL)
 let quiet = process.env.TALON_QUIET === "1";
@@ -169,6 +216,8 @@ const SINK_MAX_RETRY_MS = 5 * 60_000;
 export type SyncLogTarget = {
   /** Append one already-serialized line. Throws on failure. */
   write(line: string): void;
+  /** Bytes already in the file when it was opened, when known. */
+  readonly initialSize?: number;
   /** Release the underlying handle. Never throws. */
   close(): void;
 };
@@ -182,6 +231,13 @@ export type ResilientFileSinkOptions = {
   retryMs?: number;
   /** Backoff ceiling (default 5 min). */
   maxRetryMs?: number;
+  /**
+   * Rotate the file once it passes this many bytes (default 10 MB);
+   * 0 disables runtime rotation.
+   */
+  rotateAtBytes?: number;
+  /** Numbered generations kept by a rotation (default 5). */
+  keep?: number;
 };
 
 /**
@@ -221,6 +277,14 @@ export type ResilientFileSinkOptions = {
  *     many lines were lost.
  * The console sink keeps working throughout, and carries the two
  * notices.
+ *
+ * It also owns retention: after a write carries the file past
+ * `rotateAtBytes` it shifts the generations (see
+ * {@link shiftLogGenerations}) and reopens a fresh file, all inside the
+ * same synchronous write — a few renames every 10 MB, no queue, no lost
+ * line. The size is re-read from disk before rotating, so a file another
+ * process already rotated is not rotated twice; a rotation that fails
+ * keeps appending to the current file and tries again one cap later.
  */
 export class ResilientFileSink {
   private readonly path: string;
@@ -233,6 +297,12 @@ export class ResilientFileSink {
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private droppedWhileDown = 0;
   private down = false;
+  private readonly rotateAtBytes: number;
+  private readonly keep: number;
+  /** Bytes in the current file, as far as this process has seen. */
+  private bytes = 0;
+  /** Size at which the next rotation check runs. */
+  private rotateCheckAt: number;
 
   constructor(path: string, opts: ResilientFileSinkOptions = {}) {
     this.path = path;
@@ -241,6 +311,9 @@ export class ResilientFileSink {
     this.baseRetryMs = opts.retryMs ?? SINK_RETRY_MS;
     this.maxRetryMs = opts.maxRetryMs ?? SINK_MAX_RETRY_MS;
     this.retryMs = this.baseRetryMs;
+    this.rotateAtBytes = opts.rotateAtBytes ?? MAX_LOG_SIZE;
+    this.keep = opts.keep ?? LOG_ROTATE_KEEP;
+    this.rotateCheckAt = this.rotateAtBytes;
     this.openInner();
   }
 
@@ -269,6 +342,10 @@ export class ResilientFileSink {
       return;
     }
     this.markHealthy();
+    this.bytes += Buffer.byteLength(line, "utf-8");
+    if (this.rotateAtBytes > 0 && this.bytes > this.rotateCheckAt) {
+      this.rotate();
+    }
   }
 
   /** No-op: every write already reached the fd. Part of pino's shape. */
@@ -283,9 +360,57 @@ export class ResilientFileSink {
   private openInner(): void {
     try {
       this.target = this.openTarget(this.path);
+      this.bytes = this.target.initialSize ?? 0;
+      this.rotateCheckAt = this.rotateAtBytes;
     } catch (err) {
       this.fail(err);
     }
+  }
+
+  /**
+   * The current file passed the cap: shift the generations and reopen.
+   * Never throws — a failed rename reopens the same file and appends
+   * on, a failed reopen goes through the ordinary pause/retry path.
+   */
+  private rotate(): void {
+    let onDisk: number;
+    try {
+      onDisk = statSync(this.path).size;
+    } catch {
+      // Unlinked under us: nothing to shift, just start a fresh file.
+      this.detachInner();
+      this.openInner();
+      return;
+    }
+    if (onDisk <= this.rotateAtBytes) {
+      // Someone else (another Talon process) already rotated it.
+      this.bytes = onDisk;
+      return;
+    }
+    // Close before renaming: a platform that refuses to rename an open
+    // file (Windows) then fails the shift cleanly instead of half-way.
+    this.detachInner();
+    let failure: unknown = null;
+    try {
+      shiftLogGenerations(this.path, this.keep);
+    } catch (err) {
+      failure = err;
+    }
+    this.openInner();
+    if (failure !== null) {
+      this.rotateCheckAt = this.bytes + this.rotateAtBytes;
+      const code = (failure as NodeJS.ErrnoException).code ?? String(failure);
+      this.emitNotice(
+        "warn",
+        `log.rotate failed file=${this.path} code=${code} — still appending`,
+      );
+      return;
+    }
+    this.emitNotice(
+      "info",
+      `log.rotate file=${this.path} bytes=${onDisk} keep=${this.keep} ` +
+        `previous=${rotatedLogPath(this.path, 1)}`,
+    );
   }
 
   /** Give up on the current handle and arm a reopen. Never throws. */
@@ -378,7 +503,14 @@ function appendLine(fd: number, line: string): void {
 export function openSyncLogFile(path: string): SyncLogTarget {
   // 0600: turns and tool output land here — same sensitivity as history.
   const fd = openSync(path, "a", 0o600);
+  let initialSize = 0;
+  try {
+    initialSize = fstatSync(fd).size;
+  } catch {
+    /* unknown size: rotation counts from zero */
+  }
   return {
+    initialSize,
     write: (line) => appendLine(fd, line),
     close: () => {
       try {
@@ -443,8 +575,57 @@ function emit(write: () => void): void {
   }
 }
 
+/**
+ * Append `turn=<id>` when the line is written from inside a running
+ * turn (see logging/turn-scope.ts), unless the caller already named it. The
+ * id goes in the message text, not a field, so a plain `grep` over
+ * talon.log and the pretty console both show it.
+ */
+function tagTurn(message: string): string {
+  const turnId = currentTurnId();
+  if (!turnId) return message;
+  const tag = `turn=${turnId}`;
+  return message.includes(tag) ? message : `${message} ${tag}`;
+}
+
 export function log(component: LogComponent, message: string): void {
-  emit(() => logger.info({ component }, message));
+  emit(() => logger.info({ component }, tagTurn(message)));
+}
+
+type LogErrorListener = (
+  component: LogComponent,
+  message: string,
+  err?: unknown,
+) => void;
+
+let errorListener: LogErrorListener | null = null;
+let inErrorListener = false;
+
+/**
+ * Register (or clear, with null) the one listener every `logError` call
+ * reaches — core's error-rate alarm (core/daemon/health-alerts.ts). util
+ * cannot import core, so core registers itself here. The listener runs
+ * synchronously and must be cheap; it cannot throw into the caller, and
+ * a `logError` it makes itself is not fed back to it.
+ */
+export function onLogError(fn: LogErrorListener | null): void {
+  errorListener = fn;
+}
+
+function notifyErrorListener(
+  component: LogComponent,
+  message: string,
+  err: unknown,
+): void {
+  if (!errorListener || inErrorListener) return;
+  inErrorListener = true;
+  try {
+    errorListener(component, message, err);
+  } catch {
+    /* an alarm must never break the error path it watches */
+  } finally {
+    inErrorListener = false;
+  }
 }
 
 export function logError(
@@ -452,26 +633,30 @@ export function logError(
   message: string,
   err?: unknown,
 ): void {
+  notifyErrorListener(component, message, err);
   if (err instanceof Error) {
     // Capture both the concise message (for log consumers that look at `err`)
     // and the full stack (for diagnostics). pino-pretty renders the `stack`
     // field on its own line; JSON consumers can read either field.
     emit(() =>
-      logger.error({ component, err: err.message, stack: err.stack }, message),
+      logger.error(
+        { component, err: err.message, stack: err.stack },
+        tagTurn(message),
+      ),
     );
   } else if (err !== undefined) {
-    emit(() => logger.error({ component, err: String(err) }, message));
+    emit(() => logger.error({ component, err: String(err) }, tagTurn(message)));
   } else {
-    emit(() => logger.error({ component }, message));
+    emit(() => logger.error({ component }, tagTurn(message)));
   }
 }
 
 export function logWarn(component: LogComponent, message: string): void {
-  emit(() => logger.warn({ component }, message));
+  emit(() => logger.warn({ component }, tagTurn(message)));
 }
 
 export function logDebug(component: LogComponent, message: string): void {
-  emit(() => logger.debug({ component }, message));
+  emit(() => logger.debug({ component }, tagTurn(message)));
 }
 
 // Expose logger to plugins running in the same process

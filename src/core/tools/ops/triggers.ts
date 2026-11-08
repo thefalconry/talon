@@ -57,7 +57,8 @@ shutdown/crash are respawned (not ones that exited on their own), the
 script must be safe to re-run from scratch, and timeout_seconds is ignored
 (persistent triggers run until cancelled or until Talon shuts down).
 
-Per-chat cap of 5 active triggers.`;
+Per-chat cap on active triggers (default 5; config triggers.maxActivePerChat,
+with an optional separate triggers.maxPersistentPerChat budget).`;
 
 export const triggerTools: ToolDefinition[] = [
   {

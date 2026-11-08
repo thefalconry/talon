@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // system templates (prompts/system/*.md) are part of the code under
 // test, so the mock delegates those reads to the real filesystem.
 import { readFileSync as realReadFileSync } from "node:fs";
+import { resolve } from "node:path";
 // The prompt embeds the date in the configured timezone (util/time.ts),
 // not UTC — computing "today" via toISOString() makes these tests fail
 // around midnight in any non-UTC timezone.
@@ -113,6 +114,48 @@ describe("config", () => {
       expect(config.model).toBe("default");
     });
 
+    it("accepts a declared Claude account anywhere a backend id goes", async () => {
+      mockFs({
+        frontend: "terminal",
+        backend: "claude-2",
+        heartbeatBackend: "claude",
+        enabledBackends: ["claude", "claude-2", "codex"],
+        claudeAccounts: [
+          { id: "claude-2", configDir: "/srv/talon-test/accounts/claude-2" },
+        ],
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      const { listClaudeAccounts } =
+        await import("../core/config/claude-accounts.js");
+      const config = loadConfig();
+      expect(config.backend).toBe("claude-2");
+      expect(listClaudeAccounts()).toEqual([
+        {
+          id: "claude-2",
+          label: "Claude (claude-2)",
+          // Host-absolute: gains the current drive letter on Windows.
+          configDir: resolve("/srv/talon-test/accounts/claude-2"),
+        },
+      ]);
+    });
+
+    it("refuses a backend field naming an undeclared Claude account", async () => {
+      mockFs({ frontend: "terminal", dreamBackend: "claude-9" });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(
+        /dreamBackend: "claude-9" is not a declared Claude account/,
+      );
+    });
+
+    it("refuses a malformed Claude account id", async () => {
+      mockFs({
+        frontend: "terminal",
+        claudeAccounts: [{ id: "Claude_Two", configDir: "/srv/x" }],
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(/claudeAccounts\.0\.id/);
+    });
+
     it("normalizes deprecated desktop frontend aliases to native", async () => {
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       mockFs({
@@ -141,8 +184,21 @@ describe("config", () => {
       expect(() => loadConfig()).toThrow("botToken");
     });
 
+    it("throws when telegram frontend has no adminUserId", async () => {
+      // No admin would leave the bot with no owner: refuse to start, and
+      // say how to fix it.
+      mockFs({ frontend: "telegram", botToken: "test-token" });
+
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(/adminUserId.*@userinfobot/s);
+    });
+
     it("loads config from talon.json", async () => {
-      mockFs({ botToken: "test-token-123", model: "claude-opus-4-6" });
+      mockFs({
+        botToken: "test-token-123",
+        adminUserId: 1,
+        model: "claude-opus-4-6",
+      });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -151,7 +207,7 @@ describe("config", () => {
     });
 
     it("applies defaults for missing fields", async () => {
-      mockFs({ botToken: "test-token" });
+      mockFs({ botToken: "test-token", adminUserId: 1 });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -165,6 +221,7 @@ describe("config", () => {
     it("reads heartbeatEffort / dreamEffort", async () => {
       mockFs({
         botToken: "test-token",
+        adminUserId: 1,
         heartbeatEffort: "high",
         dreamEffort: "low",
       });
@@ -176,7 +233,7 @@ describe("config", () => {
     });
 
     it("leaves background effort unset by default (model default)", async () => {
-      mockFs({ botToken: "test-token" });
+      mockFs({ botToken: "test-token", adminUserId: 1 });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -184,15 +241,73 @@ describe("config", () => {
       expect(config.dreamEffort).toBeUndefined();
     });
 
+    it("fills alerts defaults", async () => {
+      mockFs({ botToken: "test-token", adminUserId: 1, alerts: {} });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(loadConfig().alerts).toEqual({
+        enabled: true,
+        cooldownMinutes: 30,
+      });
+    });
+
+    it("rejects unknown alerts keys", async () => {
+      mockFs({ botToken: "test-token", adminUserId: 1, alerts: { mute: 1 } });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(/alerts/);
+    });
+
     it("rejects an unknown effort level", async () => {
-      mockFs({ botToken: "test-token", heartbeatEffort: "ludicrous" });
+      mockFs({
+        botToken: "test-token",
+        adminUserId: 1,
+        heartbeatEffort: "ludicrous",
+      });
 
       const { loadConfig } = await import("../core/config/index.js");
       expect(() => loadConfig()).toThrow(/heartbeatEffort/);
     });
 
+    it("accepts native.endpoints with IP dial overrides", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          publicUrl: "https://mesh.example.org",
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "203.0.113.7:443" },
+            { url: "https://mesh.example.org", dial: "[2001:db8::1]:443" },
+          ],
+        },
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(loadConfig().native?.endpoints).toHaveLength(2);
+    });
+
+    it("rejects a native.endpoints dial that is a hostname, or a plain-http url", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "evil.example:443" },
+          ],
+        },
+      });
+      const first = await import("../core/config/index.js");
+      expect(() => first.loadConfig()).toThrow(/dial must be an IP literal/);
+      vi.resetModules();
+      mockFs({
+        frontend: "terminal",
+        native: { endpoints: [{ url: "http://mesh.example.org" }] },
+      });
+      const second = await import("../core/config/index.js");
+      expect(() => second.loadConfig()).toThrow(/plain https URL/);
+    });
+
     it("reads custom maxMessageLength", async () => {
-      mockFs({ botToken: "test-token", maxMessageLength: 8000 });
+      mockFs({
+        botToken: "test-token",
+        adminUserId: 1,
+        maxMessageLength: 8000,
+      });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -200,7 +315,7 @@ describe("config", () => {
     });
 
     it("defaults concurrency to 1", async () => {
-      mockFs({ botToken: "test-token" });
+      mockFs({ botToken: "test-token", adminUserId: 1 });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -208,15 +323,20 @@ describe("config", () => {
     });
 
     it("reads adminUserId from config", async () => {
-      mockFs({ botToken: "test-token", adminUserId: 352042062 });
+      mockFs({ botToken: "test-token", adminUserId: 424242420 });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
-      expect(config.adminUserId).toBe(352042062);
+      expect(config.adminUserId).toBe(424242420);
     });
 
     it("reads apiId and apiHash from config", async () => {
-      mockFs({ botToken: "test-token", apiId: 12345, apiHash: "abc123" });
+      mockFs({
+        botToken: "test-token",
+        adminUserId: 1,
+        apiId: 12345,
+        apiHash: "abc123",
+      });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -225,7 +345,12 @@ describe("config", () => {
     });
 
     it("reads pulse settings from config", async () => {
-      mockFs({ botToken: "test-token", pulse: false, pulseIntervalMs: 600000 });
+      mockFs({
+        botToken: "test-token",
+        adminUserId: 1,
+        pulse: false,
+        pulseIntervalMs: 600000,
+      });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -234,7 +359,11 @@ describe("config", () => {
     });
 
     it("accepts frontend as an array", async () => {
-      mockFs({ frontend: ["telegram", "terminal"], botToken: "test-token" });
+      mockFs({
+        frontend: ["telegram", "terminal"],
+        botToken: "test-token",
+        adminUserId: 1,
+      });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -449,7 +578,7 @@ describe("config", () => {
         memory: {
           enabled: true,
           backend: "mem0",
-          mem0: { apiKey: "m0-test", userId: "dylan" },
+          mem0: { apiKey: "m0-test", userId: "ada" },
         },
       });
 
@@ -458,7 +587,7 @@ describe("config", () => {
       expect(config.mem0).toEqual({
         enabled: true,
         apiKey: "m0-test",
-        userId: "dylan",
+        userId: "ada",
       });
       expect(config.mempalace?.enabled).not.toBe(true);
     });
@@ -514,7 +643,7 @@ describe("config", () => {
   describe("system prompt", () => {
     it("builds system prompt from prompt files", async () => {
       mockFs(
-        { botToken: "test-token" },
+        { botToken: "test-token", adminUserId: 1 },
         { "identity.md": "I am Talon.", "base.md": "Be helpful." },
       );
 
@@ -525,7 +654,7 @@ describe("config", () => {
     });
 
     it("includes current date in system prompt", async () => {
-      mockFs({ botToken: "test-token" });
+      mockFs({ botToken: "test-token", adminUserId: 1 });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -535,7 +664,7 @@ describe("config", () => {
 
     it("splits the prompt into cache-stable static and volatile dynamic parts", async () => {
       mockFs(
-        { botToken: "test-token" },
+        { botToken: "test-token", adminUserId: 1 },
         {
           "identity.md": "I am Talon.",
           "base.md": "Be helpful.",
@@ -570,7 +699,7 @@ describe("config", () => {
     });
 
     it("omits the minute-precision datetime section (cache-buster)", async () => {
-      mockFs({ botToken: "test-token" });
+      mockFs({ botToken: "test-token", adminUserId: 1 });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -581,7 +710,7 @@ describe("config", () => {
     });
 
     it("includes workspace instructions in system prompt", async () => {
-      mockFs({ botToken: "test-token" });
+      mockFs({ botToken: "test-token", adminUserId: 1 });
 
       const { loadConfig } = await import("../core/config/index.js");
       const config = loadConfig();
@@ -636,7 +765,7 @@ describe("config", () => {
 
     it("loads telegram.md prompt for telegram frontend", async () => {
       mockFs(
-        { botToken: "test-token", frontend: "telegram" },
+        { botToken: "test-token", adminUserId: 1, frontend: "telegram" },
         { "telegram.md": "You are a Telegram bot." },
       );
 
@@ -847,7 +976,11 @@ describe("config", () => {
     });
 
     it("returns array as-is when frontend is already an array", async () => {
-      mockFs({ frontend: ["telegram", "terminal"], botToken: "test-token" });
+      mockFs({
+        frontend: ["telegram", "terminal"],
+        botToken: "test-token",
+        adminUserId: 1,
+      });
 
       const { loadConfig, getFrontends } =
         await import("../core/config/index.js");
@@ -903,7 +1036,11 @@ describe("config", () => {
 
     it("rebuilds prompt with correct frontend from array config", async () => {
       mockFs(
-        { frontend: ["terminal", "telegram"], botToken: "test-token" },
+        {
+          frontend: ["terminal", "telegram"],
+          botToken: "test-token",
+          adminUserId: 1,
+        },
         { "terminal.md": "Terminal-specific prompt." },
       );
 
@@ -980,11 +1117,69 @@ describe("config", () => {
       const config = loadConfig();
       expect(config.pulse).toBe(true);
     });
+
+    it("leaves triggers/agents caps unset when absent (runtime defaults apply)", async () => {
+      mockFs({ frontend: "terminal" });
+
+      const { loadConfig } = await import("../core/config/index.js");
+      const config = loadConfig();
+      expect(config.triggers).toBeUndefined();
+      expect(config.agents).toBeUndefined();
+    });
+
+    it("defaults triggers.maxActivePerChat to 5 inside an empty block", async () => {
+      mockFs({ frontend: "terminal", triggers: {}, agents: {} });
+
+      const { loadConfig } = await import("../core/config/index.js");
+      const config = loadConfig();
+      expect(config.triggers?.maxActivePerChat).toBe(5);
+      expect(config.triggers?.maxPersistentPerChat).toBeUndefined();
+      expect(config.agents?.maxConcurrent).toBe(6);
+    });
+
+    it("accepts configured trigger and agent caps", async () => {
+      mockFs({
+        frontend: "terminal",
+        triggers: { maxActivePerChat: 12, maxPersistentPerChat: 8 },
+        agents: { maxConcurrent: 16 },
+      });
+
+      const { loadConfig } = await import("../core/config/index.js");
+      const config = loadConfig();
+      expect(config.triggers).toEqual({
+        maxActivePerChat: 12,
+        maxPersistentPerChat: 8,
+      });
+      expect(config.agents?.maxConcurrent).toBe(16);
+    });
+
+    it.each([
+      { maxActivePerChat: 0 },
+      { maxActivePerChat: 51 },
+      { maxActivePerChat: 2.5 },
+      { maxPersistentPerChat: 0 },
+      { maxPersistentPerChat: 51 },
+    ])("rejects out-of-bounds triggers caps %o", async (triggers) => {
+      mockFs({ frontend: "terminal", triggers });
+
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow();
+    });
+
+    it.each([0, 65])(
+      "rejects out-of-bounds agents.maxConcurrent %i",
+      async (maxConcurrent) => {
+        mockFs({ frontend: "terminal", agents: { maxConcurrent } });
+
+        const { loadConfig } = await import("../core/config/index.js");
+        expect(() => loadConfig()).toThrow();
+      },
+    );
   });
 
   describe("loadConfigFile edge cases", () => {
-    it("handles corrupt talon.json gracefully", async () => {
-      // Simulate a corrupt JSON by having readFileSync throw
+    it("fails loudly when an existing config.json cannot be read", async () => {
+      // Simulate an unreadable file by having readFileSync throw
       vi.doMock("node:fs", () => ({
         existsSync: vi.fn((path: string) => {
           if (path.includes("config.json") || path.includes("talon.json"))
@@ -1003,8 +1198,10 @@ describe("config", () => {
       }));
 
       const { loadConfig } = await import("../core/config/index.js");
-      // With corrupt config, it falls back to empty config => default frontend=telegram => no botToken => throws
-      expect(() => loadConfig()).toThrow("botToken");
+      // No silent fallback to defaults (which would target telegram).
+      expect(() => loadConfig()).toThrow(
+        /Cannot read .*config\.json: corrupt file/,
+      );
     });
   });
 });

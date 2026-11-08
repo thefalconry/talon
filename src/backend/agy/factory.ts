@@ -35,6 +35,7 @@ import { evictOrphanSubprocesses } from "./process/orphans.js";
 import { getState, resetState } from "./state.js";
 import { resetChat, warmSession, refreshTools } from "./sessions.js";
 import { killAllChildren } from "./process/child.js";
+import { getAgyPlanUsage, resetAgyPlanUsage } from "./plan-usage.js";
 import { unregisterAllMcp } from "./mcp/register.js";
 import {
   resolveModel,
@@ -51,6 +52,9 @@ import {
 const agyFactory: BackendFactory = {
   id: "agy",
   label: "Antigravity",
+  // Its own shell/file tools can't be withheld per turn, so guest-scoped
+  // turns (non-operator senders) are refused rather than run with them.
+  guestToolScope: "refused",
   doctor: (config, isActive) => agyDoctorChecks(config, isActive),
 
   async init(config, ctx) {
@@ -92,11 +96,11 @@ const agyFactory: BackendFactory = {
     // cache-write counter in its usage payload, hence `cacheMetrics: "read"`.
     const usage: UsageTelemetry = {
       getSessionSnapshot: async (chatId) => getState().lastUsage.get(chatId),
-      // No plan-usage endpoint exists: the CLI exposes `/usage` only as
-      // an interactive slash command that prints a human report, and
-      // there is no account API to read windows from. Reporting
-      // undefined lets /status fall through to another backend's plan.
-      getPlanUsage: async () => undefined,
+      // Quota windows come from `agy -p /usage --output-format text`
+      // (see plan-usage.ts): at most one spawn per cache window, and
+      // undefined on any failure so headroom falls back to the local
+      // `backendBudgets` ledger.
+      getPlanUsage: () => getAgyPlanUsage(),
     };
 
     const control: SystemControl = {
@@ -127,6 +131,7 @@ const agyFactory: BackendFactory = {
         killAllChildren("shutdown");
         unregisterAllMcp();
         resetModelCache();
+        resetAgyPlanUsage();
         resetState();
         log("bot", "Antigravity backend cleaned up");
       },

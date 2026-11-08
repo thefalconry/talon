@@ -27,6 +27,7 @@ import {
   type AgentResult,
 } from "../agent-runtime/events.js";
 import { recordTurnActivity } from "../../util/watchdog.js";
+import type { TurnToolLog } from "./turn-log.js";
 
 export type EventSink = (event: AgentEvent) => void | Promise<void>;
 
@@ -45,12 +46,14 @@ export const startShuttleTiming = (): ShuttleTiming => ({ deliveryMs: 0 });
 /**
  * Pump the stream to completion. Returns the `completed` event's
  * result (if the backend emitted one); throws `AgentRunError` when the
- * stream terminates with an `error` event.
+ * stream terminates with an `error` event. `tools`, when given, sees
+ * every tool call/result pair for the turn's `tool.call` log lines.
  */
 export async function carryTurnEvents(
   stream: AsyncIterable<AgentEvent>,
   onEvent?: EventSink,
   timing?: ShuttleTiming,
+  tools?: TurnToolLog,
 ): Promise<AgentResult | undefined> {
   let agentResult: AgentResult | undefined;
   const sink: EventSink | undefined =
@@ -73,6 +76,10 @@ export async function carryTurnEvents(
     }
     if (event.type === "completed") {
       agentResult = event.result;
+    } else if (event.type === "tool_call") {
+      tools?.onCall(event);
+    } else if (event.type === "tool_result") {
+      tools?.onResult(event);
     }
 
     if (event.type === "assistant_message" && event.deliveryAck) {

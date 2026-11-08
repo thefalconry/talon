@@ -1,7 +1,25 @@
 name: Dependabot Auto-Merge
 
+# Only low-risk updates merge without a human:
+#   - npm updates where every bumped package is a devDependency, minor or
+#     patch (grouped as "dev-dependencies" in .github/dependabot.yml);
+#   - GitHub Actions patch releases (actions are SHA-pinned, so this is a
+#     reviewed-by-diff bump of a pinned commit).
+# Anything that touches a production dependency — it ships to every user
+# of the next release — needs a review, however small the semver bump.
+# fetch-metadata reports the *highest* dependency type in a grouped PR, so
+# one production package in a group is enough to require review.
+#
+# No approve step: GitHub Actions is not allowed to approve PRs in this
+# repo (the step always failed), and the main ruleset requires no review —
+# only `CI Status` — so `--auto` merges the PR as soon as CI is green.
+
 on:
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -14,19 +32,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: dependabot/fetch-metadata@v3
+      - uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         id: metadata
 
-      - name: Auto-approve minor/patch updates
-        if: success() && steps.metadata.outputs.update-type != 'version-update:semver-major'
-        run: gh pr review --approve "$PR_URL"
+      - name: Decide
+        id: policy
         env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
+          DEP_TYPE: ${{ steps.metadata.outputs.dependency-type }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          auto=false
+          if [ "$ECOSYSTEM" = "npm_and_yarn" ] && [ "$DEP_TYPE" = "direct:development" ] &&
+             { [ "$UPDATE_TYPE" = "version-update:semver-minor" ] || [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; }; then
+            auto=true
+          elif [ "$ECOSYSTEM" = "github_actions" ] && [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; then
+            auto=true
+          fi
+          echo "auto=$auto" >> "$GITHUB_OUTPUT"
+          echo "ecosystem=$ECOSYSTEM dependency-type=$DEP_TYPE update-type=$UPDATE_TYPE → auto-merge=$auto"
 
-      - name: Auto-merge minor/patch updates
-        if: success() && steps.metadata.outputs.update-type != 'version-update:semver-major'
+      - name: Auto-merge
+        if: steps.policy.outputs.auto == 'true'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Leave for review
+        if: steps.policy.outputs.auto != 'true'
+        run: echo "::notice::Not auto-merged — production dependency or major/minor Actions bump; needs a human review."

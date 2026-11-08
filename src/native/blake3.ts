@@ -34,6 +34,7 @@
 import { createReadStream } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { logDebug, logWarn } from "../util/log.js";
 import { BLAKE3_WASM_BASE64 } from "./blake3-wasm-bytes.js";
 import {
   allocRegion,
@@ -99,10 +100,35 @@ function loadNativeBlake3(): NativeBlake3 | null {
     const addon = requireAddon(candidate) as NativeBlake3;
     // Trust nothing that can't produce a known digest — a truncated or
     // wrong-arch artifact fails here and wasm silently takes over.
-    if (addon.hashHex(Buffer.alloc(0)) !== EMPTY_DIGEST) return null;
+    if (addon.hashHex(Buffer.alloc(0)) !== EMPTY_DIGEST) {
+      reportAddonRejected(candidate, "digest mismatch");
+      return null;
+    }
     return addon;
-  } catch {
+  } catch (err) {
+    reportAddonRejected(candidate, err);
     return null;
+  }
+}
+
+/**
+ * Wasm takes over either way; the log says why. An absent default
+ * artifact is the normal npm install; an explicit TALON_BLAKE3_NODE
+ * that fails to load is operator config silently not taking effect.
+ */
+function reportAddonRejected(candidate: string, reason: unknown): void {
+  const code = (reason as { code?: unknown } | null)?.code;
+  const why = reason instanceof Error ? reason.message : String(reason);
+  if (process.env.TALON_BLAKE3_NODE) {
+    logWarn(
+      "native",
+      `TALON_BLAKE3_NODE addon rejected, using wasm path=${candidate}: ${why}`,
+    );
+  } else if (code !== "MODULE_NOT_FOUND") {
+    logDebug(
+      "native",
+      `blake3 addon rejected, using wasm path=${candidate}: ${why}`,
+    );
   }
 }
 

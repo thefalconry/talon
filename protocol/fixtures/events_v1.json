@@ -171,6 +171,7 @@
       "name": "status",
       "params": {}
     },
+    { "kind": "bye", "reason": "restart", "reconnectAfterMs": 5000 },
     { "kind": "chat_deleted", "chatId": "d_new777" }
   ],
   "forwardCompat": [

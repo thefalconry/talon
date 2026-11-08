@@ -4,6 +4,7 @@
  * without spawning the real CLI.
  */
 
+import { EventEmitter } from "node:events";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -136,9 +137,36 @@ describe("agy factory — composed capability slots", () => {
     await cleanup?.();
   });
 
-  it("has no plan-usage endpoint to report", async () => {
+  it("reads plan windows from `agy -p /usage`", async () => {
+    spawnMock.mockImplementationOnce(() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: Object.assign(new EventEmitter(), { setEncoding() {} }),
+        stderr: Object.assign(new EventEmitter(), { setEncoding() {} }),
+        kill: () => true,
+      });
+      setTimeout(() => {
+        child.stdout.emit(
+          "data",
+          "Gemini Models\tFive Hour Limit Remaining\t75%\t2026-09-23T21:23:05Z\n",
+        );
+        child.emit("close", 0);
+      }, 1);
+      return child;
+    });
     const { backend, cleanup } = await initBackend();
-    await expect(backend.usage!.getPlanUsage!()).resolves.toBeUndefined();
+    const usage = await backend.usage!.getPlanUsage!();
+    expect(spawnMock).toHaveBeenCalledWith(
+      "agy",
+      ["-p", "/usage", "--output-format", "text"],
+      expect.anything(),
+    );
+    expect(usage?.windows).toEqual([
+      {
+        label: "Gemini · 5h",
+        percent: 25,
+        resetsAt: "2026-09-23T21:23:05Z",
+      },
+    ]);
     await cleanup?.();
   });
 

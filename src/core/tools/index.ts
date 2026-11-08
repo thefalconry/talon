@@ -15,7 +15,7 @@ import { mediaTools } from "./chat/media.js";
 import { stickerTools } from "./chat/stickers.js";
 import { schedulingTools } from "./ops/scheduling.js";
 import { triggerTools } from "./ops/triggers.js";
-import { agentTools } from "./ops/agents.js";
+import { agentTools, preflightTools } from "./ops/agents.js";
 import { goalTools } from "./ops/goals.js";
 import { memoryTools } from "./content/memory.js";
 import { scriptTools } from "./ops/scripts.js";
@@ -29,6 +29,7 @@ import { whatsappTools } from "./chat/whatsapp.js";
 import { moderationTools } from "./chat/moderation.js";
 import { nativeTools } from "./ops/native.js";
 import { backupTools } from "./ops/backup.js";
+import { secretTools } from "./ops/secrets.js";
 
 /** All built-in tool definitions. */
 export const ALL_TOOLS: readonly ToolDefinition[] = [
@@ -56,6 +57,8 @@ export const ALL_TOOLS: readonly ToolDefinition[] = [
   // system prompt (see compose-tools.test.ts).
   ...agentTools,
   ...backupTools,
+  ...preflightTools,
+  ...secretTools,
 ];
 
 /**
@@ -112,7 +115,7 @@ const ALL_TOOL_NAMES: ReadonlySet<string> = new Set(
  *      e.g. `mcp__telegram-tools__end_turn` → `end_turn`.
  *
  *   2. **Kilo / OpenCode:** `<server>_<tool>` (single underscore boundary,
- *      no `mcp__` prefix). e.g. `talon-tools-352042062_send` → `send`,
+ *      no `mcp__` prefix). e.g. `talon-tools-424242420_send` → `send`,
  *      `talon-tools-heartbeat_end_turn` → `end_turn`. Bare names that
  *      contain underscores (`end_turn`) make a "split on _" approach
  *      ambiguous, so we resolve by checking whether the trailing segment
@@ -132,7 +135,7 @@ export function stripMcpPrefix(toolName: string): string {
 
   // Kilo / OpenCode `<server>_<bare>` form. Walk underscore boundaries
   // from the right; the longest tail that matches a registered tool name
-  // is the bare name. Prevents `talon-tools-352042062_end_turn` from
+  // is the bare name. Prevents `talon-tools-424242420_end_turn` from
   // resolving to `turn` (which isn't a tool).
   const segments = toolName.split("_");
   for (let i = 1; i < segments.length; i++) {

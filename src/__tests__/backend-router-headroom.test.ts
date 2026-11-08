@@ -226,7 +226,9 @@ describe("getBackendHeadroom", () => {
     getPooledBackend.mockReturnValue({ background: {} });
     const entry = await getBackendHeadroom("kilo", "Kilo", undefined);
     expect(entry.source).toBe("none");
-    expect(entry.headroom).toBe(1);
+    // Unmeasured is not "empty": it must never be preferred on no evidence.
+    expect(entry.headroom).toBe(0);
+    expect(entry.limiting).toBeUndefined();
   });
 
   it("collects one entry per exposed backend, plan and ledger mixed", async () => {
@@ -259,5 +261,39 @@ describe("getBackendHeadroom", () => {
       ["agy", "ledger"],
     ]);
     expect(entries[1]?.headroom).toBeCloseTo(0.75, 5);
+  });
+
+  it("prefers agy's own /usage windows and falls back to its budget when they are missing", async () => {
+    const now = Date.now();
+    let plan:
+      | { fetchedAt: number; windows: { label: string; percent: number }[] }
+      | undefined = {
+      fetchedAt: now,
+      windows: [
+        { label: "Gemini · 7d", percent: 40 },
+        { label: "Gemini · 5h", percent: 0 },
+      ],
+    };
+    getPooledBackend.mockReturnValue({
+      background: {},
+      usage: { getPlanUsage: async () => plan },
+    });
+    recordBackendUsage("agy", 250_000, now);
+    const config = withBudgets({ agy: { tokensPer5h: 1_000_000 } });
+
+    const fromPlan = await getBackendHeadroom("agy", "Antigravity", config, {
+      now,
+    });
+    expect(fromPlan.source).toBe("plan");
+    expect(fromPlan.limiting?.label).toBe("Gemini · 7d");
+    expect(fromPlan.headroom).toBeCloseTo(0.6, 5);
+
+    plan = undefined;
+    const fromLedger = await getBackendHeadroom("agy", "Antigravity", config, {
+      now,
+      force: true,
+    });
+    expect(fromLedger.source).toBe("ledger");
+    expect(fromLedger.headroom).toBeCloseTo(0.75, 5);
   });
 });

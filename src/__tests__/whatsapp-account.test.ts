@@ -38,7 +38,7 @@ describe("WhatsApp account actions", () => {
     resetWhatsAppRegistry();
     calls = [];
     sock = {
-      user: { id: "353851722396:17@s.whatsapp.net", name: "Claudius" },
+      user: { id: "447700900101:17@s.whatsapp.net", name: "Claudius" },
       fetchStatus: spy("fetchStatus", [{ status: "Running on Talon" }]),
       profilePictureUrl: spy("profilePictureUrl", "https://wa/pic.jpg"),
       updateProfileName: spy("updateProfileName"),
@@ -73,12 +73,12 @@ describe("WhatsApp account actions", () => {
     const result = await run({ op: "get_profile" });
     expect(result?.ok).toBe(true);
     const text = String(result?.text);
-    expect(text).toContain("number: +353851722396");
+    expect(text).toContain("number: +447700900101");
     expect(text).toContain("name: Claudius");
     expect(text).toContain("about: Running on Talon");
     expect(text).toContain("photo: https://wa/pic.jpg");
     // The device suffix must be stripped before any profile lookup.
-    expect(method("fetchStatus")?.args[0]).toBe("353851722396@s.whatsapp.net");
+    expect(method("fetchStatus")?.args[0]).toBe("447700900101@s.whatsapp.net");
   });
 
   it("sets the display name and the about text", async () => {
@@ -110,7 +110,7 @@ describe("WhatsApp account actions", () => {
     });
     expect(result?.ok).toBe(true);
     expect(method("updateProfilePicture")?.args).toEqual([
-      "353851722396@s.whatsapp.net",
+      "447700900101@s.whatsapp.net",
       { url: "https://example.com/avatar.png" },
     ]);
   });

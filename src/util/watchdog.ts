@@ -126,9 +126,33 @@ let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let stuckWarnBackoffMs = STUCK_WARN_MS;
 let nextStuckWarnAt = 0;
 
+/**
+ * Who hears about a wedged loop beyond the log. util is a leaf, so the
+ * engine registers this (it raises the operator alert and knows what is
+ * queued); the watchdog only says when it starts and when it ends.
+ */
+export type StuckLoopListener = {
+  onStuck(info: { pendingMins: number; silentMins: number }): void;
+  onRecovered(): void;
+};
+let stuckListener: StuckLoopListener | null = null;
+let stuckReported = false;
+
+export function setStuckLoopListener(listener: StuckLoopListener | null): void {
+  stuckListener = listener;
+}
+
 function resetStuckWarnBackoff(): void {
   stuckWarnBackoffMs = STUCK_WARN_MS;
   nextStuckWarnAt = 0;
+  if (stuckReported) {
+    stuckReported = false;
+    try {
+      stuckListener?.onRecovered();
+    } catch {
+      /* a listener fault must not break turn bookkeeping */
+    }
+  }
 }
 
 export function startWatchdog(workspaceDir?: string): void {
@@ -150,6 +174,12 @@ export function startWatchdog(workspaceDir?: string): void {
         "watchdog",
         `Message received ${pendingMins} minutes ago is still unprocessed with no turn activity for ${silentMins} minutes — the message loop may be wedged`,
       );
+      stuckReported = true;
+      try {
+        stuckListener?.onStuck({ pendingMins, silentMins });
+      } catch (err) {
+        logWarn("watchdog", `stuck-loop listener failed: ${String(err)}`);
+      }
       nextStuckWarnAt = now + stuckWarnBackoffMs;
       stuckWarnBackoffMs = Math.min(
         stuckWarnBackoffMs * 2,

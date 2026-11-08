@@ -80,13 +80,13 @@ describe("codex / state lifecycle", () => {
 describe("codex / buildCodexMcpServers", () => {
   it("emits one frontend-tools server per non-terminal frontend", () => {
     const servers = buildCodexMcpServers({
-      chatId: "352042062",
+      chatId: "424242420",
       bridgeUrl: "http://127.0.0.1:19876",
       frontends: ["telegram"],
     });
     expect(servers["telegram-tools"]).toBeDefined();
     expect(servers["telegram-tools"].url).toBe(
-      "http://127.0.0.1:19876/mcp/talon/telegram/352042062",
+      "http://127.0.0.1:19876/mcp/talon/telegram/424242420",
     );
   });
 

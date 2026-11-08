@@ -39,6 +39,7 @@ import { toolInputToRecord } from "../../core/agent-runtime/events.js";
 import { resetSession } from "../../storage/sessions.js";
 import { Gateway } from "../../core/engine/gateway.js";
 import type { FrontendActionHandler } from "../../core/types.js";
+import { logWarn } from "../../util/log.js";
 
 import type { StubScript } from "./stub-claude/protocol.js";
 
@@ -63,6 +64,65 @@ process.env.TALON_MCP_SUPERVISOR_CMD = JSON.stringify([
   ).href,
   resolve(__dirname, "../../cli.ts"),
 ]);
+
+/**
+ * The composition root's Claude backend init spawns a real subprocess (the
+ * stub binary) to probe supported models. Under full-suite load — many
+ * integration files booting concurrently, each spawning their own stub
+ * process — `child_process.spawn` can transiently fail (EAGAIN/ENOMEM, or
+ * the SDK's own "exists but failed to launch" wrapper around a spawn
+ * `error` event) even though the executable is present and otherwise fine.
+ * `initBackendPool` already rolls back any partial init on a throw (see
+ * core/engine/backend-controller/pool.ts), so a from-scratch retry is safe —
+ * it's a resource hiccup in the test host, not a wiring bug, and worth a
+ * couple of quick retries before failing the test.
+ */
+const BOOT_RETRY_ATTEMPTS = 3;
+const BOOT_RETRY_DELAY_MS = 300;
+
+function isTransientLaunchFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /failed to launch/i.test(msg) ||
+    /\bEAGAIN\b/.test(msg) ||
+    /\bENOMEM\b/.test(msg) ||
+    /\bEMFILE\b/.test(msg)
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Boots the production composition root, retrying a bounded number of times
+ * when the failure looks like a transient subprocess-launch hiccup rather
+ * than a real regression. Non-transient errors (and the last attempt's
+ * error, whatever its shape) propagate immediately.
+ */
+async function bootCompositionRoot(
+  config: TalonConfig,
+  fakeFrontend: Frontend,
+): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await initBackendAndDispatcher(config, fakeFrontend);
+      return;
+    } catch (err) {
+      if (attempt >= BOOT_RETRY_ATTEMPTS || !isTransientLaunchFailure(err)) {
+        throw err;
+      }
+      logWarn(
+        "agent",
+        `Composition-root boot attempt ${attempt}/${BOOT_RETRY_ATTEMPTS} hit a ` +
+          `transient subprocess-launch failure, retrying: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+      );
+      await delay(BOOT_RETRY_DELAY_MS * attempt);
+    }
+  }
+}
 
 let booted = false;
 /**
@@ -186,6 +246,7 @@ export async function ensureBooted(args: EnsureBootedArgs = {}): Promise<void> {
     plugins: [],
     botDisplayName: "Talon (stub)",
     nativeTools: false,
+    allowNativeSubagents: false,
     fuse: "off",
     teamsWebhookPort: 19878,
     teamsGraphPollMs: 10_000,
@@ -217,7 +278,7 @@ export async function ensureBooted(args: EnsureBootedArgs = {}): Promise<void> {
     start: async () => {},
     stop: async () => {},
   };
-  await initBackendAndDispatcher(config, fakeFrontend);
+  await bootCompositionRoot(config, fakeFrontend);
   coreBooted = true;
   booted = true;
 }

@@ -14,6 +14,7 @@
 
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+import { logWarn } from "../util/log.js";
 import { dirs } from "../util/paths.js";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -50,7 +51,15 @@ export function listSavedPacks(): SavedPack[] {
   let entries: string[];
   try {
     entries = readdirSync(dir).filter((f) => f.endsWith(".json"));
-  } catch {
+  } catch (err) {
+    // No stickers dir yet is the normal empty library; anything else
+    // (EACCES, ENOTDIR) hides every saved pack.
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      logWarn(
+        "stickers",
+        `Could not list sticker packs dir=${dir}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return [];
   }
   const packs: SavedPack[] = [];
@@ -82,8 +91,13 @@ export function listSavedPacks(): SavedPack[] {
         stickers,
         savedAt: typeof raw.savedAt === "string" ? raw.savedAt : "",
       });
-    } catch {
-      /* skip malformed pack file */
+    } catch (err) {
+      // Skip the malformed pack file, but name it — it silently drops
+      // out of the library otherwise.
+      logWarn(
+        "stickers",
+        `Skipped unreadable sticker pack file=${file}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   return packs.sort((a, b) => b.savedAt.localeCompare(a.savedAt));

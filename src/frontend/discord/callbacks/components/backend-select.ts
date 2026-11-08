@@ -20,7 +20,7 @@ import {
   rebindChat,
 } from "../../../../core/engine/backend-controller/index.js";
 import { resetSession } from "../../../../storage/sessions.js";
-import { clearHistory } from "../../../../storage/history.js";
+import { sharesSessionStore } from "../../../../core/agent-runtime/backend-registry.js";
 import { resetPulseCheckpoint } from "../../../../core/background/pulse/pulse.js";
 import { resolveActiveModelForChat } from "../../../../core/models/active-model.js";
 import { logError } from "../../../../util/log.js";
@@ -109,12 +109,16 @@ export async function handleBackendSelect(
   }
 
   // Only now is the switch known to hold. Session state doesn't port across
-  // backends, so it goes — but each backend's remembered model pick stays.
+  // backends, so it goes — but each backend's remembered model pick stays,
+  // and chat history is never touched (a switch changes who answers, not
+  // what was said).
   // A re-pick of the backend already in use clears nothing: the retry after
   // a timed-out interaction must not cost the session a second time.
   if (!alreadyThere) {
-    resetSession(chatId);
-    clearHistory(chatId);
+    // …except between logins that share a transcript store (Claude
+    // accounts): the session id stays valid there.
+    if (!sharesSessionStore(previousId, backendId))
+      resetSession(chatId, "backend-switch");
     resetPulseCheckpoint(chatId);
     previous?.sessions?.resetChat?.(chatId);
   }

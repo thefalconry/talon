@@ -11,6 +11,7 @@ import { memoryRoutes } from "./memory.js";
 import { modelRoutes } from "./models.js";
 import { daemonRoutes } from "./daemon.js";
 import { meshRoutes } from "./mesh.js";
+import { authRoutes } from "./auth.js";
 
 export function buildRoutes(host: RouteHost): BridgeRoutes {
   return {
@@ -20,5 +21,6 @@ export function buildRoutes(host: RouteHost): BridgeRoutes {
     ...modelRoutes(host),
     ...daemonRoutes(host),
     ...meshRoutes(host),
+    ...authRoutes(host),
   };
 }

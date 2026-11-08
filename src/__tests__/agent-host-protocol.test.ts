@@ -405,7 +405,7 @@ describe("in-process agent host", () => {
       chatId: "d_abc123",
       model: makeBareModelRef("claude", "default"),
       text: "find the fox",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     };
 

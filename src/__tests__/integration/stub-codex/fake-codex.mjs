@@ -120,8 +120,20 @@ const getMcpClient = async (serverName) => {
   try {
     // `url` is the streamable-HTTP shape Talon's MCP hub emits (the real
     // codex binary connects the same way); command/args is legacy stdio.
+    // Like the real binary: `bearer_token_env_var` names an env var whose
+    // value is sent as the bearer token.
+    const bearer = cfg.bearer_token_env_var
+      ? process.env[cfg.bearer_token_env_var]
+      : undefined;
     const transport = cfg.url
-      ? new StreamableHTTPClientTransport(new URL(cfg.url))
+      ? new StreamableHTTPClientTransport(new URL(cfg.url), {
+          requestInit: {
+            headers: {
+              ...cfg.http_headers,
+              ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+            },
+          },
+        })
       : new StdioClientTransport({
           command: cfg.command,
           args: Array.isArray(cfg.args) ? cfg.args : [],

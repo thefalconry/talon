@@ -19,7 +19,11 @@ import {
   acquireBackendInstance,
   isModelValidForBackend,
 } from "../../engine/backend-controller/index.js";
-import { recordBackendRunUsage } from "../../engine/backend-router/index.js";
+import {
+  recordBackendRunFailure,
+  recordBackendRunSuccess,
+  recordBackendRunUsage,
+} from "../../engine/backend-router/index.js";
 import { taskTable } from "../../tasks/index.js";
 import type { OneShotAgentParams } from "../../types.js";
 import { runIsolatedAgent } from "../isolated-agent.js";
@@ -184,8 +188,10 @@ async function attemptJobOneShot(
       });
       task.succeed(usage ?? undefined);
       recordBackendRunUsage(backendId, usage ?? undefined);
+      recordBackendRunSuccess(backendId);
     } catch (err) {
       task.fail(err);
+      recordBackendRunFailure(backendId, err);
       throw err;
     }
     log(

@@ -49,7 +49,7 @@ import {
   getRecentHistory,
   pushMessage,
 } from "../storage/history.js";
-import { deleteChat } from "../storage/repositories/history-repo.js";
+import { purgeChat as deleteChat } from "../storage/repositories/history-repo.js";
 
 const CHAT = "wa_dm_5550001";
 const chat = {
@@ -90,7 +90,7 @@ describe("persisted message keys", () => {
       },
       chatId: CHAT,
       text: "the photo",
-      senderName: "Dylan",
+      senderName: "Ada",
       message: {
         key: { id: "WA-FIRST", remoteJid: "5550001@s.whatsapp.net" },
         message: { imageMessage: { mediaKey, mimetype: "image/jpeg" } },
@@ -109,7 +109,7 @@ describe("persisted message keys", () => {
       fromMe: false,
       participant: "5550001@s.whatsapp.net",
     });
-    expect(stored?.senderName).toBe("Dylan");
+    expect(stored?.senderName).toBe("Ada");
     const image = stored?.message?.message?.imageMessage;
     expect(image?.mimetype).toBe("image/jpeg");
     expect(Array.from(image?.mediaKey as Uint8Array)).toEqual([1, 2, 3, 250]);
@@ -152,7 +152,7 @@ describe("search_history with a date range", () => {
       pushMessage(CHAT, {
         msgId: 1_000_000 + i,
         senderId: 1,
-        senderName: "Dylan",
+        senderName: "Ada",
         text,
         timestamp: base + i * day,
       });
@@ -192,7 +192,7 @@ describe("get_message_by_id", () => {
     pushMessage(CHAT, {
       msgId: 1_000_005,
       senderId: 1,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "boarding pass",
       timestamp: Date.now(),
       mediaType: "document",
@@ -228,7 +228,7 @@ describe("download_media", () => {
     pushMessage(CHAT, {
       msgId,
       senderId: 1,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "",
       timestamp: Date.now(),
       mediaType: "photo",
@@ -251,13 +251,13 @@ describe("download_media", () => {
     const msgId = rememberMessage({
       key: { id: "OLD", remoteJid: "5550001@s.whatsapp.net" },
       chatId: CHAT,
-      senderName: "Dylan",
+      senderName: "Ada",
       message,
     });
     pushMessage(CHAT, {
       msgId,
       senderId: 1,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "",
       timestamp: Date.now(),
       mediaType: "photo",
@@ -279,7 +279,7 @@ describe("download_media", () => {
     const [msgArg, chatArg, idArg, senderArg, retrieval] = saveInboundMedia.mock
       .calls[0] as unknown[];
     expect((msgArg as { key: { id: string } }).key.id).toBe("OLD");
-    expect([chatArg, idArg, senderArg]).toEqual([CHAT, msgId, "Dylan"]);
+    expect([chatArg, idArg, senderArg]).toEqual([CHAT, msgId, "Ada"]);
     expect((retrieval as { reuploadRequest: unknown }).reuploadRequest).toBe(
       (ctx as { sock: { updateMediaMessage: unknown } }).sock
         .updateMediaMessage,

@@ -441,8 +441,8 @@ Prompt-only; independent of every other PR; could ship at any point.
 - Strip voice out of `telegram.md` / `discord.md` / `teams.md` / `native.md` /
   `terminal.md`; they keep capability docs only.
 - `identity.md` stays **seeded and user-editable** — a shipped rewrite updates the
-  package default; a local edit wins and is never clobbered. (Settled: Dylan does not
-  need the live NPUW-Agent copy preserved.)
+  package default; a local edit wins and is never clobbered. (Settled: Ada does not
+  need their live copy preserved.)
 
 **Landed** as #691.
 

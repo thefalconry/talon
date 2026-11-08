@@ -2,8 +2,8 @@
  * Identity resolution — the LID/phone-number duality.
  *
  * WhatsApp addresses people two ways. The historical form is the phone
- * number (`353834733284@s.whatsapp.net`, "PN"); the newer privacy form
- * is a linked identity (`180753715482747@lid`, "LID") that hides the
+ * number (`447700900102@s.whatsapp.net`, "PN"); the newer privacy form
+ * is a linked identity (`190000000000001@lid`, "LID") that hides the
  * number. Which one arrives depends on the sender's privacy settings and
  * the chat's addressing mode, and neither is derivable from the other —
  * they are looked up.
@@ -22,9 +22,9 @@
 import { isLidUser, jidNormalizedUser, type WASocket } from "baileys";
 
 export type Identity = {
-  /** Phone-number form, digits only, when known: "353834733284". */
+  /** Phone-number form, digits only, when known: "447700900102". */
   phone?: string;
-  /** LID form, digits only, when known: "180753715482747". */
+  /** LID form, digits only, when known: "190000000000001". */
   lid?: string;
   /** Every bare id this person is known by — what allowlists match on. */
   ids: string[];

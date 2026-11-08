@@ -42,6 +42,12 @@ export interface OpenAIAgentsState {
   /** Resolved API key the SDK is currently using (or undefined for unauthenticated). */
   apiKey: string | undefined;
   /**
+   * Resolved API surface the default client speaks. Recorded at init so
+   * an isolated run can build its own client + provider on the same
+   * endpoint (see `one-shot.ts`).
+   */
+  apiMode: "responses" | "chat_completions";
+  /**
    * Endpoint-advertised model metadata, keyed by model id. Populated
    * asynchronously after `init()` so /status, /settings, and the model
    * picker can show real context windows for OpenRouter / Ollama /
@@ -75,6 +81,7 @@ const state: OpenAIAgentsState = {
   frontendName: "telegram",
   baseURL: undefined,
   apiKey: undefined,
+  apiMode: "responses",
   endpointModels: new Map(),
   discoveryPromise: null,
   discoveryAt: null,
@@ -125,6 +132,7 @@ export function resetState(): void {
   state.frontendName = "telegram";
   state.baseURL = undefined;
   state.apiKey = undefined;
+  state.apiMode = "responses";
   state.endpointModels.clear();
   state.discoveryPromise = null;
   state.discoveryAt = null;

@@ -66,15 +66,24 @@ Usage:
   talon-node run        Connect to the bridge and serve mesh commands
   talon-node install    Install and start as a system service (systemd/launchd/sc)
   talon-node uninstall  Stop and remove the system service
-  talon-node status     Show config, bridge reachability, and service state
+  talon-node status     Show config, bridge reachability, service state, and
+                        the last commands run here
+  talon-node audit      Print the on-device command log (-n <count>, --json)
+  talon-node permissions
+                        macOS: open the Screen Recording and Accessibility
+                        panes the computer capability needs
   talon-node version    Print the version
 
 Flags (run/install/status):
   --config <path>       Config file (default: %s)
   --bridge <url>        Bridge base URL, e.g. https://host:19880
-  --token <token>       Bridge bearer token
+  --token <token>       Bridge bearer token (a per-device credential; a shared
+                        token is swapped for one automatically on connect)
   --name <name>         Device name shown in the mesh (default: hostname)
   --fingerprint <hex>   Pinned bridge TLS certificate SHA-256 (TOFU when empty)
+  --strict-tls          Refuse to connect without a configured fingerprint
+                        (no trust-on-first-use; https only). Saved to the
+                        config; --strict-tls=false turns it back off.
 
 Config file fields mirror the flags; flags override the file. The first
 successful TLS connect stores the bridge certificate fingerprint back into
@@ -106,6 +115,10 @@ func main() {
 	case "status":
 		cfg := mustLoadConfig(rest)
 		statusCmd(cfg)
+	case "audit":
+		auditCmd(rest)
+	case "permissions":
+		permissionsCmd()
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -117,6 +130,14 @@ func main() {
 	}
 }
 
+// tlsModeLabel describes the bridge trust mode for `talon-node status`.
+func tlsModeLabel(strict bool) string {
+	if strict {
+		return "strict (a configured fingerprint is required)"
+	}
+	return "trust-on-first-use (default; --strict-tls requires a configured fingerprint)"
+}
+
 // runNode is the long-lived service loop: register, keep a heartbeat, and
 // consume the SSE event stream, reconnecting forever with backoff. It only
 // returns on SIGINT/SIGTERM.
@@ -124,6 +145,7 @@ func runNode(cfg *Config) {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	hardenProcess()
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
@@ -149,14 +171,27 @@ func statusCmd(cfg *Config) {
 	fmt.Printf("talon-node %s\n", version)
 	fmt.Printf("config:      %s\n", cfg.Path)
 	fmt.Printf("bridge:      %s\n", cfg.Bridge)
+	for _, ep := range cfg.Endpoints {
+		if ep.Label != "" {
+			fmt.Printf("fallback:    %s — %s\n", ep, ep.Label)
+		} else {
+			fmt.Printf("fallback:    %s\n", ep)
+		}
+	}
 	fmt.Printf("device name: %s\n", cfg.Name)
 	fmt.Printf("device id:   %s\n", cfg.DeviceID)
-	if cfg.Fingerprint != "" {
+	switch {
+	case cfg.Fingerprint != "":
 		fmt.Printf("pinned cert: %s\n", cfg.Fingerprint)
-	} else {
+	case cfg.StrictTLS:
+		fmt.Printf("pinned cert: (none — strict TLS will refuse to connect)\n")
+	default:
 		fmt.Printf("pinned cert: (none — trust-on-first-use)\n")
 	}
+	fmt.Printf("tls mode:    %s\n", tlsModeLabel(cfg.StrictTLS))
+	fmt.Printf("credential:  %s\n", credentialKind(cfg.Token))
 	fmt.Printf("service:     %s\n", serviceState())
+	printAuditTail(cfg.Path)
 	if cfg.Bridge == "" {
 		return
 	}

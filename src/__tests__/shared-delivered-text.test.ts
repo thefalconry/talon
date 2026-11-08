@@ -115,7 +115,7 @@ describe("captureDeliveredText", () => {
   it("returns undefined for non-delivery tools", () => {
     expect(captureDeliveredText("react", { emoji: "👍" })).toBeUndefined();
     expect(
-      captureDeliveredText("get_weather", { city: "Dublin" }),
+      captureDeliveredText("get_weather", { city: "London" }),
     ).toBeUndefined();
   });
 

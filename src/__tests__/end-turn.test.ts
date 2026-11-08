@@ -234,8 +234,8 @@ describe("turn-terminator declaration", () => {
     // text-part fallback because `captureDeliveredText` failed to
     // recognise the tool as a delivery tool. Walk underscore boundaries
     // from the right and match against the registered tool catalog.
-    expect(stripMcpPrefix("talon-tools-352042062_send")).toBe("send");
-    expect(stripMcpPrefix("talon-tools-352042062_end_turn")).toBe("end_turn");
+    expect(stripMcpPrefix("talon-tools-424242420_send")).toBe("send");
+    expect(stripMcpPrefix("talon-tools-424242420_end_turn")).toBe("end_turn");
     expect(stripMcpPrefix("talon-tools-heartbeat_react")).toBe("react");
     // Bare-name suffix `turn` is NOT a tool — must NOT mis-resolve
     // `..._end_turn` as `turn`.
@@ -245,8 +245,8 @@ describe("turn-terminator declaration", () => {
   it("stripMcpPrefix leaves unknown Kilo-style names alone", () => {
     // No `_<bare>` suffix that matches the registered tool set →
     // return the input unchanged so callers can decide what to do.
-    expect(stripMcpPrefix("talon-tools-352042062_unknown_tool")).toBe(
-      "talon-tools-352042062_unknown_tool",
+    expect(stripMcpPrefix("talon-tools-424242420_unknown_tool")).toBe(
+      "talon-tools-424242420_unknown_tool",
     );
   });
 
@@ -554,7 +554,7 @@ describe("delivery-tool classification (isDeliveryTool)", () => {
     expect(isDeliveryTool("mcp__telegram-tools__send")).toBe(true);
     // Kilo / OpenCode `<server>_<bare>` form.
     expect(isDeliveryTool("desktop-tools_end_turn")).toBe(true);
-    expect(isDeliveryTool("talon-tools-352042062_send_message")).toBe(true);
+    expect(isDeliveryTool("talon-tools-424242420_send_message")).toBe(true);
   });
 
   it("leaves visible work alone — bridge tools, backend-native tools", () => {

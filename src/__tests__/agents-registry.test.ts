@@ -13,6 +13,7 @@ import {
   type AgentCaps,
   type AgentParent,
 } from "../core/agents/index.js";
+import { abortKind } from "../core/agents/abort-reason.js";
 
 const CHAT: AgentParent = { kind: "chat", chatId: "42", numericChatId: 42 };
 const CAPS: AgentCaps = { ...DEFAULT_AGENT_CAPS };
@@ -97,6 +98,18 @@ describe("AgentRegistry caps", () => {
     expect(third.ok).toBe(false);
     if (third.ok) return;
     expect(third.error).toContain("concurrency cap");
+    expect(third.error).toContain("(2 live)");
+    expect(third.error).toContain("agents.maxConcurrent");
+  });
+
+  it("defaults maxConcurrent to 6", () => {
+    expect(DEFAULT_AGENT_CAPS.maxConcurrent).toBe(6);
+    const registry = makeRegistry();
+    for (let i = 0; i < 6; i++) expect(register(registry).ok).toBe(true);
+    const seventh = register(registry);
+    expect(seventh.ok).toBe(false);
+    if (seventh.ok) return;
+    expect(seventh.error).toContain("(6 live)");
   });
 
   it("frees the slot again once an agent settles", () => {
@@ -263,6 +276,24 @@ describe("AgentRegistry reads", () => {
     expect(registry.requestKill("agt_1")).toBe(true);
     expect(spy).toHaveBeenCalledOnce();
     expect(registry.killRequested("agt_1")).toBe(true);
+    // The reason marks it a deliberate kill, so backends log "killed" and
+    // not "aborted by timeout".
+    expect(abortKind(abort.signal)).toBe("killed");
+  });
+
+  it("honours a kill requested while still queued when the abort handle binds at start", () => {
+    const registry = makeRegistry();
+    register(registry);
+    // Kill arrives during the queued window — before any abort handle exists,
+    // so this only records the flag (nothing to abort yet).
+    expect(registry.requestKill("agt_1")).toBe(true);
+    expect(registry.killRequested("agt_1")).toBe(true);
+    // When the handle finally binds at start(), the pending kill must reach it,
+    // or the fresh un-aborted controller lets the run proceed and the kill is lost.
+    const abort = new AbortController();
+    registry.start("agt_1", { model: "sonnet", abort });
+    expect(abort.signal.aborted).toBe(true);
+    expect(abortKind(abort.signal)).toBe("killed");
   });
 
   it("killAll signals every live agent", () => {

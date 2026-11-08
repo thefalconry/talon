@@ -26,7 +26,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, resolve } from "node:path";
+import writeFileAtomic from "write-file-atomic";
 import { parseDocument, stringify } from "yaml";
+import { logWarn } from "../util/log.js";
 import { dirs } from "../util/paths.js";
 
 export type Skill = {
@@ -60,6 +62,11 @@ const SKILL_FILE = "SKILL.md";
  * sibling file survives every update, and is visible in the filesystem.
  */
 const DISABLED_FILE = ".disabled";
+/**
+ * Provenance `talon skill install` writes for a cloned source (repo URL,
+ * commit) — metadata, not a resource the skill offers.
+ */
+const INSTALL_RECORD_FILE = ".talon-install.json";
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const DESCRIPTION_MAX_CHARS = 300;
 const BODY_MAX_BYTES = 128 * 1024;
@@ -123,6 +130,13 @@ function serializeSkill(input: {
   return ["---", yaml, "---", "", input.body.trimEnd(), ""].join("\n");
 }
 
+/**
+ * Frontmatter errors already reported, keyed by path + message: skills
+ * are re-read for every prompt, so a broken SKILL.md warns once, not
+ * once per turn.
+ */
+const reportedFrontmatterErrors = new Set<string>();
+
 function parseSkill(
   path: string,
   raw: string,
@@ -161,7 +175,15 @@ function parseSkill(
     if (value && typeof value === "object") {
       parsed = value as Record<string, unknown>;
     }
-  } catch {
+  } catch (err) {
+    // The skill still loads (name falls back to its directory, no
+    // description) — which is exactly why the reason must be visible.
+    const msg = err instanceof Error ? err.message : String(err);
+    const key = `${path}\0${msg}`;
+    if (!reportedFrontmatterErrors.has(key)) {
+      reportedFrontmatterErrors.add(key);
+      logWarn("skills", `Unparseable frontmatter in ${path}: ${msg}`);
+    }
     parsed = {};
   }
 
@@ -195,7 +217,8 @@ function listResources(dir: string): string[] {
         (entry) =>
           entry.isFile() &&
           entry.name !== SKILL_FILE &&
-          entry.name !== DISABLED_FILE,
+          entry.name !== DISABLED_FILE &&
+          entry.name !== INSTALL_RECORD_FILE,
       )
       .map((entry) => entry.name)
       .sort((a, b) => a.localeCompare(b));
@@ -216,7 +239,9 @@ export function saveSkill(input: {
   mkdirSync(dir, { recursive: true });
   const path = skillFilePath(input.name);
   const content = serializeSkill(input);
-  writeFileSync(path, content, { encoding: "utf-8", mode: 0o600 });
+  // Atomic: a failed replace (ENOSPC) must keep the previous SKILL.md,
+  // not leave a truncated one.
+  writeFileAtomic.sync(path, content, { encoding: "utf-8", mode: 0o600 });
   return readSkill(input.name)!;
 }
 

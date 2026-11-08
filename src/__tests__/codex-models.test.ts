@@ -16,7 +16,12 @@ import {
   getEffectiveModels,
   synthesizeUnknownModel,
   filterCatalogForAuthMode,
+  getCodexChatGptDefaultModel,
 } from "../backend/codex/models.js";
+import {
+  CODEX_CHATGPT_DEFAULT_MODEL,
+  CODEX_CHATGPT_MODEL_ENV,
+} from "../backend/codex/constants.js";
 import { resetState, getState } from "../backend/codex/state.js";
 import * as initModule from "../backend/codex/init.js";
 
@@ -39,6 +44,41 @@ describe("codex / model catalog", () => {
       expect(m.providerName).toBe("OpenAI");
       expect(m.selectable).toBe(true);
     }
+  });
+});
+
+describe("codex / getCodexChatGptDefaultModel", () => {
+  const savedEnv = process.env[CODEX_CHATGPT_MODEL_ENV];
+  beforeEach(() => {
+    delete process.env[CODEX_CHATGPT_MODEL_ENV];
+    return () => {
+      if (savedEnv === undefined) delete process.env[CODEX_CHATGPT_MODEL_ENV];
+      else process.env[CODEX_CHATGPT_MODEL_ENV] = savedEnv;
+    };
+  });
+
+  it("falls back to the bundled floor with no signal", () => {
+    expect(getCodexChatGptDefaultModel()).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
+    // The id that 404'd every run in Sep 2026 must not be the floor.
+    expect(CODEX_CHATGPT_DEFAULT_MODEL).not.toBe("gpt-5.5");
+  });
+
+  it("prefers the Codex CLI's own default from the model cache", () => {
+    getState().discoveredDefaultModel = "gpt-6-luna";
+    expect(getCodexChatGptDefaultModel()).toBe("gpt-6-luna");
+  });
+
+  it("prefers the config key over the CLI default", () => {
+    getState().discoveredDefaultModel = "gpt-6-luna";
+    getState().config = { codexChatGptDefaultModel: "gpt-5.6-terra" } as never;
+    expect(getCodexChatGptDefaultModel()).toBe("gpt-5.6-terra");
+  });
+
+  it("prefers the env override over everything", () => {
+    getState().discoveredDefaultModel = "gpt-6-luna";
+    getState().config = { codexChatGptDefaultModel: "gpt-5.6-terra" } as never;
+    process.env[CODEX_CHATGPT_MODEL_ENV] = " gpt-5.6-luna ";
+    expect(getCodexChatGptDefaultModel()).toBe("gpt-5.6-luna");
   });
 });
 

@@ -302,7 +302,6 @@ export class GraphClient {
  * Initialize the Graph client — loads stored tokens or runs device code flow.
  */
 export async function initGraphClient(): Promise<GraphClient> {
-  // Clear old tokens that used channel scopes
   const stored = loadTokens();
 
   if (stored && stored.refreshToken) {

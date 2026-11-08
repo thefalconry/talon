@@ -3,15 +3,11 @@
  *
  * Both `KiloClient.session.messages` and `OpencodeClient.session.messages`
  * return the same wire format: an array of `{ info: { role, ... }, parts: [...] }`
- * objects. Kilo and OpenCode previously duplicated the same `findLastAssistantMessage`
- * helper — same body, drifted formatting, identical `info as unknown as
- * KiloAssistantInfo` / `OpenCodeAssistantInfo` casts. This module centralises
- * the walker and pushes the `info` typing out as a generic the caller supplies.
+ * objects. The `info` typing is a generic the caller supplies.
  *
  * The runtime guard (`info.role === "assistant"`) lives here and runs once;
- * the generic just labels what the caller intends to consume. No new
- * unsafe-cast surface is introduced — callers no longer cast through
- * `unknown` themselves.
+ * the generic just labels what the caller intends to consume, so callers
+ * never cast through `unknown` themselves.
  */
 
 /**

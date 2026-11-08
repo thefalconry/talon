@@ -22,6 +22,8 @@ import { log, logError } from "../util/log.js";
 import { recordError } from "../util/watchdog.js";
 import { files } from "../util/paths.js";
 import { importLegacyJson } from "./legacy-import.js";
+import { dbErrorFields } from "./db.js";
+import { kvGet, kvSet } from "./kv.js";
 import * as repo from "./repositories/sessions-repo.js";
 
 export type {
@@ -204,7 +206,11 @@ function persist(chatId: string, session: SessionState): void {
   try {
     repo.upsert(chatId, session);
   } catch (err) {
-    logError("sessions", "Failed to persist sessions", err);
+    logError(
+      "sessions",
+      `Failed to persist sessions chat=${chatId}${dbErrorFields(err)}`,
+      err,
+    );
     recordError(
       `Session save failed: ${err instanceof Error ? err.message : err}`,
     );
@@ -518,11 +524,58 @@ function removeSessionRow(chatId: string): void {
   try {
     repo.remove(chatId);
   } catch (err) {
-    logError("sessions", "Failed to delete session row", err);
+    logError(
+      "sessions",
+      `Failed to delete session row chat=${chatId}${dbErrorFields(err)}`,
+      err,
+    );
     recordError(
       `Session delete failed: ${err instanceof Error ? err.message : err}`,
     );
   }
+}
+
+// ── Replaced-session archive ───────────────────────────────────────────────
+
+/** A backend session id a reset replaced — kept so it can be re-linked. */
+export type ArchivedSession = {
+  chatId: string;
+  sessionId: string;
+  /** Why the session was replaced ("reset", "backend-unavailable", …). */
+  reason: string;
+  /** When it was replaced (ms epoch). */
+  at: number;
+  turns: number;
+  lastModel?: string;
+  sessionName?: string;
+};
+
+const SESSION_ARCHIVE_KEY = "sessions.archive";
+/** Newest entries kept; the transcripts themselves stay on disk regardless. */
+const SESSION_ARCHIVE_MAX = 500;
+
+/**
+ * Remember a session id that is about to be dropped. A reset used to
+ * forget it outright, leaving the backend transcript on disk with nothing
+ * pointing at it; with the id kept, a chat reset by mistake (or by a boot
+ * reconcile) can be re-linked to its old conversation. Never throws.
+ */
+function archiveSessionId(entry: ArchivedSession): void {
+  try {
+    const prior = kvGet<ArchivedSession[]>(SESSION_ARCHIVE_KEY);
+    const list = Array.isArray(prior) ? prior : [];
+    list.push(entry);
+    kvSet(SESSION_ARCHIVE_KEY, list.slice(-SESSION_ARCHIVE_MAX));
+  } catch (err) {
+    logError("sessions", `Failed to archive session chat=${entry.chatId}`, err);
+  }
+}
+
+/** Archived (replaced) session ids, oldest first; one chat's when given. */
+export function getArchivedSessions(chatId?: string): ArchivedSession[] {
+  const list = kvGet<ArchivedSession[]>(SESSION_ARCHIVE_KEY);
+  if (!Array.isArray(list)) return [];
+  return chatId ? list.filter((e) => e.chatId === chatId) : list;
 }
 
 /**
@@ -531,12 +584,27 @@ function removeSessionRow(chatId: string): void {
  * and error recovery — none of which should erase the chat's accounting
  * history (that's what makes per-session metrics survive anything short
  * of deleting the chat). Use deleteSession() to drop the chat entirely.
+ *
+ * The replaced backend session id is archived (see getArchivedSessions),
+ * never just discarded. Talon's own chat history is untouched: clearing
+ * it is a separate, explicit call.
  */
-export function resetSession(chatId: string): void {
+export function resetSession(chatId: string, reason = "reset"): void {
   const session = cache.get(chatId);
   const turns = session?.turns ?? 0;
   const name = session?.sessionName;
   const metrics = session?.metrics;
+  if (session?.sessionId) {
+    archiveSessionId({
+      chatId,
+      sessionId: session.sessionId,
+      reason,
+      at: Date.now(),
+      turns,
+      ...(session.lastModel ? { lastModel: session.lastModel } : {}),
+      ...(name ? { sessionName: name } : {}),
+    });
+  }
   removeSessionRow(chatId);
   const hasHistory =
     metrics &&

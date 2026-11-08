@@ -254,12 +254,6 @@ export async function runRemoteChatTurn<TClient extends RemoteAgentClient>(
 }
 
 /**
- * If the SSE loop missed the usage info, fall back to the session summary
- * endpoint (which always reflects the final server state). Best-effort:
- * session summaries can race on cancellation, so a failure leaves the
- * counts at zero.
- */
-/**
  * The turn's user prompt: the shared framing every backend emits, plus
  * whatever this turn's memory retrieval produced. `formatUserPrompt` is
  * the one place `retrievedMemory` is rendered — see
@@ -276,6 +270,12 @@ function buildTurnPrompt(params: QueryParams): string {
   });
 }
 
+/**
+ * If the SSE loop missed the usage info, fall back to the session summary
+ * endpoint (which always reflects the final server state). Best-effort:
+ * session summaries can race on cancellation, so a failure leaves the
+ * counts at zero.
+ */
 async function fillUsageFromSummary(
   oc: RemoteSessionClient,
   sessionId: string,

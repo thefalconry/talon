@@ -21,7 +21,7 @@ vi.mock("../storage/sessions.js", () => ({
   getAllSessions,
   resetSession: vi.fn(),
 }));
-vi.mock("../storage/history.js", () => ({ clearHistory: vi.fn() }));
+vi.mock("../storage/history.js", () => ({ markContextCleared: vi.fn() }));
 vi.mock("../storage/daily-log.js", () => ({
   todayLogDate: vi.fn(() => "2026-01-01"),
 }));
@@ -50,10 +50,10 @@ import type { TalonConfig } from "../core/config/index.js";
 
 const config = { model: "claude-sonnet-4-5" } as TalonConfig;
 
-function makeCtx(match: string) {
+function makeCtx(match: string, type = "private") {
   const replies: Array<{ text: string; opts?: { parse_mode?: string } }> = [];
   const ctx = {
-    chat: { id: 1 },
+    chat: { id: 1, type },
     match,
     reply: async (text: string, opts?: { parse_mode?: string }) => {
       replies.push({ text, opts });
@@ -144,5 +144,26 @@ describe("/admin listings are chunked at Telegram's cap", () => {
     await handleAdminCommand(ctx, bot, config);
     expect(replies).toHaveLength(1);
     expect(replies[0]!.opts?.parse_mode).toBe("HTML");
+  });
+});
+
+describe("/admin operator-data subcommands stay in the DM (#1049)", () => {
+  it.each(["chats", "daily", "errors", "logs"])(
+    "refuses /admin %s in a group without running it",
+    async (sub) => {
+      getAllSessions.mockClear();
+      const { ctx, replies } = makeCtx(sub, "supergroup");
+      await handleAdminCommand(ctx, bot, config);
+      expect(replies).toHaveLength(1);
+      expect(replies[0]!.text).toMatch(/only works in a private chat/);
+      expect(getAllSessions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still runs group-safe subcommands in a group", async () => {
+    getAllCronJobs.mockReturnValue([]);
+    const { ctx, replies } = makeCtx("cron", "group");
+    await handleAdminCommand(ctx, bot, config);
+    expect(replies[0]!.text).not.toMatch(/only works in a private chat/);
   });
 });

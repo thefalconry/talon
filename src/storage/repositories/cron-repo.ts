@@ -88,6 +88,12 @@ export type CronJob = {
   lastError?: string;
   /** Wall-clock duration of the most recent execution, in ms. */
   lastDurationMs?: number;
+  /**
+   * Hard timeout for one run of a `query` job, in ms. Unset = the scheduler
+   * default (10 minutes). Long-running jobs (e.g. waiting on CI before a
+   * merge) set this so they aren't aborted mid-task.
+   */
+  timeoutMs?: number;
 };
 
 type Row = {
@@ -113,6 +119,7 @@ type Row = {
   last_status: string | null;
   last_error: string | null;
   last_duration_ms: number | null;
+  timeout_ms: number | null;
 };
 
 function rowToJob(row: Row): CronJob {
@@ -139,6 +146,7 @@ function rowToJob(row: Row): CronJob {
     lastStatus: (row.last_status as CronRunStatus | null) ?? undefined,
     lastError: row.last_error ?? undefined,
     lastDurationMs: row.last_duration_ms ?? undefined,
+    timeoutMs: row.timeout_ms ?? undefined,
   };
 }
 
@@ -168,6 +176,7 @@ export function upsert(job: CronJob): void {
       job.lastStatus ?? null,
       job.lastError ?? null,
       job.lastDurationMs ?? null,
+      job.timeoutMs ?? null,
     );
 }
 

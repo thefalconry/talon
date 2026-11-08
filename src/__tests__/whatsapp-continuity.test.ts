@@ -43,7 +43,7 @@ import {
   getRecentHistory,
   maxMsgIdForChatPrefix,
 } from "../storage/history.js";
-import { deleteChat } from "../storage/repositories/history-repo.js";
+import { purgeChat as deleteChat } from "../storage/repositories/history-repo.js";
 import { TalonError } from "../core/errors.js";
 
 const CHAT = "wa_dm_5550001";
@@ -75,7 +75,7 @@ describe("outbound history recording", () => {
     pushMessage(CHAT, {
       msgId: 1_000_000,
       senderId: 42,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "what time is the flight?",
       timestamp: Date.now() - 1000,
     });
@@ -86,7 +86,7 @@ describe("outbound history recording", () => {
 
     const rows = getRecentHistory(CHAT, 10);
     expect(rows.map((r) => [r.senderName, r.text])).toEqual([
-      ["Dylan", "what time is the flight?"],
+      ["Ada", "what time is the flight?"],
       ["Talon", "Departure is 07:35 from DUB."],
     ]);
     // The bot row uses the cross-frontend assistant sender id.
@@ -123,7 +123,7 @@ describe("message-id seeding across restarts", () => {
     pushMessage(CHAT, {
       msgId: 1_000_012,
       senderId: 42,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "old",
       timestamp: Date.now(),
     });
@@ -142,7 +142,7 @@ describe("message-id seeding across restarts", () => {
     pushMessage(CHAT, {
       msgId: id,
       senderId: 42,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "new after restart",
       timestamp: Date.now(),
     });
@@ -186,7 +186,7 @@ describe("read_history fallback paging", () => {
       pushMessage(CHAT, {
         msgId: 1_000_000 + i,
         senderId: 42,
-        senderName: "Dylan",
+        senderName: "Ada",
         text: `message ${i}`,
         timestamp: base + i * 60_000,
       });
@@ -251,7 +251,7 @@ describe("turn recovery — errors reach the chat", () => {
     const sent: string[] = [];
     await runTurnWithRecovery({
       chatId: CHAT,
-      senderName: "Dylan",
+      senderName: "Ada",
       runTurn: async () => {
         throw new TalonError("boom", { reason: "unknown" });
       },
@@ -269,7 +269,7 @@ describe("turn recovery — errors reach the chat", () => {
     let calls = 0;
     await runTurnWithRecovery({
       chatId: CHAT,
-      senderName: "Dylan",
+      senderName: "Ada",
       runTurn: async () => {
         calls++;
         if (calls === 1)
@@ -291,7 +291,7 @@ describe("turn recovery — errors reach the chat", () => {
     const sent: string[] = [];
     await runTurnWithRecovery({
       chatId: CHAT,
-      senderName: "Dylan",
+      senderName: "Ada",
       runTurn: async () => {
         throw new TalonError("overloaded", {
           reason: "overloaded",
@@ -310,7 +310,7 @@ describe("turn recovery — errors reach the chat", () => {
     const sent: string[] = [];
     await runTurnWithRecovery({
       chatId: CHAT,
-      senderName: "Dylan",
+      senderName: "Ada",
       runTurn: async () => {
         throw new TalonError("Turn stopped by user", { reason: "stopped" });
       },

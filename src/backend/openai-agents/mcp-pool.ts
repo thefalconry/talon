@@ -4,17 +4,11 @@
  * Every server is a lightweight `MCPServerStreamableHttp` client
  * pointing at the daemon's MCP hub (`core/mcp-hub`): Talon's own tools
  * run in-process there, and plugin/brave servers are hub-managed
- * children shared across chats and reaped when idle.
+ * children shared across chats and reaped when idle. A bundle is just
+ * HTTP client objects; the process count is owned and bounded by the hub.
  *
- * Historical note: this pool used to hold one **subprocess set** per
- * chat (every plugin × every chat, held until release) — the daemon's
- * memory grew linearly with the number of chats. With the hub, a
- * bundle is just HTTP client objects; the process count is owned and
- * bounded by the hub.
- *
- * The bundle is still cached per chat (and released on reset/rebind)
- * so `cacheToolsList` survives across turns and each turn skips the
- * connect handshake.
+ * The bundle is cached per chat so `cacheToolsList` survives across
+ * turns and each turn skips the connect handshake.
  *
  * Concurrency: `getOrCreateBundle` serialises the build-or-return
  * decision on a per-chat in-flight Promise so two concurrent turns from
@@ -23,8 +17,13 @@
  * independently in parallel.
  */
 
-import { connectMcpServers, MCPServerStreamableHttp } from "@openai/agents";
+import {
+  connectMcpServers,
+  createMCPToolStaticFilter,
+  MCPServerStreamableHttp,
+} from "@openai/agents";
 import type { MCPServer } from "@openai/agents";
+import { gatewayAuthHeaders } from "../../core/engine/gateway-auth.js";
 import {
   talonHubUrl,
   pluginHubUrl,
@@ -35,18 +34,13 @@ import { frontendsForChat } from "../runtime/frontends.js";
 import { log, logWarn } from "../../util/log.js";
 
 /**
- * One per-chat bundle. Subprocesses stay alive until `close()` is
+ * One per-chat bundle. Its hub sessions stay open until `close()` is
  * called via `releaseBundle()` / `releaseAllBundles()`.
  */
 export interface OpenAIAgentsMcpBundle {
-  /**
-   * Connected MCP servers ready to pass to `new Agent({ mcpServers })`.
-   * `connectMcpServers` returns the structural `MCPServer` type — the
-   * underlying instances are `MCPServerStdio` but the Agent constructor
-   * only needs the interface.
-   */
+  /** Connected MCP servers ready to pass to `new Agent({ mcpServers })`. */
   servers: MCPServer[];
-  /** Close every spawned subprocess. Safe to call multiple times. */
+  /** Close every server's hub session. Safe to call multiple times. */
   close: () => Promise<void>;
   /** Servers that failed to connect — exposed for diagnostics. */
   failed: ReadonlyArray<{ name: string; error: string }>;
@@ -68,6 +62,24 @@ export interface BundleInputs {
    * Talon tool servers are composed.
    */
   toolExclusions?: ToolExclusionConfig | null;
+  /**
+   * Narrow the bundle to a lean surface (isolated runs; see
+   * `guards/tool-surface.ts`). Absent = the full surface: every frontend
+   * tool server, brave and every plugin.
+   */
+  lean?: LeanToolScope;
+}
+
+/**
+ * A lean bundle: ONE frontend tool server exposing only `tools`, plus the
+ * named plugin servers (whole). Every frontend server answers the same
+ * Talon tools for a cross-surface context, so one is enough.
+ */
+export interface LeanToolScope {
+  /** Talon tool names the frontend server may expose. */
+  tools: readonly string[];
+  /** Plugin/hub server names to include whole (e.g. "brave-search"). */
+  plugins: readonly string[];
 }
 
 /** Live bundles keyed by chatId. */
@@ -114,14 +126,8 @@ export async function getOrCreateBundle(
  * Close the bundle for `chatId` and drop it from the pool. No-op when
  * the chat has no live bundle.
  *
- * Call when:
- *   - The chat rebinds to a non-openai-agents backend.
- *   - The user runs `/reset`.
- *   - The chat is destroyed.
- *
  * If `getOrCreateBundle` is in flight when called, releases the bundle
- * once the in-flight build resolves to avoid leaving an unreleased
- * subprocess set.
+ * once the in-flight build resolves so it is not left open.
  */
 export async function releaseBundle(chatId: string): Promise<void> {
   // If a build is in flight, wait for it then close the result.
@@ -151,8 +157,8 @@ export async function releaseBundle(chatId: string): Promise<void> {
 
 /**
  * Close every live bundle. Used by the backend factory's `cleanup`
- * hook so unbinding the openai-agents backend leaves no orphan MCP
- * subprocesses.
+ * hook so unbinding the openai-agents backend leaves no hub sessions
+ * behind.
  */
 export async function releaseAllBundles(): Promise<void> {
   const ids = [...bundles.keys()];
@@ -167,50 +173,26 @@ export function getActiveBundleIds(): readonly string[] {
   return [...bundles.keys()];
 }
 
+/**
+ * Build + connect a bundle that is NOT cached in the pool. The caller
+ * owns it and must `close()` it. Used by isolated one-shot runs: their
+ * context label (`heartbeat`, `agent:<id>`) can be shared by concurrent
+ * runs (every isolated cron job runs as `heartbeat`), so a pooled bundle
+ * released by one run would be pulled out from under another.
+ */
+export function openUnpooledBundle(
+  args: BundleInputs,
+): Promise<OpenAIAgentsMcpBundle> {
+  return buildBundle(args);
+}
+
 // ── Internal: build + connect ───────────────────────────────────────────────
 
 async function buildBundle(args: BundleInputs): Promise<OpenAIAgentsMcpBundle> {
-  const { chatId, bridgeUrl, frontends, braveApiKey } = args;
-
-  const built: MCPServerStreamableHttp[] = [];
-
-  // Frontend MCP tool servers. Each exposes the Talon-native delivery
-  // surface (send, react, end_turn, …) for that frontend, scoped to
-  // `chatId` via the hub URL — the server itself runs in-process
-  // inside the daemon. Scoped to the chat's owning frontend;
-  // cross-surface contexts keep the full set.
-  for (const frontend of frontendsForChat(chatId, frontends)) {
-    built.push(
-      new MCPServerStreamableHttp({
-        name: `${frontend}-tools`,
-        url: talonHubUrl(bridgeUrl, frontend, chatId),
-        cacheToolsList: true,
-      }),
-    );
-  }
-
-  // Brave Search MCP server (if configured) — one hub child shared by
-  // every chat.
-  if (braveApiKey) {
-    built.push(
-      new MCPServerStreamableHttp({
-        name: "brave-search",
-        url: pluginHubUrl(bridgeUrl, "brave-search", chatId),
-        cacheToolsList: true,
-      }),
-    );
-  }
-
-  // Plugin MCP servers — hub-managed children (chat-scoped, idle-reaped).
-  for (const name of hubPluginServerNames()) {
-    built.push(
-      new MCPServerStreamableHttp({
-        name,
-        url: pluginHubUrl(bridgeUrl, name, chatId),
-        cacheToolsList: true,
-      }),
-    );
-  }
+  const { chatId } = args;
+  const built = args.lean
+    ? buildLeanServers(args, args.lean)
+    : buildFullServers(args);
 
   // Use the SDK's lifecycle helper. Parallel connect, per-server
   // timeout (10s default), failed servers tracked in `.failed` rather
@@ -245,6 +227,96 @@ async function buildBundle(args: BundleInputs): Promise<OpenAIAgentsMcpBundle> {
     },
   };
   return bundle;
+}
+
+function hubServer(
+  name: string,
+  url: string,
+  extra: Partial<ConstructorParameters<typeof MCPServerStreamableHttp>[0]> = {},
+): MCPServerStreamableHttp {
+  return new MCPServerStreamableHttp({
+    name,
+    url,
+    cacheToolsList: true,
+    requestInit: { headers: gatewayAuthHeaders() },
+    ...extra,
+  });
+}
+
+/** Every frontend tool server, brave (if configured) and every plugin. */
+function buildFullServers(args: BundleInputs): MCPServerStreamableHttp[] {
+  const { chatId, bridgeUrl, frontends, braveApiKey } = args;
+  const built: MCPServerStreamableHttp[] = [];
+
+  // Frontend MCP tool servers. Each exposes the Talon-native delivery
+  // surface (send, react, end_turn, …) for that frontend, scoped to
+  // `chatId` via the hub URL — the server itself runs in-process
+  // inside the daemon. Scoped to the chat's owning frontend;
+  // cross-surface contexts keep the full set.
+  for (const frontend of frontendsForChat(chatId, frontends)) {
+    built.push(
+      hubServer(`${frontend}-tools`, talonHubUrl(bridgeUrl, frontend, chatId)),
+    );
+  }
+
+  // Brave Search MCP server (if configured) — one hub child shared by
+  // every chat.
+  if (braveApiKey) {
+    built.push(
+      hubServer(
+        "brave-search",
+        pluginHubUrl(bridgeUrl, "brave-search", chatId),
+      ),
+    );
+  }
+
+  // Plugin MCP servers — hub-managed children (chat-scoped, idle-reaped).
+  for (const name of hubPluginServerNames()) {
+    built.push(hubServer(name, pluginHubUrl(bridgeUrl, name, chatId)));
+  }
+  return built;
+}
+
+/**
+ * One frontend tool server filtered to `scope.tools`, plus the plugin
+ * servers `scope.plugins` names (when they exist).
+ *
+ * The filtered server does not use the SDK's tool-list cache: that cache
+ * is process-global and keyed by server NAME, so a filtered
+ * `telegram-tools` listing would be served to the chat path's unfiltered
+ * `telegram-tools` (and a cached full listing would skip this filter).
+ * Listing tools from the in-process hub once per turn is cheap.
+ */
+function buildLeanServers(
+  args: BundleInputs,
+  scope: LeanToolScope,
+): MCPServerStreamableHttp[] {
+  const { chatId, bridgeUrl, frontends, braveApiKey } = args;
+  const built: MCPServerStreamableHttp[] = [];
+  const frontend = frontendsForChat(chatId, frontends)[0];
+  if (frontend && scope.tools.length > 0) {
+    built.push(
+      hubServer(`${frontend}-tools`, talonHubUrl(bridgeUrl, frontend, chatId), {
+        cacheToolsList: false,
+        toolFilter: createMCPToolStaticFilter({ allowed: [...scope.tools] }),
+      }),
+    );
+  }
+  const wanted = new Set(scope.plugins);
+  if (braveApiKey && wanted.has("brave-search")) {
+    built.push(
+      hubServer(
+        "brave-search",
+        pluginHubUrl(bridgeUrl, "brave-search", chatId),
+      ),
+    );
+  }
+  for (const name of hubPluginServerNames()) {
+    if (wanted.has(name)) {
+      built.push(hubServer(name, pluginHubUrl(bridgeUrl, name, chatId)));
+    }
+  }
+  return built;
 }
 
 function errMsg(e: unknown): string {

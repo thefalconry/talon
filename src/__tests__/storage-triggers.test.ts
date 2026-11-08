@@ -168,7 +168,7 @@ describe("trigger-store", () => {
 
   describe("path helpers", () => {
     it("sanitizeChatId strips path-unsafe characters", () => {
-      expect(sanitizeChatId("352042062")).toBe("352042062");
+      expect(sanitizeChatId("424242420")).toBe("424242420");
       expect(sanitizeChatId("-100123")).toBe("-100123");
       expect(sanitizeChatId("../etc/passwd")).toBe("___etc_passwd");
     });

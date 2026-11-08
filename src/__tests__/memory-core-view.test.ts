@@ -215,11 +215,11 @@ describe("selectCoreRows", () => {
 describe("renderCoreView", () => {
   it("renders the selected rows and reports what it cost", () => {
     const p = freshPrefix();
-    const id = write({ subject: `${p}-thing`, text: "Dylan ships on Fridays" });
+    const id = write({ subject: `${p}-thing`, text: "Ada ships on Fridays" });
     pinMemory(id);
     const view = renderCoreView();
     expect(view.rows).toBeGreaterThan(0);
-    expect(view.text).toContain("Dylan ships on Fridays");
+    expect(view.text).toContain("Ada ships on Fridays");
     expect(view.chars).toBe(view.text.length);
   });
 

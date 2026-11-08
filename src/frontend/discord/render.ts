@@ -46,7 +46,7 @@ export {
 const DEFAULT_METRICS_MESSAGE_MAX = DISCORD_MAX_TEXT - DISCORD_SAFE_RESERVE;
 
 /** Discord markdown: bold/italic/code markers, no escaping, 2000-char messages. */
-const DISCORD_REPORTS: ReportFormatter = {
+export const DISCORD_REPORTS: ReportFormatter = {
   bold: (s) => `**${s}**`,
   italic: (s) => `_${s}_`,
   emphasis: (s) => `*${s}*`,

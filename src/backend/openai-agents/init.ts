@@ -49,6 +49,51 @@ import { log, logWarn } from "../../util/log.js";
 import { nonTerminalFrontends } from "../runtime/frontends.js";
 import { getState } from "./state.js";
 import { startDiscovery } from "./discovery.js";
+import { errorBodyFetch } from "./guards/endpoint-errors.js";
+
+/**
+ * Per-request wait for chat turns. The client default is 10 minutes —
+ * far too long for an interactive chat bot. 120s comfortably covers the
+ * slowest reasonable model turn (including thinking models) without
+ * leaving the user staring at "typing…" for hours when the upstream
+ * genuinely wedges. Isolated runs use their own, longer budget (see
+ * `OPENAI_AGENTS_ONE_SHOT_REQUEST_TIMEOUT_MS`).
+ */
+const CHAT_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * Build an `OpenAI` client for the resolved endpoint. Shared by the
+ * chat path (installed as the SDK's global default at init) and the
+ * isolated one-shot path, which needs the same endpoint but a longer
+ * per-request timeout.
+ */
+export function createOpenAIClient(opts: {
+  apiKey: string | undefined;
+  baseURL: string | undefined;
+  timeoutMs: number;
+}): OpenAI {
+  return new OpenAI({
+    // OpenAI client requires *some* apiKey, even for endpoints that
+    // ignore auth (some local Ollama setups). Placeholder if missing.
+    apiKey: opts.apiKey ?? "missing-key",
+    ...(opts.baseURL ? { baseURL: opts.baseURL } : {}),
+    // Disable the SDK's built-in 429 retry-after wait. Some
+    // free-tier proxies (e.g. opencode.ai's Zen) return
+    // `retry-after: 15000+` seconds on quota exhaustion, and the
+    // SDK literally sleeps for that long — which manifests as the
+    // bot hanging silently for hours. With `maxRetries: 0` the 429
+    // surfaces immediately as a RateLimitError that our handler
+    // classifies and reports to the user.
+    maxRetries: 0,
+    // Wait for the response headers (the openai client clears this
+    // timer once they arrive; a streamed body is not bounded by it).
+    timeout: opts.timeoutMs,
+    // Surface a 2xx bare `{"error": …}` body (some local routers answer
+    // rejected requests that way, even streamed ones) as the HTTP error
+    // it stands for, instead of an empty turn the run loop retries.
+    fetch: errorBodyFetch(),
+  });
+}
 
 /**
  * Initialise the OpenAI Agents backend.
@@ -111,25 +156,10 @@ export function initOpenAIAgentsAgent(
   // bare `OPENAI_API_KEY` set later still works) — the warning below
   // covers the empty case.
   if (apiKey || baseURL) {
-    const client = new OpenAI({
-      // OpenAI client requires *some* apiKey, even for endpoints that
-      // ignore auth (some local Ollama setups). Placeholder if missing.
-      apiKey: apiKey ?? "missing-key",
-      ...(baseURL ? { baseURL } : {}),
-      // Disable the SDK's built-in 429 retry-after wait. Some
-      // free-tier proxies (e.g. opencode.ai's Zen) return
-      // `retry-after: 15000+` seconds on quota exhaustion, and the
-      // SDK literally sleeps for that long — which manifests as the
-      // bot hanging silently for hours. With `maxRetries: 0` the 429
-      // surfaces immediately as a RateLimitError that our handler
-      // classifies and reports to the user.
-      maxRetries: 0,
-      // Cap the per-request wait. Default is 10 minutes — far too
-      // long for an interactive chat bot. 120s comfortably covers
-      // the slowest reasonable model turn (including thinking
-      // models) without leaving the user staring at "typing…" for
-      // hours when the upstream genuinely wedges.
-      timeout: 120_000,
+    const client = createOpenAIClient({
+      apiKey,
+      baseURL,
+      timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
     });
     setDefaultOpenAIClient(client);
 
@@ -163,6 +193,7 @@ export function initOpenAIAgentsAgent(
   const effectiveBaseURL = baseURL ?? "https://api.openai.com/v1";
   state.baseURL = effectiveBaseURL;
   state.apiKey = apiKey;
+  state.apiMode = resolvedApiMode;
 
   // Fire-and-forget: populate the in-memory model catalog from
   // whatever the active endpoint advertises via `GET /models`. The

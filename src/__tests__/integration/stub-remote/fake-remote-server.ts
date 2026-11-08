@@ -44,6 +44,7 @@ interface McpRegistration {
   env?: Record<string, string>;
   /** Remote shape (`type: "remote"`) — Talon's MCP hub URL. */
   url?: string;
+  headers?: Record<string, string>;
 }
 
 export interface FakeRemoteServer {
@@ -128,7 +129,9 @@ export async function startFakeRemoteServer(
     let transport: StdioClientTransport | StreamableHTTPClientTransport;
     if (cfg.url) {
       // Remote registration — Talon's MCP hub over streamable HTTP.
-      transport = new StreamableHTTPClientTransport(new URL(cfg.url));
+      transport = new StreamableHTTPClientTransport(new URL(cfg.url), {
+        requestInit: { headers: cfg.headers ?? {} },
+      });
     } else {
       const mergedEnv: Record<string, string> = {};
       for (const [k, v] of Object.entries(process.env)) {
@@ -303,7 +306,14 @@ export async function startFakeRemoteServer(
             typeof cfg.url === "string" && cfg.url ? cfg.url : undefined;
           if (name && remoteUrl) {
             // `type: "remote"` — Talon's MCP hub endpoint.
-            mcpServers.set(name, { name, url: remoteUrl });
+            mcpServers.set(name, {
+              name,
+              url: remoteUrl,
+              headers:
+                cfg.headers && typeof cfg.headers === "object"
+                  ? (cfg.headers as Record<string, string>)
+                  : undefined,
+            });
           } else if (name && cmdArr.length > 0) {
             mcpServers.set(name, {
               name,

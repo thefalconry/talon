@@ -43,3 +43,27 @@ export function emitAssistantText(
     );
   }
 }
+
+/**
+ * Report the run's conversation handle (Claude SDK session id, Codex thread
+ * id) to the run's optional consumer — the sub-agent runner persists it so a
+ * daemon restart can resume the conversation. Same contract as
+ * `emitAssistantText`: synchronous, no-op without a hook or an id, and a
+ * throwing consumer is logged, never propagated into the run.
+ */
+export function emitSessionId(
+  onSessionId: OneShotAgentParams["onSessionId"],
+  sessionId: string | undefined,
+): void {
+  if (!onSessionId || !sessionId) return;
+  try {
+    onSessionId(sessionId);
+  } catch (err) {
+    logWarn(
+      "agent",
+      `one-shot onSessionId hook threw (ignored): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}

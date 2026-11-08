@@ -35,10 +35,7 @@ export function isMcpPlugin(entry: PluginEntry): entry is PluginMcpEntry {
   return "command" in entry && "name" in entry && !("path" in entry);
 }
 
-/**
- * Core plugin interface — only `name` is required.
- * All other capabilities are optional (Interface Segregation).
- */
+/** Core plugin interface — only `name` is required. */
 export interface TalonPlugin {
   /** Unique plugin identifier. Used as MCP server name prefix. */
   readonly name: string;
@@ -134,7 +131,7 @@ export interface LoadedPlugin {
   readonly path: string;
 }
 
-/** MCP server configuration for the Claude Agent SDK. */
+/** Stdio MCP server spec (command, args, env). */
 export interface McpServerConfig {
   command: string;
   args: string[];

@@ -72,14 +72,53 @@ void main() {
     expect(find.textContaining('exit code 1'), findsOneWidget);
   });
 
-  testWidgets('ToolTrace summarizes a finished turn', (tester) async {
+  testWidgets('ToolTrace summarizes a finished turn by what it did',
+      (tester) async {
     await tester.pumpWidget(_host(ToolTrace(tools: [
-      _tool(id: 't1', name: 'Read'),
-      _tool(id: 't2', name: 'Write'),
+      _tool(id: 't1', name: 'Bash'),
+      _tool(id: 't2', name: 'Bash'),
+      _tool(id: 't3', name: 'Read'),
     ])));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('2 steps'), findsOneWidget);
+    // Claude-desktop-style label: bucketed by kind, in order of appearance.
+    expect(find.textContaining('Ran 2 commands, read a file'), findsOneWidget);
+    // Collapsed by default: the underlying timeline is not shown yet.
+    expect(find.byType(ToolTimeline), findsNothing);
+  });
+
+  testWidgets('tapping a tool group expands the full timeline', (tester) async {
+    await tester.pumpWidget(_host(ToolTrace(tools: [
+      _tool(id: 't1', name: 'Bash', input: {'command': 'ls'}),
+      _tool(id: 't2', name: 'Read', input: {'path': 'a.txt'}),
+    ])));
+    await tester.pumpAndSettle();
+    expect(find.byType(ToolTimeline), findsNothing);
+
+    await tester.tap(find.byKey(const Key('tool-group-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ToolTimeline), findsOneWidget);
+    expect(find.text('Bash'), findsOneWidget);
+  });
+
+  testWidgets('a group with a failed step opens itself', (tester) async {
+    await tester.pumpWidget(_host(ToolTrace(tools: [
+      _tool(id: 't1', name: 'Bash', done: true),
+      _tool(
+        id: 't2',
+        name: 'run_tests',
+        done: true,
+        error: 'exit code 1',
+        input: {'path': 'test/'},
+      ),
+    ])));
+    await tester.pumpAndSettle();
+
+    // No tap needed: the timeline is already visible and the error shows.
+    expect(find.byType(ToolTimeline), findsOneWidget);
+    expect(find.textContaining('exit code 1'), findsOneWidget);
+    expect(find.textContaining('1 failed'), findsOneWidget);
   });
 
   testWidgets('assistant bubble shows the reply and a token/duration footer',
@@ -184,6 +223,34 @@ void main() {
 
     expect(find.text('Talon'), findsOneWidget);
     expect(find.byKey(const Key('user-message-time')), findsOneWidget);
+  });
+
+  testWidgets('an assistant run carries one footer, on its last row',
+      (tester) async {
+    ClientMessage msg(String id, String text) => ClientMessage(
+          id: id,
+          chatId: 'c1',
+          role: Role.assistant,
+          text: text,
+          ts: DateTime(2026, 7, 16, 9, 30).millisecondsSinceEpoch,
+        );
+    await tester.pumpWidget(_host(Column(children: [
+      MessageBubble(
+          message: msg('a1', 'On it.'),
+          botName: 'Talon',
+          showFooter: false,
+          continues: true),
+      MessageBubble(
+          message: msg('a2', 'Done.'),
+          botName: 'Talon',
+          showHeader: false,
+          copyText: 'On it.\n\nDone.'),
+    ])));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Talon'), findsOneWidget);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('09:30'), findsOneWidget);
   });
 
   testWidgets('EntranceFx plays through even when enabled flips to false',

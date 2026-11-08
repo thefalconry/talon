@@ -124,7 +124,7 @@ function inboundFor(
       isGroup: opts.isGroup === true,
     },
     text,
-    senderName: "Dylan",
+    senderName: "Ada",
     identity: { ids: [opts.senderId ?? "100"], phone: opts.senderId ?? "100" },
     isGroup: opts.isGroup === true,
   };
@@ -234,7 +234,7 @@ describe("/model", () => {
     pushMessage(inbound.chat.chatId, {
       msgId: 1,
       senderId: 1,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "before the switch",
       timestamp: Date.now(),
     });
@@ -312,20 +312,27 @@ describe("/settings, /status, /reset, /help", () => {
     expect(reply).toContain("effort: adaptive");
   });
 
-  it("/reset clears the session and keeps the chat log", async () => {
+  it("/reset soft-resets: the chat log is kept, the context starts fresh", async () => {
     const sent: string[] = [];
     const runtime = makeRuntime(sent);
     const inbound = inboundFor("/reset");
     pushMessage(inbound.chat.chatId, {
       msgId: 1,
       senderId: 1,
-      senderName: "Dylan",
+      senderName: "Ada",
       text: "kept",
       timestamp: Date.now(),
     });
     await handleWhatsAppCommand(runtime, inbound);
     expect(sent[0]).toBe("Session cleared.");
-    expect(getRecentHistory(inbound.chat.chatId, 5)[0].text).toBe("kept");
+    expect(
+      getRecentHistory(inbound.chat.chatId, 5, { includeCleared: true })[0]
+        .text,
+    ).toBe("kept");
+    // The context view starts after the reset (only the bot's own reply).
+    expect(
+      getRecentHistory(inbound.chat.chatId, 5).map((m) => m.text),
+    ).not.toContain("kept");
   });
 
   it("/help lists every command", async () => {
@@ -393,7 +400,8 @@ describe("group authorisation", () => {
     expect(getChatSettings(admin.chat.chatId).effort).toBe("low");
   });
 
-  it("opens settings to the whole group when no allowlist is configured", () => {
+  it("lets nobody in a group change settings when no allowlist is configured", () => {
+    // An empty allowlist never means "everyone".
     const runtime = makeRuntime([]) as { allowedDms: Set<string> };
     runtime.allowedDms = new Set();
     expect(
@@ -401,6 +409,6 @@ describe("group authorisation", () => {
         isGroup: true,
         identity: { ids: ["999"] },
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

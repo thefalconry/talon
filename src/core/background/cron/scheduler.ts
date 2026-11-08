@@ -34,6 +34,8 @@ import {
 } from "../../../storage/cron.js";
 import { appendDailyLog } from "../../../storage/daily-log.js";
 import { log, logError, logWarn } from "../../../util/log.js";
+import { raiseAlert, resolveAlert } from "../../frontend-runtime/alerts.js";
+import { faultText } from "../../engine/fault-text.js";
 import { numericChatIdFor } from "../../frontend-runtime/chat-id.js";
 import {
   chooseBackend,
@@ -156,8 +158,12 @@ async function runCronTick(): Promise<void> {
   pruneJobHealth(new Set(jobs.map((j) => j.id)));
 
   let loadShed = false;
-  for (const job of jobs) {
-    if (!job.enabled) continue;
+  for (const listed of jobs) {
+    // Re-read: each run is awaited, so a slow job lets the next tick start
+    // and run later jobs before this loop reaches them. The listing's copy
+    // would carry the pre-run lastRunAt and fire such a job a second time.
+    const job = getCronJob(listed.id);
+    if (!job?.enabled) continue;
     // Expiry takes priority over dueness: a job past its end time is disabled
     // and skipped even if this minute would otherwise match.
     if (expireIfPast(job, nowMs)) continue;
@@ -201,6 +207,10 @@ async function runScheduled(job: CronJob): Promise<void> {
       durationMs: Date.now() - startedAt,
     };
     recordJobSuccess(job.id, Date.now(), JOB_HEALTH);
+    resolveAlert(
+      `cron.job.${job.id}`,
+      `Cron job "${job.name}" is running again.`,
+    );
     recordCronRun(job.id, outcome);
     appendDailyLog(
       "Cron",
@@ -213,22 +223,43 @@ async function runScheduled(job: CronJob): Promise<void> {
     }
     enforceRunCap(job.id);
   } catch (err) {
-    // Advance lastRunAt on failure too (without bumping runCount — failed runs
-    // don't count toward maxRuns). For interval jobs the anchor IS lastRunAt, so
-    // skipping this would make a flaky job re-fire every 60s tick until the
-    // breaker opens, instead of honoring its everyMs cadence between retries.
-    updateCronJob(job.id, {
-      lastRunAt: Date.now(),
-      lastStatus: "error",
-      lastError: err instanceof Error ? err.message : String(err),
-      lastDurationMs: Date.now() - startedAt,
+    // A failed run is still a run: it advances lastRunAt and bumps runCount,
+    // so it counts toward maxRuns. For interval jobs the anchor IS lastRunAt,
+    // so not advancing it would make a flaky job re-fire every 60s tick until
+    // the breaker opens. And a capped job — a one-shot above all — whose
+    // failure didn't count would stay enabled and fire again at the next
+    // matching time: for a date-pinned cron expression that is a year later,
+    // long after anyone wanted it.
+    recordCronRun(job.id, {
+      status: "error",
+      error: err instanceof Error ? err.message : String(err),
+      durationMs: Date.now() - startedAt,
     });
-    logError("cron", `Job "${job.name}" [${job.id}] failed`, err);
+    logError(
+      "cron",
+      `Job "${job.name}" [${job.id}] failed chat=${job.chatId} type=${job.type} ms=${Date.now() - startedAt}`,
+      err,
+    );
     const cooldown = recordJobFailure(job.id, Date.now(), JOB_HEALTH);
     if (cooldown !== null) {
+      const mins = Math.round(cooldown / 60_000);
       logWarn(
         "cron",
-        `Breaker opened for "${job.name}" [${job.id}] — cooling down ~${Math.round(cooldown / 60_000)}min`,
+        `Breaker opened for "${job.name}" [${job.id}] — cooling down ~${mins}min`,
+      );
+      // The breaker opens at JOB_HEALTH.threshold consecutive failures —
+      // the job is now paused, which the operator should hear about.
+      raiseAlert(
+        `cron.job.${job.id}`,
+        `Cron job "${job.name}" failed ${JOB_HEALTH.threshold} runs in a row: ${faultText(err)}. Paused for ~${mins} min.`,
+      );
+    }
+    if (enforceRunCap(job.id)) {
+      // The job's last permitted run failed and it is now retired — nothing
+      // will retry it, so the operator has to hear about it.
+      raiseAlert(
+        `cron.job.${job.id}`,
+        `Cron job "${job.name}" failed on its final run and was disabled: ${faultText(err)}. Re-enable or recreate it to try again.`,
       );
     }
   } finally {
@@ -240,11 +271,12 @@ async function runScheduled(job: CronJob): Promise<void> {
 
 /**
  * Disable a job that has reached its run cap (`maxRuns`; =1 means one-shot).
- * Call after a successful run, once runCount has been bumped.
+ * Call after every run — successful or failed — once runCount has been
+ * bumped. Returns true when this call retired the job.
  */
-function enforceRunCap(id: string): void {
+function enforceRunCap(id: string): boolean {
   const job = getCronJob(id);
-  if (!job || !job.enabled) return;
+  if (!job || !job.enabled) return false;
   if (job.maxRuns !== undefined && job.runCount >= job.maxRuns) {
     updateCronJob(id, { enabled: false });
     log(
@@ -255,7 +287,9 @@ function enforceRunCap(id: string): void {
       "Cron",
       `Job "${job.name}" finished after ${job.runCount} run(s)`,
     );
+    return true;
   }
+  return false;
 }
 
 /**
@@ -461,7 +495,6 @@ function isCronDue(job: CronJob, now: Date, windowStartMs: number): boolean {
 export const _cronInternals = {
   isDue,
   isCronDue,
-  MAX_TICK_LOOKBACK_MS,
 };
 
 /**
@@ -502,7 +535,8 @@ async function routeQueryJob(
   return { backendId: decision.backendId, model };
 }
 
-const CRON_JOB_TIMEOUT_MS = 10 * 60_000; // 10-minute max per job
+/** Default hard limit per query run; a job's own `timeoutMs` overrides it. */
+const CRON_JOB_TIMEOUT_MS = 10 * 60_000;
 
 export async function executeJob(job: CronJob): Promise<ExecuteJobResult> {
   if (!deps) return { status: "skipped", reason: "cron is not initialised" };
@@ -557,7 +591,7 @@ export async function executeJob(job: CronJob): Promise<ExecuteJobResult> {
     payload,
     label: job.name,
     kind: "cron",
-    timeoutMs: CRON_JOB_TIMEOUT_MS,
+    timeoutMs: job.timeoutMs ?? CRON_JOB_TIMEOUT_MS,
     ...(fallback ? { fallback } : {}),
   });
   if (result.status === "skipped") {

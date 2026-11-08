@@ -42,6 +42,7 @@ import {
   describeHubChildExit,
 } from "../../core/mcp-hub/index.js";
 import type { RemoteAgentClient } from "./client.js";
+import { gatewayAuthHeaders } from "../../core/engine/gateway-auth.js";
 import type { RemoteServerState } from "./state.js";
 import { errMsg } from "./state.js";
 import type { TalonConfig } from "../../core/config/index.js";
@@ -222,6 +223,7 @@ export async function ensureChatMcpServer<TClient extends RemoteAgentClient>(
       name: serverName,
       config: {
         type: "remote",
+        headers: gatewayAuthHeaders(),
         // Talon's MCP hub serves the chat's tool set in-process over
         // streamable HTTP — no subprocess on the agent-server side, and
         // the (frontend, chatId) binding travels in the URL instead of
@@ -305,6 +307,7 @@ export async function ensurePluginMcpServers<TClient extends RemoteAgentClient>(
           name: serverName,
           config: {
             type: "remote",
+            headers: gatewayAuthHeaders(),
             // Hub-managed child, shared across sessions and idle-reaped —
             // the agent server holds an HTTP connection, not a subprocess.
             url: pluginHubUrl(bridgeUrl, name, chatId),

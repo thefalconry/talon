@@ -136,13 +136,13 @@ describe("remote-server / mcp helpers", () => {
 
   describe("getChatMcpServerName", () => {
     it("derives a stable name from a numeric Telegram chatId", () => {
-      expect(getChatMcpServerName("352042062")).toBe("talon-tools-352042062");
+      expect(getChatMcpServerName("424242420")).toBe("talon-tools-424242420");
     });
 
     it("handles negative supergroup ids by sanitising the dash", () => {
       // `-` is in the allow-list, so it stays literal
-      expect(getChatMcpServerName("-1001426819337")).toBe(
-        "talon-tools--1001426819337",
+      expect(getChatMcpServerName("-1009876543210")).toBe(
+        "talon-tools--1009876543210",
       );
     });
 
@@ -166,8 +166,8 @@ describe("remote-server / mcp helpers", () => {
 
     it("stays within the length budget for any chat id and plugin name", () => {
       const cases: Array<[string, string]> = [
-        ["playwright-tools", "-1001426819337"],
-        [LONG_PLUGIN, "-1001426819337"],
+        ["playwright-tools", "-1009876543210"],
+        [LONG_PLUGIN, "-1009876543210"],
         [
           LONG_PLUGIN,
           "discord:guild/1234567890123456789/channel/9876543210987654321",
@@ -189,11 +189,11 @@ describe("remote-server / mcp helpers", () => {
     it("is deterministic and keeps a short plugin name readable", () => {
       // Pinned literal: a changed hash would silently orphan every
       // `tp-*` permission rule on already-created upstream sessions.
-      expect(getPluginMcpServerName("playwright-tools", "-1001426819337")).toBe(
-        "tp-fbb85452-playwright-tools",
+      expect(getPluginMcpServerName("playwright-tools", "-1009876543210")).toBe(
+        "tp-a93db842-playwright-tools",
       );
-      expect(getPluginMcpServerName("playwright-tools", "-1001426819337")).toBe(
-        getPluginMcpServerName("playwright-tools", "-1001426819337"),
+      expect(getPluginMcpServerName("playwright-tools", "-1009876543210")).toBe(
+        getPluginMcpServerName("playwright-tools", "-1009876543210"),
       );
       expect(getPluginMcpServerName("", "")).toBe(
         `${getPluginMcpServerPrefix("")}plugin`,
@@ -236,7 +236,7 @@ describe("remote-server / mcp helpers", () => {
   describe("isTalonToolID", () => {
     it("matches both underscore and dash variants", () => {
       expect(isTalonToolID("talon-tools_send")).toBe(true);
-      expect(isTalonToolID("talon-tools-352042062_send")).toBe(true);
+      expect(isTalonToolID("talon-tools-424242420_send")).toBe(true);
     });
 
     it("rejects non-Talon tool ids", () => {
@@ -523,7 +523,7 @@ describe("remote-server / mcp helpers", () => {
     it("registers under the generated name and keeps the reverse map", async () => {
       const state = makeState();
       const { client, mcpAddCalls, mcpDisconnectCalls } = makeMockClient();
-      const chatId = "-1001426819337";
+      const chatId = "-1009876543210";
       const expected = getPluginMcpServerName("playwright-tools", chatId);
 
       const names = await ensurePluginMcpServers(client, state, chatId);

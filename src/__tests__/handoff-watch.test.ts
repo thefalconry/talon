@@ -18,6 +18,11 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// A failed handoff leaves a crash marker for the next boot — never in
+// the real ~/.talon/data during tests.
+const writeCrashMarker = vi.hoisted(() => vi.fn());
+vi.mock("../core/daemon/crash-marker.js", () => ({ writeCrashMarker }));
+
 import { watchHandoff, runHandoffWatch } from "../core/daemon/handoff.js";
 import type { StartOutcome } from "../core/daemon/control.js";
 
@@ -25,6 +30,7 @@ const servers: Server[] = [];
 const dirs: string[] = [];
 
 afterEach(() => {
+  writeCrashMarker.mockClear();
   for (const s of servers.splice(0)) s.close();
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   vi.unstubAllEnvs();
@@ -76,6 +82,7 @@ describe("watchHandoff", () => {
 
     expect(outcome).toMatchObject({ ok: true, via: "successor", pid: 5150 });
     expect(start).not.toHaveBeenCalled();
+    expect(writeCrashMarker).not.toHaveBeenCalled();
   });
 
   it("accepts a live daemon that is not the child we spawned", async () => {
@@ -114,6 +121,11 @@ describe("watchHandoff", () => {
       pkgRoot: "/repo",
       pidfilePath: undefined,
     });
+    expect(writeCrashMarker).toHaveBeenCalledWith(
+      "handoff",
+      "the successor exited before serving /health",
+      { keepExisting: true },
+    );
     expect(outcome).toEqual({
       ok: true,
       via: "restart",

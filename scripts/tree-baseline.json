@@ -2,7 +2,7 @@
   {
     "kind": "flat",
     "path": "src/backend/claude-sdk",
-    "files": 14
+    "files": 13
   },
   {
     "kind": "flat",
@@ -22,16 +22,11 @@
   {
     "kind": "flat",
     "path": "src/core/engine/gateway-actions",
-    "files": 16
+    "files": 15
   },
   {
     "kind": "flat",
     "path": "src/frontend/discord",
-    "files": 14
-  },
-  {
-    "kind": "flat",
-    "path": "src/frontend/telegram",
     "files": 14
   },
   {

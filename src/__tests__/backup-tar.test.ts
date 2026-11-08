@@ -136,6 +136,23 @@ describe("tar round-trip", () => {
   });
 });
 
+describe("tar writer", () => {
+  it("writes nothing for a source that vanished since it was listed", async () => {
+    const src = tmp("tar-vanish");
+    writeFileSync(join(src, "kept.txt"), "kept");
+    const archive = await pack(async (w) => {
+      await expect(
+        w.addFile("gone.txt", join(src, "gone.txt"), 0o644, 1700000000, 5),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await w.addFile("kept.txt", join(src, "kept.txt"), 0o644, 1700000000, 4);
+    });
+    const dest = tmp("tar-vanish-out");
+    const entries = await extractTar(Readable.from([archive]), dest);
+    expect(entries.map((e) => e.path)).toEqual(["kept.txt"]);
+    expect(readFileSync(join(dest, "kept.txt"), "utf8")).toBe("kept");
+  });
+});
+
 describe("tar extraction refuses to escape its destination", () => {
   it("rejects traversal, absolute paths and escaping symlinks", async () => {
     const dest = tmp("tar-evil");

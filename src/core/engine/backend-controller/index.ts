@@ -10,7 +10,7 @@
  * Different roles, and different chats, have different cost/latency/
  * quality needs. Typical post-Anthropic-metering setup: chat default
  * on free-tier OpenAI Agents, heartbeats on Claude Sonnet, dream
- * shared with chat — plus Pandario stays on Claude while DMs use the
+ * shared with chat — plus one group chat stays on Claude while DMs use the
  * cheap default. A single-active model can't express that. The pool
  * lets each holder bind independently while deduplicating instances
  * when ids overlap.
@@ -24,7 +24,6 @@
  *   - `pool`     — init/teardown, role accessors, availability, snapshot,
  *                  listeners.
  *   - `rebind`   — rebind/release holders + per-chat accessors.
- *   - `legacy`   — single-active aliases routed to the chat role.
  */
 
 export * from "./types.js";
@@ -55,16 +54,6 @@ export {
   getBackendForChat,
   getBackendIdForChat,
   hasChatBackendOverride,
+  chatsBoundTo,
   resolveChatBackend,
 } from "./rebind.js";
-export {
-  initBackendController,
-  getActiveBackend,
-  hasActiveBackend,
-  getActiveBackendOrNull,
-  getActiveBackendId,
-  getActiveBackendLabel,
-  switchBackend,
-  cleanupBackendController,
-  resetBackendControllerForTest,
-} from "./legacy.js";

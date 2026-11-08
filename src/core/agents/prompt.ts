@@ -11,6 +11,7 @@ import { resolve } from "node:path";
 import { dirs } from "../../util/paths.js";
 import { loadSystemTemplate } from "../prompt/templates.js";
 import type { AgentParent, AgentRecord } from "./types.js";
+import { trailIsEmpty } from "./trail.js";
 
 /** Where sub-agent run logs live: `~/.talon/workspace/logs/agents/`. */
 const AGENT_LOGS_DIR = resolve(dirs.logs, "agents");
@@ -39,8 +40,11 @@ export function buildAgentSystemPrompt(args: {
   parent: AgentParent;
   depth: number;
   maxDepth: number;
+  /** The agent's private TMPDIR, when one was created. */
+  scratchDir?: string;
 }): string {
   return loadSystemTemplate("agent-brief", {
+    scratchDir: args.scratchDir ?? "",
     agentId: args.agentId,
     label: args.label,
     parent: describeParent(args.parent),
@@ -50,11 +54,117 @@ export function buildAgentSystemPrompt(args: {
   });
 }
 
+/**
+ * The standing pre-flight instruction appended to a PR-opening agent's
+ * brief: run the light CI suite locally, push only on green. GitHub then
+ * confirms a change instead of being the first compiler it meets.
+ */
+const PREFLIGHT_INSTRUCTION =
+  "[Pre-flight lane] Before every `git push`, run `npm run preflight` in " +
+  "the repo (or call the run_preflight tool with cwd set to your checkout). " +
+  "Push only when it is green. If it is red, fix it — or, when a failure " +
+  "is genuinely out of scope, say in the PR body which step failed and why " +
+  "you pushed anyway. Make your checkout with `node scripts/worktree.mjs " +
+  "add /tmp/fix-<name> <branch>` (run it in an existing talon checkout): " +
+  "its node_modules is hardlinked from a shared store, so do NOT run " +
+  "`npm ci` there (~1.2 GB each). Clean up with `node scripts/worktree.mjs " +
+  "remove <path>`.";
+
+/** A brief that opens, updates or talks about a pull request. */
+const PR_BRIEF = /\bPRs?\b|pull[ -]requests?/i;
+
+/**
+ * Whether a spawn gets the pre-flight instruction: the caller's explicit
+ * choice when given, otherwise on for any brief that mentions a PR.
+ */
+export function wantsPreflight(brief: string, explicit?: boolean): boolean {
+  return explicit ?? PR_BRIEF.test(brief);
+}
+
 /** The activation prompt — the brief, framed as the job to start on. */
-export function buildAgentPrompt(brief: string): string {
+export function buildAgentPrompt(
+  brief: string,
+  options: { preflight?: boolean } = {},
+): string {
+  const lane = options.preflight ? `\n\n${PREFLIGHT_INSTRUCTION}` : "";
   return (
     `[System: AGENT BRIEF. Work this to a conclusion, then call ` +
-    `report_result exactly once.]\n\n${brief}`
+    `report_result exactly once.]\n\n${brief}${lane}`
+  );
+}
+
+/** Human time for an interruption stamp. */
+function stamp(at: number): string {
+  return new Date(at).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+}
+
+/**
+ * The note a resumed agent receives when its own backend conversation is
+ * continued after a daemon restart. The transcript — brief, tool calls,
+ * results — is intact above it, so this only says what happened and what
+ * to be careful of.
+ */
+export function buildResumePrompt(args: {
+  interruptedAt: number;
+  elapsedMinutes: number;
+}): string {
+  return (
+    `[System: You were interrupted by a daemon restart at ` +
+    `${stamp(args.interruptedAt)} (about ${args.elapsedMinutes} min into ` +
+    `your run). Your conversation so far is intact above — continue the ` +
+    `brief from where you left off; do not start over. Anything that was ` +
+    `mid-flight when the restart hit (a shell command, a build, a tool call ` +
+    `with no result) may not have completed: check the actual state (files, ` +
+    `git status, processes) before relying on it or repeating it. Call ` +
+    `check_inbox — messages sent while you were down are still there. When ` +
+    `you are done, call report_result exactly once.]`
+  );
+}
+
+/**
+ * The activation prompt for an interrupted agent whose backend cannot
+ * resume a conversation: the original brief again, plus what the previous
+ * attempt did (the tail of its run log) so it picks up rather than redoes.
+ */
+export function buildRebriefPrompt(args: {
+  brief: string;
+  /** Re-append the pre-flight lane instruction the original spawn carried. */
+  preflight?: boolean;
+  interruptedAt: number;
+  elapsedMinutes: number;
+  logPath: string;
+  logTail: string;
+}): string {
+  const tail = args.logTail.trim()
+    ? `\n\nTail of the previous attempt's run log (full log: ` +
+      `${args.logPath}):\n\n<previous-run-log>\n${args.logTail}\n` +
+      `</previous-run-log>`
+    : `\n\n(The previous attempt's run log is at ${args.logPath}.)`;
+  return (
+    `${buildAgentPrompt(args.brief, { preflight: args.preflight === true })}\n\n` +
+    `[System: RESUMED AFTER A DAEMON RESTART. You already worked on this ` +
+    `brief for about ${args.elapsedMinutes} min before a daemon restart ` +
+    `interrupted you at ${stamp(args.interruptedAt)}; this backend could not ` +
+    `resume that conversation, so you are starting a new one. Do NOT start ` +
+    `over: read what the previous attempt did below, inspect the state it ` +
+    `left (files, branches, commits, processes) and continue from there. ` +
+    `Call check_inbox — messages sent while you were down are still there.]` +
+    tail
+  );
+}
+
+/** Run-log separator written when a restarted agent resumes. */
+export function agentResumeLogHeader(
+  record: AgentRecord,
+  model: string,
+  interruptedAt: number,
+  sessionId?: string,
+): string {
+  return (
+    `\n\n---\n\n# resumed after daemon restart — ${new Date().toISOString()}\n` +
+    `**Interrupted:** ${new Date(interruptedAt).toISOString()} ` +
+    `**Backend:** ${record.backendId} **Model:** ${model} ` +
+    `**Mode:** ${sessionId ? `session resume (${sessionId})` : "re-briefed"}\n\n`
   );
 }
 
@@ -76,6 +186,69 @@ function usageLine(record: AgentRecord): string {
   return (
     `\n\nTokens: in=${usage.inputTokens} out=${usage.outputTokens} ` +
     `cache_read=${usage.cacheRead} cache_write=${usage.cacheWrite}`
+  );
+}
+
+/** Human duration for prompts: "45 min" / "30s". */
+function minutes(ms: number): string {
+  return ms >= 60_000
+    ? `${Math.round(ms / 60_000)} min`
+    : `${Math.round(ms / 1000)}s`;
+}
+
+/**
+ * The "what it was doing" block appended to a report when the run did not
+ * end `done` — so a kill or a timeout never throws the work away.
+ */
+function renderTrail(record: AgentRecord): string {
+  const trail = record.trail;
+  if (record.state === "done" || trailIsEmpty(trail) || !trail) return "";
+  const parts: string[] = [];
+  if (trail.messages.length > 0) {
+    parts.push(
+      `Its last interim messages:\n` +
+        trail.messages.map((m) => `- ${m}`).join("\n"),
+    );
+  }
+  if (trail.notes.length > 0) {
+    parts.push(
+      `Its last progress notes:\n` +
+        trail.notes.map((n) => `- ${n}`).join("\n"),
+    );
+  }
+  if (trail.files.length > 0) {
+    parts.push(
+      `Files it wrote or edited:\n` +
+        trail.files.map((f) => `- ${f}`).join("\n"),
+    );
+  }
+  return (
+    `\n\n--- What it had done before it ended (run log: ` +
+    `${agentLogPath(record.id)}) ---\n\n${parts.join("\n\n")}`
+  );
+}
+
+/** Mailbox note the watchdog leaves an agent that has gone quiet. */
+export function buildStallPing(idleMs: number, stallMs: number): string {
+  return (
+    `[Watchdog] No tool call or output from you for ${minutes(idleMs)}. ` +
+    `If you are stuck, report_result now with what you have. Your parent ` +
+    `is told at ${minutes(2 * stallMs)} of silence and the run is killed ` +
+    `at ${minutes(3 * stallMs)}.`
+  );
+}
+
+/** The interim note a parent gets when its agent has stalled. */
+export function buildStallWarning(
+  record: AgentRecord,
+  idleMs: number,
+  killInMs: number,
+): string {
+  return (
+    `[Watchdog] Agent ${record.id} "${record.label}" has made no progress ` +
+    `(no tool call or output) for ${minutes(idleMs)}. It will be killed in ` +
+    `${minutes(killInMs)} unless it resumes. Use send_to_agent to nudge it, ` +
+    `or kill_agent to end it now.`
   );
 }
 
@@ -101,7 +274,7 @@ export function buildSettlementPrompt(record: AgentRecord): string {
     `an agent you spawned earlier. Decide whether to act on it, tell the ` +
     `user, or do nothing.]\n\n` +
     `[Agent "${record.label}" (${record.id}) — ${record.state}]\n\n` +
-    `${body}${usageLine(record)}`
+    `${body}${renderTrail(record)}${usageLine(record)}`
   );
 }
 
@@ -113,4 +286,9 @@ export function buildMessagePrompt(record: AgentRecord, text: string): string {
     `running. Decide whether to act, reply with send_to_agent, or do ` +
     `nothing.]\n\n${text}`
   );
+}
+
+/** Short reminder attached to a sub-agent's tool results while unread mail is waiting. */
+export function buildInboxNotice(unreadCount: number): string {
+  return `[inbox: ${unreadCount} unread message(s) — call check_inbox now]`;
 }

@@ -26,6 +26,23 @@ vi.mock("../util/log.js", () => ({
   logDebug: vi.fn(),
 }));
 
+// download_media regression: the userbot is offline, so any answer must
+// come from the media index.
+vi.mock("../frontend/telegram/userbot.js", () => ({
+  isUserClientReady: () => false,
+  searchMessages: vi.fn(),
+  getHistory: vi.fn(),
+  getParticipantDetails: vi.fn(),
+  getUserInfo: vi.fn(),
+  getMessage: vi.fn(),
+  getPinnedMessages: vi.fn(),
+  getOnlineCount: vi.fn(),
+  downloadMessageMedia: vi.fn(async () => "Message 43455 not found."),
+}));
+vi.mock("../frontend/telegram/sticker-library.js", () => ({
+  savePackToLibrary: vi.fn(),
+}));
+
 let originalHome: string | undefined;
 let originalTalonHome: string | undefined;
 let originalUserProfile: string | undefined;
@@ -727,6 +744,131 @@ describe("media-index", () => {
       expect(remaining).toHaveLength(1);
       expect(remaining[0].msgId).toBe(2);
       expect(existsSync(shared)).toBe(true);
+    });
+  });
+  describe("dedupe returns the path that actually exists (regression)", () => {
+    it("a duplicate photo arriving later resolves to the canonical file", async () => {
+      const { addMedia, getRecentMedia, loadMediaIndex } = await freshImport();
+      loadMediaIndex();
+      const cid = "dup-later";
+      const original = join(tempHome, "1790753353443-photo_A.jpg");
+      const fresh = join(tempHome, "1790794643221-photo_A.jpg");
+      writeFileSync(original, "identical photo bytes");
+      const first = await addMedia({
+        chatId: cid,
+        msgId: 43081,
+        senderName: "Owner",
+        type: "photo",
+        filePath: original,
+        timestamp: Date.now() - 60_000,
+      });
+      expect(first).toBe(original);
+
+      writeFileSync(fresh, "identical photo bytes");
+      const resolved = await addMedia({
+        chatId: cid,
+        msgId: 43454,
+        senderName: "Owner",
+        type: "photo",
+        filePath: fresh,
+        timestamp: Date.now(),
+      });
+      // The prompt is built from this path, so it must exist on disk.
+      expect(resolved).toBe(original);
+      expect(existsSync(resolved)).toBe(true);
+      expect(existsSync(fresh)).toBe(false);
+      expect(getRecentMedia(cid)[0].filePath).toBe(resolved);
+    });
+
+    it("two photos in one batch both resolve to files that exist", async () => {
+      const { addMedia, getRecentMedia, loadMediaIndex } = await freshImport();
+      loadMediaIndex();
+      const cid = "dup-batch";
+      const old = join(tempHome, "old.jpg");
+      writeFileSync(old, "photo two bytes");
+      await addMedia({
+        chatId: cid,
+        msgId: 43239,
+        senderName: "Owner",
+        type: "photo",
+        filePath: old,
+        timestamp: Date.now() - 60_000,
+      });
+
+      // Album: one new photo, one duplicate of the older one, plus a
+      // third identical to the second — all indexed concurrently.
+      const a = join(tempHome, "batch-a.jpg");
+      const b = join(tempHome, "batch-b.jpg");
+      const c = join(tempHome, "batch-c.jpg");
+      writeFileSync(a, "photo one bytes");
+      writeFileSync(b, "photo two bytes");
+      writeFileSync(c, "photo one bytes");
+      const now = Date.now();
+      const paths = await Promise.all(
+        [a, b, c].map((filePath, i) =>
+          addMedia({
+            chatId: cid,
+            msgId: 43454 + i,
+            senderName: "Owner",
+            type: "photo",
+            filePath,
+            timestamp: now,
+          }),
+        ),
+      );
+      for (const p of paths) expect(existsSync(p)).toBe(true);
+      expect(paths[0]).toBe(a);
+      expect(paths[1]).toBe(old);
+      expect(paths[2]).toBe(a);
+      expect(existsSync(b)).toBe(false);
+      expect(existsSync(c)).toBe(false);
+      for (const e of getRecentMedia(cid)) {
+        expect(existsSync(e.filePath)).toBe(true);
+      }
+    });
+
+    it("download_media serves a deduped message from the index", async () => {
+      const { addMedia, loadMediaIndex } = await freshImport();
+      loadMediaIndex();
+      const { chatInfoHandlers } =
+        await import("../frontend/telegram/actions/chat-info.js");
+      const chatId = 352042062;
+      const original = join(tempHome, "orig.jpg");
+      const fresh = join(tempHome, "fresh.jpg");
+      writeFileSync(original, "same pixels");
+      writeFileSync(fresh, "same pixels");
+      await addMedia({
+        chatId: String(chatId),
+        msgId: 43239,
+        senderName: "Owner",
+        type: "photo",
+        filePath: original,
+        timestamp: Date.now() - 60_000,
+      });
+      await addMedia({
+        chatId: String(chatId),
+        msgId: 43455,
+        senderName: "Owner",
+        type: "photo",
+        filePath: fresh,
+        timestamp: Date.now(),
+      });
+
+      const handler = chatInfoHandlers.download_media!;
+      const ctx = {} as Parameters<typeof handler>[2];
+      const res = (await handler({ message_id: "43455" }, chatId, ctx)) as {
+        ok: boolean;
+        text?: string;
+        file_path?: string;
+      };
+      expect(res.ok).toBe(true);
+      expect(res.file_path).toBe(original);
+      expect(res.text).toContain(original);
+
+      const missing = (await handler({ message_id: 1 }, chatId, ctx)) as {
+        ok: boolean;
+      };
+      expect(missing.ok).toBe(false);
     });
   });
 });

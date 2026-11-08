@@ -149,7 +149,15 @@ class StagedFile {
 
   /// Stage a file already on disk. Returns null when it is missing or empty —
   /// a dropped directory, or a file that vanished between pick and send.
-  static StagedFile? fromPath(String path, {String? name, int? size}) {
+  static StagedFile? fromPath(String rawPath, {String? name, int? size}) {
+    var path = rawPath.trim();
+    if (path.startsWith('file://')) {
+      try {
+        path = Uri.parse(path).toFilePath();
+      } catch (_) {
+        path = Uri.decodeFull(path.substring(7));
+      }
+    }
     final file = File(path);
     final length = size ?? (file.existsSync() ? file.lengthSync() : 0);
     if (length <= 0) return null;

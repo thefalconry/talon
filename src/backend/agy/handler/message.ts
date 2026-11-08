@@ -29,7 +29,6 @@ import { log, logError, logWarn } from "../../../util/log.js";
 import { traceMessage } from "../../../util/trace.js";
 import { incrementCounter } from "../../../storage/metrics.js";
 import { dirs } from "../../../util/paths.js";
-import { supportsReasoningLevel } from "../../../core/models/reasoning-levels.js";
 
 import {
   createStreamState,
@@ -65,12 +64,9 @@ import {
   type AgyResult,
   type AgyStepUpdate,
 } from "../events.js";
-import {
-  applyEffortToModelId,
-  toAgyEffort,
-  type AgyEffort,
-} from "../effort.js";
-import { getCachedModels, getModelInfo, getDefaultModelId } from "../models.js";
+import type { AgyEffort } from "../effort.js";
+import { selectAgyRun } from "../effort.js";
+import { catalogForSelection, getDefaultModelId } from "../models.js";
 import {
   ensureChild,
   killChild,
@@ -103,32 +99,26 @@ interface ResolvedRun {
 }
 
 /**
- * Resolve the model and effort for this turn.
- *
- * Effort precedence (documented once, here): the requested level first
- * re-points the model id at the sibling slug that bakes that level in
- * — which is how agy actually expresses effort for most of its
- * catalog — and is then ALSO passed as `--effort`, so an id with no
- * suffix still honours it. A level agy cannot express falls through
- * to the model's own default.
+ * Resolve the model and effort for this turn. The precedence lives in
+ * `effort.ts`; [selectAgyRun] is shared with the warm-up and
+ * one-shot paths so all three spawn the same, CLI-valid pair.
  */
 async function resolveRun(
   chatId: string,
   requestedModel: string | undefined,
   requestedEffort: ReturnType<typeof getChatSettings>["effort"],
 ): Promise<ResolvedRun> {
-  const baseModel = requestedModel ?? getDefaultModelId();
-  const info = await getModelInfo(baseModel).catch(() => undefined);
-  const available = info?.supportedReasoningLevels ?? [];
-  const effort =
-    requestedEffort && supportsReasoningLevel(requestedEffort, available)
-      ? toAgyEffort(requestedEffort)
-      : undefined;
-  const catalogIds = getCachedModels().map((m) => m.id);
-  const model = applyEffortToModelId(baseModel, effort, catalogIds);
+  const { model, effort, dropped } = selectAgyRun(
+    requestedModel ?? getDefaultModelId(),
+    requestedEffort,
+    requestedEffort ? await catalogForSelection() : [],
+  );
   log(
     "agent",
-    `[${chatId}] agy model resolved: ${model}${effort ? ` (effort=${effort})` : ""}`,
+    `[${chatId}] agy model resolved: ${model}${effort ? ` (effort=${effort})` : ""}` +
+      (dropped
+        ? ` (effort "${dropped}" not offered — using model default)`
+        : ""),
   );
   return { model, effort };
 }

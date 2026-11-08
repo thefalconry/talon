@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Exactly one shared path: the updates folder inside the app's own external
-     files dir, where the self-updater writes a downloaded release APK. Nothing
-     else in the app is exposed through this provider. -->
+<!-- The only shared paths: the updates folder inside the app's own external
+     files dir, where the self-updater writes a downloaded release APK, and
+     the attachments folder in the cache, where a chat file chip downloads a
+     file before handing it to the app that opens it. Nothing else in the app
+     is exposed through this provider. -->
 <paths>
     <external-files-path name="talon-updates" path="updates/" />
     <cache-path name="talon-updates-cache" path="updates/" />
+    <cache-path name="talon-attachments" path="attachments/" />
 </paths>

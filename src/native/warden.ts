@@ -27,6 +27,7 @@ import {
 import { accessSync, constants } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { logDebug, logWarn } from "../util/log.js";
 
 interface WardenStartEvent {
   pid: number;
@@ -115,8 +116,16 @@ function resolveWardenPath(): string | null {
     try {
       accessSync(candidate, constants.X_OK);
       return candidate;
-    } catch {
-      /* keep looking */
+    } catch (err) {
+      // Keep looking. An absent default binary is the normal npm install;
+      // an explicit TALON_WARDEN that isn't executable is config silently
+      // not taking effect.
+      if (process.env.TALON_WARDEN) {
+        logWarn(
+          "native",
+          `TALON_WARDEN not executable, spawning without warden path=${candidate}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
   return null;
@@ -165,8 +174,8 @@ export function spawnWarden(opts: WardenSpawnOptions): ChildProcess | null {
         env: opts.env,
       },
     );
-  } catch {
-    return null;
+  } catch (err) {
+    return warnUnsupervised(opts.command, bin, err);
   }
 
   let started = false;
@@ -203,7 +212,7 @@ export function spawnWarden(opts: WardenSpawnOptions): ChildProcess | null {
       try {
         event = JSON.parse(line) as Record<string, unknown>;
       } catch {
-        return; // never let a mangled event take down the supervisor
+        return debugMangledEvent(line); // never take down the supervisor
       }
       switch (event.event) {
         case "start":
@@ -284,4 +293,23 @@ export function spawnWarden(opts: WardenSpawnOptions): ChildProcess | null {
   });
 
   return warden;
+}
+
+/**
+ * The caller falls back to a direct spawn, which loses the warden's
+ * process-group cleanup, so say why. Returns spawnWarden's "no warden".
+ */
+function warnUnsupervised(command: string, bin: string, err: unknown): null {
+  logWarn(
+    "native",
+    `warden spawn failed, running ${command} unsupervised bin=${bin}: ${err instanceof Error ? err.message : String(err)}`,
+  );
+  return null;
+}
+
+function debugMangledEvent(line: string): void {
+  logDebug(
+    "native",
+    `warden: unparseable event line ${JSON.stringify(line.slice(0, 80))}`,
+  );
 }

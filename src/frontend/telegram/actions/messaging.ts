@@ -21,6 +21,7 @@ import {
   richMessagesAvailable,
 } from "./rich-messages.js";
 import { toPositiveId } from "./coerce.js";
+import { captionUnits, TELEGRAM_MAX_CAPTION } from "./media.js";
 import { resolveThreadId } from "../topics.js";
 import { TELEGRAM_MAX_TEXT, type TelegramActionHandlers } from "./types.js";
 
@@ -260,6 +261,14 @@ export const messagingHandlers: TelegramActionHandlers = {
     // Media messages have captions, not text — editMessageText on them fails
     // with "there is no text in the message to edit".
     if (body.is_caption === true) {
+      // An edit cannot spill into a follow-up message the way a send does,
+      // so refuse up front with guidance rather than a raw Bot API 400.
+      const units = captionUnits(text);
+      if (units > TELEGRAM_MAX_CAPTION)
+        return {
+          ok: false,
+          error: `Caption too long (${units} chars, max ${TELEGRAM_MAX_CAPTION}) — shorten it, or send the rest as a separate message`,
+        };
       await withRetry(async () => {
         try {
           await bot.api.editMessageCaption(chatId, Number(body.message_id), {

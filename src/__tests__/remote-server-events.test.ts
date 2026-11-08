@@ -143,13 +143,13 @@ describe("processStreamEvent — message.part.updated (tool)", () => {
             type: "tool",
             callID: "call_1",
             tool: "get_weather",
-            state: { status: "completed", input: { city: "Dublin" } },
+            state: { status: "completed", input: { city: "London" } },
           },
         },
       },
       ctx,
     );
-    expect(onToolUse).toHaveBeenCalledWith("get_weather", { city: "Dublin" });
+    expect(onToolUse).toHaveBeenCalledWith("get_weather", { city: "London" });
     expect(ctx.state.toolCalls).toBe(1);
     expect(ctx.seenToolCallIds.has("call_1")).toBe(true);
   });
@@ -401,7 +401,7 @@ describe("finalizePartsIntoState — SSE missed", () => {
           type: "tool",
           callID: "c1",
           tool: "get_weather",
-          state: { status: "completed", input: { city: "Dublin" } },
+          state: { status: "completed", input: { city: "London" } },
         },
       ],
       state,
@@ -411,7 +411,7 @@ describe("finalizePartsIntoState — SSE missed", () => {
     expect(toolsProcessed).toBe(1);
     expect(state.lastTrailingText).toBe("Hi there");
     expect(state.toolCalls).toBe(1);
-    expect(onToolUse).toHaveBeenCalledWith("get_weather", { city: "Dublin" });
+    expect(onToolUse).toHaveBeenCalledWith("get_weather", { city: "London" });
   });
 
   it("rewrites allResponseText from text parts (parts list is source of truth)", () => {

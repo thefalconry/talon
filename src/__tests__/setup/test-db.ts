@@ -15,3 +15,7 @@ process.env.TALON_DB_PATH = join(
 
 // Block legacy-JSON import/rename outside suites that explicitly test it.
 process.env.TALON_DISABLE_LEGACY_IMPORT = "1";
+
+// A fixed gateway token, so suites that start a gateway never mint one into
+// the real ~/.talon/keys/. Spawned children inherit it like the daemon's do.
+process.env.TALON_GATEWAY_TOKEN = "vitest-gateway-token";

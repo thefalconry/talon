@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
+import writeFileAtomic from "write-file-atomic";
 import { log } from "../../util/log.js";
 import { dirs, files as pathFiles } from "../../util/paths.js";
 import { listSeedPrompts, readPromptAsset } from "#prompt-assets";
@@ -259,8 +260,11 @@ function seedPrompts(): void {
     const pkgHash = sha256(pkg);
 
     if (!existsSync(dst)) {
+      // Atomic: a write cut short (ENOSPC, crash) must leave no file
+      // rather than a truncated one, which the next boot could not tell
+      // from a user edit and would keep forever.
       try {
-        writeFileSync(dst, pkg);
+        writeFileAtomic.sync(dst, pkg);
       } catch (err) {
         log(
           "workspace",
@@ -293,7 +297,7 @@ function seedPrompts(): void {
     } else if (seededHash !== undefined && curHash === seededHash) {
       // Pristine seeded copy + package changed → refresh on upgrade.
       try {
-        writeFileSync(dst, pkg);
+        writeFileAtomic.sync(dst, pkg);
       } catch {
         continue; // manifest keeps the old hash — retried next boot
       }
@@ -308,7 +312,7 @@ function seedPrompts(): void {
 
   if (manifestDirty) {
     try {
-      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+      writeFileAtomic.sync(manifestPath, JSON.stringify(manifest, null, 2));
     } catch {
       /* non-fatal — worst case we re-derive next boot */
     }

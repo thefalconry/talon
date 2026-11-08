@@ -3,8 +3,7 @@
  *
  * Resolves after `ms` milliseconds, or immediately when the optional
  * `AbortSignal` fires. Used by the remote-server backends (kilo,
- * opencode) for throttled retries and stream pacing. Previously
- * duplicated inline in `kilo/handler.ts` and `opencode/handler.ts`.
+ * opencode) for throttled retries and stream pacing.
  */
 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {

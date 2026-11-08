@@ -16,6 +16,10 @@ import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { isBunRuntime } from "../../util/runtime.js";
 import {
+  gatewayAuthHeaders,
+  readGatewayToken,
+} from "../engine/gateway-auth.js";
+import {
   readPidRecord,
   writePidRecord,
   removePidRecordIfOwnedBy,
@@ -26,6 +30,7 @@ import {
   probeHealth,
   type RunningInstance,
 } from "./discovery.js";
+import { clearStopMarker, writeStopMarker } from "./watchdog/stop-marker.js";
 
 export type StartOutcome =
   | { ok: true; pid: number; port?: number }
@@ -52,7 +57,11 @@ function sleep(ms: number): Promise<void> {
 export async function startDaemon(opts: {
   pkgRoot: string;
   pidfilePath?: string;
+  stopMarkerPath?: string;
 }): Promise<StartOutcome> {
+  // Asking for a start withdraws an earlier `talon stop`, even if this
+  // start fails: the watchdog should keep trying from here.
+  clearStopMarker(opts.stopMarkerPath);
   const existing = await findRunningInstance(opts.pidfilePath);
   if (existing) {
     // Heal a lost/stale pidfile so the next stop/restart can use the
@@ -157,6 +166,11 @@ async function requestShutdown(port: number): Promise<boolean> {
   try {
     const resp = await fetch(`http://127.0.0.1:${port}/shutdown`, {
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...gatewayAuthHeaders(readGatewayToken()),
+      },
+      body: "{}",
       signal: AbortSignal.timeout(2000),
     });
     if (!resp.ok) return false;
@@ -185,8 +199,19 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
 }
 
 export async function stopDaemon(
-  opts: { pidfilePath?: string } = {},
+  opts: {
+    pidfilePath?: string;
+    /**
+     * An operator's `talon stop`: leave the stop marker so the watchdog
+     * (./watchdog/watchdog.ts) doesn't start it again. Off for the stop half of a
+     * restart.
+     */
+    intentional?: boolean;
+    stopMarkerPath?: string;
+  } = {},
 ): Promise<StopOutcome> {
+  // Before stopping, so a watchdog run in the middle of it already sees it.
+  if (opts.intentional) writeStopMarker("talon stop", opts.stopMarkerPath);
   const instance = await findRunningInstance(opts.pidfilePath);
   if (!instance) {
     // Clear a stale pidfile so future starts/stops see a clean slate.
@@ -229,7 +254,7 @@ export async function restartDaemon(opts: {
   // stopDaemon waits for the old process to actually exit (no fixed
   // sleep), so the gateway port is free by the time we start — and the
   // gateway's EADDRINUSE fallback covers the rare straggler.
-  const stop = await stopDaemon(opts);
+  const stop = await stopDaemon({ pidfilePath: opts.pidfilePath });
   const start = await startDaemon(opts);
   return { stop, start };
 }

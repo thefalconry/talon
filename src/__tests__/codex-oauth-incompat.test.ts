@@ -5,7 +5,7 @@
  * matching, malformed-payload tolerance, one-shot legacy-file import),
  * `models.isCodexOAuthIncompat` (combined curated + dynamic check),
  * `models.chatGptFallbackFor` (broadened fallback selection), and
- * `auth.isSilentOAuthExitError` (the 2026-05-20 Pandario regression
+ * `auth.isSilentOAuthExitError` (the 2026-05-20 silent-exit regression
  * pattern).
  *
  * The store now rides the shared kv table (test-isolated per worker via
@@ -55,6 +55,7 @@ import {
   isCodexOAuthIncompat,
   chatGptFallbackFor,
 } from "../backend/codex/models.js";
+import { CODEX_CHATGPT_DEFAULT_MODEL } from "../backend/codex/constants.js";
 import {
   isSilentOAuthExitError,
   isChatGptModelMismatchError,
@@ -116,7 +117,7 @@ describe("computeAuthFingerprint", () => {
     );
   });
 
-  it("api-key mode includes a short prefix of the key for differentiation", () => {
+  it("api-key mode differentiates keys", () => {
     const a: CodexAuthInfo = {
       mode: "api-key",
       source: "env:CODEX_API_KEY",
@@ -133,6 +134,19 @@ describe("computeAuthFingerprint", () => {
     };
     expect(computeAuthFingerprint(a)).not.toBe(computeAuthFingerprint(b));
     expect(computeAuthFingerprint(a)).toContain("api-key:env:CODEX_API_KEY:");
+  });
+
+  it("api-key mode carries no key material, only a digest", () => {
+    const info: CodexAuthInfo = {
+      mode: "api-key",
+      source: "env:CODEX_API_KEY",
+      apiKey: "sk-key-A-0123456789abcdef-rest-of-secret-here",
+      authFileParsed: false,
+      diagnostics: [],
+    };
+    const fp = computeAuthFingerprint(info);
+    expect(fp).toMatch(/^api-key:env:CODEX_API_KEY:[0-9a-f]{16}$/);
+    expect(fp).not.toContain("sk-key");
   });
 
   it("none mode returns a deterministic missing fingerprint", () => {
@@ -325,28 +339,34 @@ describe("chatGptFallbackFor — broadened fallback selection", () => {
     expect(chatGptFallbackFor("brand-new-future-model")).toBeUndefined();
   });
 
-  it("returns gpt-5.5 for curated apiKeyOnly ids", () => {
-    expect(chatGptFallbackFor("gpt-5-codex")).toBe("gpt-5.5");
+  // The fallback target is the resolved ChatGPT default
+  // (`getCodexChatGptDefaultModel`), not a hardcoded id: `gpt-5.5` was
+  // retired for ChatGPT accounts. With no env override, config key or
+  // discovered CLI default in play, that resolves to the bundled floor.
+  it("returns the ChatGPT default for curated apiKeyOnly ids", () => {
+    expect(chatGptFallbackFor("gpt-5-codex")).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
   });
 
-  it("returns gpt-5.5 for runtime-learned incompat ids", async () => {
+  it("returns the ChatGPT default for runtime-learned incompat ids", async () => {
     await markOAuthIncompat("gpt-5.4-mini");
-    expect(chatGptFallbackFor("gpt-5.4-mini")).toBe("gpt-5.5");
+    expect(chatGptFallbackFor("gpt-5.4-mini")).toBe(
+      CODEX_CHATGPT_DEFAULT_MODEL,
+    );
 
-    await markOAuthIncompat("gpt-5.4");
-    expect(chatGptFallbackFor("gpt-5.4")).toBe("gpt-5.5");
+    await markOAuthIncompat("gpt-5.5");
+    expect(chatGptFallbackFor("gpt-5.5")).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
   });
 
-  it("returns undefined for gpt-5.5 itself even if marked (no further fallback)", async () => {
-    // Pathological case — if even gpt-5.5 fails, the credential is the
-    // problem and there's no model we can swap to. The handler should
+  it("returns undefined for the ChatGPT default itself even if marked (no further fallback)", async () => {
+    // Pathological case — if even the default fails, the credential is
+    // the problem and there's no model we can swap to. The handler should
     // surface this as an error rather than loop.
-    await markOAuthIncompat("gpt-5.5");
-    expect(chatGptFallbackFor("gpt-5.5")).toBeUndefined();
+    await markOAuthIncompat(CODEX_CHATGPT_DEFAULT_MODEL);
+    expect(chatGptFallbackFor(CODEX_CHATGPT_DEFAULT_MODEL)).toBeUndefined();
   });
 });
 
-// ── isSilentOAuthExitError — the Pandario 23:13Z regression ──────────────
+// ── isSilentOAuthExitError — the 2026-05-20 23:13Z regression ──────────────
 
 describe("isSilentOAuthExitError", () => {
   it("detects the canonical silent exit-1 wrapper from codex-sdk", () => {

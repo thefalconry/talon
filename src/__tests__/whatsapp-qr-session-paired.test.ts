@@ -20,7 +20,7 @@ import { isPaired } from "../frontend/whatsapp/connection/pairing.js";
 // that matters, `registered` still false.
 const qrLinked = {
   registered: false,
-  me: { id: "353851722396:3@s.whatsapp.net", name: "~" },
+  me: { id: "447700900101:3@s.whatsapp.net", name: "~" },
   account: { details: "…" },
   platform: "android",
 };
@@ -34,7 +34,7 @@ const neverPaired = {
 
 const codeLinked = {
   registered: true,
-  me: { id: "353851722396:1@s.whatsapp.net" },
+  me: { id: "447700900101:1@s.whatsapp.net" },
 };
 
 describe("isPaired", () => {

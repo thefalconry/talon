@@ -9,6 +9,7 @@ import '../models/bridge_models.dart';
 import '../services/haptics.dart';
 import '../state/composer_attachments.dart';
 import '../theme.dart';
+import 'effects.dart';
 
 /// The message input. Enter sends; Shift+Enter inserts a newline. Grows with
 /// content up to a cap, then scrolls. Any number of files of any type can be
@@ -41,6 +42,12 @@ class Composer extends StatefulWidget {
   /// send slot while the input is empty, WhatsApp-style.
   final VoidCallback? onVoice;
 
+  /// Optional externally owned text controller and focus node, so the chat
+  /// view can put text in the field (Reply quotes a message into it). The
+  /// composer creates and disposes its own when these are null.
+  final TextEditingController? controller;
+  final FocusNode? focusNode;
+
   const Composer({
     super.key,
     required this.onSend,
@@ -49,6 +56,8 @@ class Composer extends StatefulWidget {
     this.running = false,
     this.onStop,
     this.onVoice,
+    this.controller,
+    this.focusNode,
   });
 
   @override
@@ -56,8 +65,9 @@ class Composer extends StatefulWidget {
 }
 
 class _ComposerState extends State<Composer> {
-  final _controller = TextEditingController();
-  final _focus = FocusNode();
+  late final TextEditingController _controller =
+      widget.controller ?? TextEditingController();
+  late final FocusNode _focus = widget.focusNode ?? FocusNode();
   bool _canSend = false;
   bool _focused = false;
 
@@ -69,11 +79,13 @@ class _ComposerState extends State<Composer> {
     // Files can already be staged at mount — dropped onto the pane while the
     // composer was rebuilding, or handed back by a failed send.
     _canSend = widget.attachments.isNotEmpty;
-    _focus.addListener(() {
-      if (_focused != _focus.hasFocus) {
-        setState(() => _focused = _focus.hasFocus);
-      }
-    });
+    _focus.addListener(_onFocus);
+  }
+
+  void _onFocus() {
+    if (mounted && _focused != _focus.hasFocus) {
+      setState(() => _focused = _focus.hasFocus);
+    }
   }
 
   @override
@@ -89,8 +101,10 @@ class _ComposerState extends State<Composer> {
   @override
   void dispose() {
     widget.attachments.removeListener(_onAttachmentsChanged);
-    _controller.dispose();
-    _focus.dispose();
+    _controller.removeListener(_recomputeCanSend);
+    _focus.removeListener(_onFocus);
+    if (widget.controller == null) _controller.dispose();
+    if (widget.focusNode == null) _focus.dispose();
     super.dispose();
   }
 
@@ -370,7 +384,7 @@ class _StagedTile extends StatelessWidget {
               child: Stack(
                 fit: StackFit.passthrough,
                 children: [
-                  file.isImage ? _thumbnail() : _fileChip(),
+                  file.isImage ? _thumbnail(context) : _fileChip(),
                   // A file whose upload failed blocks the send, so it says so
                   // on the tile itself and retries on tap — otherwise the
                   // greyed button has no visible explanation.
@@ -430,15 +444,22 @@ class _StagedTile extends StatelessWidget {
     );
   }
 
-  Widget _thumbnail() => Image.file(
-        File(file.path),
-        width: 72,
-        height: 72,
-        fit: BoxFit.cover,
-        // The file can vanish between staging and render; show the same chip
-        // the non-image case uses rather than a broken box.
-        errorBuilder: (_, __, ___) => _fileChip(),
-      );
+  Widget _thumbnail(BuildContext context) {
+    // Decode at the tile's physical size, not the photo's: a staged 12 MP
+    // original is ~48 MB of RGBA for a 72 px chip.
+    final px = (72 * MediaQuery.devicePixelRatioOf(context)).round();
+    return Image.file(
+      File(file.path),
+      width: 72,
+      height: 72,
+      cacheWidth: px,
+      cacheHeight: px,
+      fit: BoxFit.cover,
+      // The file can vanish between staging and render; show the same chip
+      // the non-image case uses rather than a broken box.
+      errorBuilder: (_, __, ___) => _fileChip(),
+    );
+  }
 
   Widget _fileChip() => Container(
         width: 168,
@@ -602,7 +623,8 @@ class _StopButton extends StatelessWidget {
             ? button
             : button
                 .animate(onPlay: (c) => c.repeat(reverse: true))
-                .fadeIn(begin: 0.75, duration: 850.ms, curve: Curves.easeInOut),
+                .fadeIn(begin: 0.75, duration: 850.ms, curve: Curves.easeInOut)
+                .wrapAmbient(),
       ),
     );
   }

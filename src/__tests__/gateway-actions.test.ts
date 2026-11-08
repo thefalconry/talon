@@ -97,6 +97,13 @@ vi.mock("../core/models/active-model.js", () => ({
   resolveExplicitModelRef: mockResolveExplicitModelRef,
 }));
 
+// fetch_url resolves every host before fetching (SSRF guard); keep the
+// test hosts public and offline.
+vi.mock("node:dns/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:dns/promises")>()),
+  lookup: vi.fn(async () => [{ address: "93.184.215.14", family: 4 }]),
+}));
+
 // Mock node:fs for fetch_url binary download path
 const mockExistsSync = vi.fn(() => true);
 const mockMkdirSync = vi.fn();
@@ -106,6 +113,18 @@ vi.mock("node:fs", () => ({
   mkdirSync: mockMkdirSync,
   writeFileSync: mockWriteFileSync,
   readFileSync: vi.fn(),
+}));
+
+// The fetch ladder's impersonation rungs need the curl-impersonate binary;
+// keep it "not installed" here so every fetch_url case exercises the plain
+// rung against the stubbed global fetch (and nothing is downloaded).
+vi.mock("../core/fetch/curl-impersonate.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../core/fetch/curl-impersonate.js")
+  >()),
+  resolveCurlImpersonate: vi.fn(async () => {
+    throw new Error("curl-impersonate not installed (test)");
+  }),
 }));
 
 const { handleSharedAction, handleChatFreeAction, isChatFreeAction } =
@@ -499,7 +518,10 @@ describe("gateway shared actions", () => {
         123,
       );
 
-      expect(result).toEqual({ ok: true, text: '{"status":"ok"}' });
+      expect(result).toEqual({
+        ok: true,
+        text: '{"status":"ok"}\n\n[fetched via plain]',
+      });
     });
 
     it("decodes text using the response charset", async () => {
@@ -524,7 +546,7 @@ describe("gateway shared actions", () => {
 
       expect(result).toEqual({
         ok: true,
-        text: "Hello from a UTF-16 page — café",
+        text: "Hello from a UTF-16 page — café\n\n[fetched via plain]",
       });
     });
 
@@ -590,7 +612,9 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(true);
-      expect(result?.text).toBe("(Page has no readable content)");
+      expect(result?.text).toBe(
+        "(Page has no readable content)\n\n[fetched via plain]",
+      );
     });
 
     it("returns HTTP error for non-ok response", async () => {
@@ -607,7 +631,10 @@ describe("gateway shared actions", () => {
         123,
       );
 
-      expect(result).toEqual({ ok: false, error: "HTTP 404" });
+      // A 404 is a wrong URL, not a bot wall: reported as such, no climbing.
+      expect(result?.ok).toBe(false);
+      expect(result?.error).toMatch(/^HTTP 404 via plain — /);
+      expect(result?.error).toContain("wrong URL, not a block");
     });
 
     it("returns HTTP 500 error", async () => {
@@ -624,7 +651,7 @@ describe("gateway shared actions", () => {
         123,
       );
 
-      expect(result).toEqual({ ok: false, error: "HTTP 500" });
+      expect(result).toEqual({ ok: false, error: "HTTP 500 via plain" });
     });
 
     it("handles network errors", async () => {
@@ -639,7 +666,8 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(false);
-      expect(result?.error).toContain("Fetch failed: ECONNREFUSED");
+      expect(result?.error).toContain("Could not reach the site on any rung");
+      expect(result?.error).toContain("plain ECONNREFUSED");
     });
 
     it("handles timeout errors", async () => {
@@ -656,7 +684,7 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(false);
-      expect(result?.error).toContain("Fetch failed");
+      expect(result?.error).toContain("Could not reach the site");
       expect(result?.error).toContain("timeout");
     });
 
@@ -670,7 +698,7 @@ describe("gateway shared actions", () => {
       );
 
       expect(result?.ok).toBe(false);
-      expect(result?.error).toBe("Fetch failed: string error");
+      expect(result?.error).toContain("plain string error");
     });
 
     // ── Binary download tests ─────────────────────────────────────────────
@@ -1034,11 +1062,12 @@ describe("gateway shared actions", () => {
         123,
       );
 
+      // Redirects are followed by hand so each hop is SSRF-checked.
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://example.com",
+        new URL("https://example.com"),
         expect.objectContaining({
           headers: { "User-Agent": "Talon/1.0" },
-          redirect: "follow",
+          redirect: "manual",
         }),
       );
     });
@@ -2362,14 +2391,14 @@ describe("per-job model override + discovery actions", () => {
           id: "claude",
           label: "Claude",
           current: false,
-          headroom: 1,
+          headroom: null,
           headroomSource: "none",
         },
         {
           id: "codex",
           label: "Codex",
           current: true,
-          headroom: 1,
+          headroom: null,
           headroomSource: "none",
         },
       ]);
@@ -2418,12 +2447,12 @@ describe("per-job model override + discovery actions", () => {
       await handleChatFreeAction({
         action: "send_via",
         frontend: "telegram",
-        target: "-1001426819337",
+        target: "-1009876543210",
         text: "build is green",
       });
       expect(handler).toHaveBeenCalledWith(
         expect.objectContaining({ action: "send_message" }),
-        -1001426819337,
+        -1009876543210,
       );
     });
 

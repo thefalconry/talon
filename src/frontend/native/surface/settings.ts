@@ -11,11 +11,8 @@
  * deliberately NOT editable here — those belong in a deliberate restart.
  */
 
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
-import writeFileAtomic from "write-file-atomic";
-import { dirname } from "node:path";
 import type { TalonConfig } from "../../../core/config/index.js";
-import { files as pathFiles } from "../../../util/paths.js";
+import { persistConfigPatch } from "../../../core/config/persist.js";
 import { setTimezone } from "../../../util/time.js";
 import { resolveModel } from "../../../core/models/catalog.js";
 import { getHealthStatus } from "../../../util/watchdog.js";
@@ -180,30 +177,4 @@ export function applyConfigUpdate(
   }
 
   return configSnapshot(config);
-}
-
-/**
- * Merge a partial update into talon.json on disk, preserving everything
- * else. Shared by every bridge surface that persists config changes
- * (settings sync here, plugin toggles in extensions.ts).
- */
-export function persistConfigPatch(update: Record<string, unknown>): void {
-  const file = pathFiles.config;
-  let current: Record<string, unknown> = {};
-  try {
-    if (existsSync(file)) {
-      current = JSON.parse(readFileSync(file, "utf-8")) as Record<
-        string,
-        unknown
-      >;
-    }
-  } catch {
-    /* corrupt/absent — start from empty */
-  }
-  for (const [k, v] of Object.entries(update)) {
-    if (v === undefined) delete current[k];
-    else current[k] = v;
-  }
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileAtomic.sync(file, JSON.stringify(current, null, 2) + "\n");
 }

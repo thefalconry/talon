@@ -35,9 +35,11 @@ export async function waitForMcpServersReady(
   while (Date.now() < deadline) {
     let statuses;
     try {
-      statuses = await qi.mcpServerStatus();
+      // Bound the call itself: a CLI that never answers the control
+      // request would otherwise park here past the deadline.
+      statuses = await beforeDeadline(qi.mcpServerStatus(), deadline);
     } catch {
-      return; // status query unsupported/failed — don't block the turn
+      return; // status query unsupported/failed/timed out — don't block the turn
     }
     // Best-effort: a backend (or stub) may report status in an unexpected
     // shape (undefined / non-array). Treat anything non-iterable as
@@ -51,4 +53,16 @@ export async function waitForMcpServersReady(
     if (pending.size === 0) return;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
+}
+
+/** `promise`, or a rejection once `deadline` (epoch ms) passes first. */
+function beforeDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("mcpServerStatus timed out")),
+      Math.max(0, deadline - Date.now()),
+    );
+  });
+  return Promise.race([promise, expired]).finally(() => clearTimeout(timer));
 }

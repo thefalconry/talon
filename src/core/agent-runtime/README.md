@@ -41,15 +41,16 @@ error | completed
 ```
 
 Plus `UsageSnapshot`, `AgentError` (with `AgentErrorKind`),
-`AgentResult`. Helpers: `emptyUsage`, `addUsage`, `isAgentEventOf`,
-`isAgentRunTerminator`.
+`AgentResult`, and `AgentRunError` — what the dispatcher rethrows an
+`error` terminator as. Helpers: `emptyUsage`, `toolInputToRecord`,
+`classifiedToAgentError`.
 
 ### `model-ref.ts`
 
 Typed model identity. `ModelRef = { backend: BackendId, id,
 displayName, ... }`. Owns the `BACKEND_IDS` literal — single source of
 truth for which backends the typed union can route to. Helpers:
-`isBackendId`, `sameModelRef`, `makeBareModelRef`.
+`isBackendId`, `makeBareModelRef`.
 
 ### `capabilities.ts`
 
@@ -100,16 +101,6 @@ Backend contract assertions any conforming `Backend` must pass:
   checks performed
 
 Each throws `ContractViolation` with a descriptive message.
-
-### `event-bridge.ts`
-
-The bridge between the canonical `AgentEvent` stream and the
-callback-shaped consumer contract the dispatcher uses upstream of the
-backend. `pipeEventsToCallbacks(stream, callbacks)` consumes an
-`AgentEvent` stream and invokes the supplied callbacks (`onStreamDelta`
-/ `onTextBlock` / `onToolUse`), returns the final `AgentResult`, and
-throws `BridgedAgentError` carrying the original `AgentError` if the
-stream terminates with an error event.
 
 ## Migration cookbook
 
@@ -164,11 +155,6 @@ returns `{ model: string | null, ref: ModelRef | null, source }`:
 - `source` carries the chain step that produced the model, useful
   for toast wording and stale-slot cleanup.
 
-Convenience wrappers:
-
-- `getActiveModelForChat(...)` → `model`
-- `getActiveModelRefForChat(...)` → `ref`
-
 ### Adding a new store
 
 New structured state goes in the SQLite layer — see the layering doc
@@ -178,7 +164,7 @@ in `src/storage/db.ts` (sql/<store>.sql → repositories/<store>-repo.ts
 ## Invariants
 
 - `BACKEND_IDS` in `model-ref.ts` is the source of truth for the typed
-  union. `src/util/config.ts` zod enums are wired to the same literal.
+  union. `core/config/index.ts` zod enums are wired to the same literal.
 - `AgentEvent.type` is the ONLY discrimination mechanism. No class
   hierarchy, no `instanceof` checks.
 - Every `ChatBackend.runChatTurn` stream terminates with `completed`

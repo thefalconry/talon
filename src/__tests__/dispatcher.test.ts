@@ -107,8 +107,8 @@ describe("dispatcher", () => {
     initDispatcher(deps as never);
     resetCrossChatRelay();
     // This chat messaged a WhatsApp number earlier; she has now replied.
-    noteCrossSend("123", "wa_dm_353863715529");
-    relayInbound("wa_dm_353863715529", "Nyika", "on my way");
+    noteCrossSend("123", "wa_dm_447700900103");
+    relayInbound("wa_dm_447700900103", "Grace", "on my way");
 
     await execute({
       chatId: "123",
@@ -121,7 +121,7 @@ describe("dispatcher", () => {
 
     const text = String(deps.query.mock.calls.at(-1)?.[0]?.text);
     expect(text).toContain("Cross-chat");
-    expect(text).toContain("Nyika (in wa_dm_353863715529): on my way");
+    expect(text).toContain("Grace (in wa_dm_447700900103): on my way");
     // The user's own prompt still terminates the block, unmodified.
     expect(text.endsWith("did she reply?")).toBe(true);
     // Drained: a second turn must not re-read the same reply.

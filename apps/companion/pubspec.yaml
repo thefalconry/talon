@@ -5,7 +5,7 @@ description: >
   launches/attaches a local Talon daemon; on mobile it connects to a remote
   bridge over the network.
 publish_to: "none"
-version: 1.0.0+1
+version: 5.39.5 # x-release-please-version
 
 environment:
   # Uses the Color.withValues / WidgetStateProperty APIs (Flutter 3.27+).
@@ -21,6 +21,18 @@ dependencies:
   crypto: ^3.0.6
   # Persist the connection profile (host/port/token, local vs remote).
   shared_preferences: ^2.3.2
+  # App-support directory: for the offline chat snapshot and the mesh
+  # liveness file, which each live in their own file rather than inside the
+  # SharedPreferences store (#1059/#1060/#1063), and so the settings store's
+  # directory can be restricted to the current user on Linux (see
+  # PrivateStore).
+  path_provider: ^2.1.5
+  # Joins/normalizes paths for on-device model storage (model_manager.dart).
+  path: ^1.9.0
+  # Unpacks downloaded .tar.bz2 model archives (the on-device Kokoro voice)
+  # in pure Dart on a background isolate — no native code, so it adds nothing
+  # to any platform's build toolchain.
+  archive: ^4.0.9
   # Markdown rendering for assistant replies (code blocks, tables, lists).
   flutter_markdown: ^0.7.4
   # AST access for the custom fenced-code-block builder (copy button +
@@ -28,6 +40,10 @@ dependencies:
   markdown: ^7.2.2
   # Syntax highlighting inside fenced code blocks.
   flutter_highlight: ^0.7.0
+  # The highlighter flutter_highlight wraps. Used directly so highlighting can
+  # run in a background isolate and be cached (lib/src/ui/highlight_cache.dart)
+  # instead of re-running inside build on every scroll.
+  highlight: ^0.7.0
   # Declarative animation layer (gskinner, a Flutter Favorite). Replaces the
   # hand-rolled AnimationControllers with a chainable .animate() API and powers
   # the staggered list entrances, shimmer skeletons, and streaming caret.
@@ -42,8 +58,11 @@ dependencies:
   # Pick files to attach to a message. Chosen over image_picker because it
   # supports every target this app ships to (Windows/macOS/Linux + Android),
   # whereas image_picker has no desktop-Linux/Windows implementation — and it
-  # picks any file type, not just images.
-  file_picker: ^8.1.2
+  # picks any file type, not just images. 10.x: on Linux it asks the
+  # xdg-desktop-portal FileChooser over D-Bus instead of shelling out to
+  # zenity/kdialog — the only way a file dialog works inside Flatpak, and it
+  # needs no helper binary on a normal desktop either.
+  file_picker: ^10.3.3
   # Drag-and-drop of OS files onto the chat (desktop only — Flutter has no
   # core API for a native file drop). Pure platform channels, so it adds no
   # native toolchain requirement to the Windows/macOS/Linux builds.
@@ -62,6 +81,17 @@ dependencies:
   window_manager: ^0.5.2
   launch_at_startup: ^0.5.1
   flutter_local_notifications: ^22.2.0
+  # Optional app lock (#1051). cryptography: Argon2id for the passcode
+  # verifier/KEK and AES-256-GCM for the sealed chat snapshot (pure Dart, run
+  # off the UI isolate). flutter_secure_storage: the lock record in the
+  # platform keystore/keychain (its own namespace — the bridge credential
+  # store from #1068 can share the package). local_auth: Touch ID / Windows
+  # Hello / BiometricPrompt availability and prompts. flutter_secure_storage
+  # stays on 10.x: 11.x's Windows plugin needs win32 ^6, while
+  # device_info_plus 11 (and the other *_plus plugins here) pin win32 ^5.
+  cryptography: ^2.9.0
+  flutter_secure_storage: ^10.3.4
+  local_auth: ^3.0.2
 
 # file_picker resolves flutter_plugin_android_lifecycle to 2.0.35, whose Android
 # library requires compiling against API 36 while file_picker itself compiles

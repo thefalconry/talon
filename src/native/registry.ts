@@ -5,7 +5,7 @@
  * Every embedded module registers here once: provenance (language,
  * target, source dir), artifact size, and a live self-test that proves
  * the embedded bytes instantiate and compute a known answer. Doctor
- * (src/core/doctor.ts) iterates this list, so a new native module
+ * (src/core/doctor/index.ts) iterates this list, so a new native module
  * shows up in `talon doctor` AND the Telegram /doctor command by
  * adding one entry — no per-surface wiring.
  *

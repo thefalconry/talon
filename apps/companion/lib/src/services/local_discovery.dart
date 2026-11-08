@@ -63,6 +63,10 @@ Future<LocalBridge?> readLocalBridgeFromDirectory(Directory dir) async {
 
 Directory? _talonDataDir() {
   final env = Platform.environment;
+  final talonHome = env['TALON_HOME']?.trim();
+  if (talonHome != null && talonHome.isNotEmpty) {
+    return Directory(talonHome);
+  }
   final home = Platform.isWindows
       ? (env['USERPROFILE']?.trim().isNotEmpty == true
           ? env['USERPROFILE']!

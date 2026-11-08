@@ -1,15 +1,21 @@
 package org.talon.companion
 
 import android.content.Intent
-import io.flutter.embedding.android.FlutterActivity
+import android.os.Build
+import android.view.WindowManager
+import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+// FlutterFragmentActivity, not FlutterActivity: BiometricPrompt (local_auth,
+// and flutter_secure_storage's auth-bound keys for the app lock) needs a
+// FragmentActivity host.
+class MainActivity : FlutterFragmentActivity() {
     private var shizuku: ShizukuBridge? = null
     private var root: RootBridge? = null
     private var pair: PairBridge? = null
     private var update: UpdateBridge? = null
+    private var files: FileOpenBridge? = null
     private var voice: VoiceBridge? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -57,6 +63,44 @@ class MainActivity : FlutterActivity() {
             ),
             applicationContext,
         )
+
+        // Chat attachments: hand a file the app downloaded with its auth
+        // header to the app that handles its type (no token in any URL).
+        files = FileOpenBridge(
+            MethodChannel(
+                flutterEngine.dartExecutor.binaryMessenger,
+                FileOpenBridge.CHANNEL,
+            ),
+            applicationContext,
+        )
+
+        // FLAG_SECURE while a screen showing credentials is up (connect,
+        // settings): keeps the token and pairing details out of the recents
+        // thumbnail, screenshots and screen recordings. Toggled from Dart.
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "talon/secure",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setSecure" -> {
+                    if (call.arguments == true) {
+                        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    } else {
+                        window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                    }
+                    result.success(null)
+                }
+                // App lock on: keep content out of the recents thumbnail
+                // without blocking the user's own screenshots (API 33+).
+                "setRecentsScreenshotEnabled" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        setRecentsScreenshotEnabled(call.arguments != false)
+                    }
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
 
         // Voice mode: STT/TTS + default-assistant plumbing. Activity-scoped
         // (unlike Shizuku) because it drives runtime-permission prompts and

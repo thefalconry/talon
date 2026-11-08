@@ -64,6 +64,7 @@ export async function forwardToAgent(
       numericChatId,
       prompt,
       senderName: sender,
+      senderKeys: [`discord:${interaction.user.id}`],
       isGroup,
       source: "message",
       onEvent: async (event) => {

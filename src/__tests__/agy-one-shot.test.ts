@@ -15,6 +15,8 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { RunKilledError } from "../core/agents/abort-reason.js";
+import { IsolatedAgentTimeoutError } from "../core/background/isolated-agent.js";
 
 interface SpawnRecord {
   command: string;
@@ -48,10 +50,18 @@ class FakeChild extends EventEmitter {
   }
 }
 
+/** What the mocked `agy models` prints; init probes it in the background. */
+let modelsTsv = "";
 vi.mock("node:child_process", async (orig) => {
   const actual = await orig<typeof import("node:child_process")>();
   return {
     ...actual,
+    execFile: (
+      _cmd: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (e: unknown, r: { stdout: string; stderr: string }) => void,
+    ) => cb(null, { stdout: modelsTsv, stderr: "" }),
     spawn: (command: string, args: string[], options: { cwd?: string }) => {
       spawned.push({ command, args, cwd: options?.cwd });
       const child = new FakeChild();
@@ -71,7 +81,8 @@ const { runOneShotAgent, oneShotScope, buildOneShotArgs } =
 const { initAgyAgent } = await import("../backend/agy/init.js");
 const { resetState } = await import("../backend/agy/state.js");
 const { resetOwnership } = await import("../backend/agy/mcp/register.js");
-const { resetModelCache } = await import("../backend/agy/models.js");
+const { resetModelCache, refreshModels } =
+  await import("../backend/agy/models.js");
 
 let home: string;
 let configPath: string;
@@ -140,6 +151,7 @@ beforeEach(() => {
   stderrChunks = [];
   exitCode = 0;
   logged = "";
+  modelsTsv = "";
   resetState();
   resetModelCache();
   resetOwnership();
@@ -206,10 +218,34 @@ describe("agy one-shot — running", () => {
     });
   });
 
-  it("honours the requested model and effort", async () => {
+  it("expresses the requested effort through the sibling slug, with no conflicting --effort", async () => {
+    // The production failure: agy >= 1.4 exits 1 on
+    // `--model gemini-3.8-flash-high --effort medium`.
+    modelsTsv =
+      "gemini-3.8-flash-high\tH\ngemini-3.8-flash-medium\tM\ngemini-3.8-flash-low\tL\n";
+    await refreshModels(true);
+    await runOneShotAgent(
+      params({ model: "gemini-3.8-flash-high", reasoningEffort: "medium" }),
+    );
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("gemini-3.8-flash-medium");
+    expect(args).not.toContain("--effort");
+  });
+
+  it("drops a conflicting effort when the catalog has no sibling for it", async () => {
     await runOneShotAgent(params({ reasoningEffort: "medium" }));
-    expect(spawned[0].args).toContain("gemini-3.1-pro-high");
-    expect(spawned[0].args).toContain("medium");
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("gemini-3.1-pro-high");
+    expect(args).not.toContain("--effort");
+  });
+
+  it("passes --effort for a suffix-less model id", async () => {
+    await runOneShotAgent(
+      params({ model: "claude-sonnet-5-5", reasoningEffort: "low" }),
+    );
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
+    expect(args[args.indexOf("--effort") + 1]).toBe("low");
   });
 
   it("reports the final answer through onAssistantText and the log", async () => {
@@ -236,7 +272,7 @@ describe("agy one-shot — running", () => {
             parameters: {
               ServerName: "extras",
               ToolName: "check_time",
-              Arguments: { timezone: "Europe/Dublin" },
+              Arguments: { timezone: "Europe/London" },
             },
             output: "18:41",
           },
@@ -247,7 +283,7 @@ describe("agy one-shot — running", () => {
     await runOneShotAgent(params());
     expect(logged).toContain("extras.check_time");
     expect(logged).not.toContain("call_mcp_tool");
-    expect(logged).toContain("Europe/Dublin");
+    expect(logged).toContain("Europe/London");
   });
 
   it("records a failed tool step as FAILED with its message", async () => {
@@ -301,7 +337,9 @@ describe("agy one-shot — MCP scoping", () => {
     stdoutLines = [];
     exitCode = 1;
     stderrChunks = ["something exploded\n"];
-    await runOneShotAgent(params());
+    await expect(runOneShotAgent(params())).rejects.toThrow(
+      "something exploded",
+    );
     expect(Object.keys(servers())).toEqual(["user-own"]);
     expect(logged).toContain("something exploded");
   });
@@ -312,9 +350,23 @@ describe("agy one-shot — failure paths", () => {
     stdoutLines = [];
     exitCode = 1;
     stderrChunks = ["authentication required\n"];
-    await runOneShotAgent(params());
+    await expect(runOneShotAgent(params())).rejects.toThrow(/interactively/i);
     expect(logged).toMatch(/interactively/i);
     expect(logged).toContain("agy");
+  });
+
+  it("rejects when the turn ends in a non-SUCCESS status", async () => {
+    stdoutLines = [
+      JSON.stringify({
+        event: "result",
+        result: { status: "ERROR", error: "model not available" },
+      }),
+    ];
+    await expect(runOneShotAgent(params())).rejects.toMatchObject({
+      name: "AgyOneShotError",
+      message: "model not available",
+    });
+    expect(logged).toContain("model not available");
   });
 
   it("logs an abort rather than an error when the timeout fires", async () => {
@@ -323,6 +375,21 @@ describe("agy one-shot — failure paths", () => {
     await runOneShotAgent(params({ abortController }));
     expect(logged).toContain("Aborted");
     expect(spawned).toHaveLength(0);
+  });
+
+  it("says 'killed', not 'timeout', for a deliberate kill", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new RunKilledError());
+    await runOneShotAgent(params({ abortController }));
+    expect(logged).toContain("Run killed on request.");
+    expect(logged).not.toContain("timeout");
+  });
+
+  it("still says 'timeout' when the timeout is the reason", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new IsolatedAgentTimeoutError(1000));
+    await runOneShotAgent(params({ abortController }));
+    expect(logged).toContain("Run aborted by timeout.");
   });
 
   it("kills the child when the abort fires mid-run", async () => {

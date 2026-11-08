@@ -22,8 +22,8 @@ import {
   lastUpdateId,
   noteUpdateId,
   resetUpdateOffset,
-} from "../frontend/telegram/update-offset.js";
-import { isStaleCommand } from "../frontend/telegram/stale-command.js";
+} from "../frontend/telegram/polling/update-offset.js";
+import { isStaleCommand } from "../frontend/telegram/polling/stale-command.js";
 
 describe("update-offset confirmation", () => {
   beforeEach(() => resetUpdateOffset());

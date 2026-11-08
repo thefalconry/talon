@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { getMetrics, resetMetrics } from "../storage/metrics.js";
+import { CODEX_CHATGPT_DEFAULT_MODEL } from "../backend/codex/constants.js";
 
 // ── Shared mock state ───────────────────────────────────────────────────────
 
@@ -215,7 +216,7 @@ describe("codex / handleMessage — happy path", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "Say hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onTextBlock: async (text) => {
         delivered.push(text);
@@ -310,7 +311,7 @@ describe("codex / handleMessage — happy path", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "Say hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -360,7 +361,7 @@ describe("codex / handleMessage — happy path", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "What did I say before?",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -393,7 +394,7 @@ describe("codex / handleMessage — happy path", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "First message",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -484,7 +485,7 @@ describe("codex / handleMessage — context tokens wiring", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -520,7 +521,7 @@ describe("codex / handleMessage — context tokens wiring", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -560,7 +561,7 @@ describe("codex / handleMessage — context tokens wiring", () => {
       handleMessage({
         chatId: "test-chat",
         text: "hi",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       }),
     ).resolves.toBeDefined();
@@ -634,7 +635,7 @@ describe("codex / handleMessage — context tokens wiring", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -664,7 +665,7 @@ describe("codex / handleMessage — context tokens wiring", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "hi again",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       // …and this turn's API calls grow them. Simulated mid-turn (the
       // baseline is captured before runStreamed; tool events fire after).
@@ -695,7 +696,7 @@ describe("codex / handleMessage — context tokens wiring", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "hi again",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -738,7 +739,7 @@ describe("codex / handleMessage — context tokens wiring", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -803,7 +804,7 @@ describe("codex / handleMessage — error paths", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "write a long answer",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onTextBlock: async (t) => {
         attempts++;
@@ -837,7 +838,7 @@ describe("codex / handleMessage — error paths", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "boom",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onTextBlock: async (t) => {
         delivered.push(t);
@@ -860,7 +861,7 @@ describe("codex / handleMessage — error paths", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "boom",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onTextBlock: async (t) => {
         delivered.push(t);
@@ -890,7 +891,7 @@ describe("codex / handleMessage — error paths", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "say nothing",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onTextBlock: async (t) => {
         delivered.push(t);
@@ -938,7 +939,7 @@ describe("codex / handleMessage — tool use", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "react with fire",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onToolUse: (name, input) => {
         tools.push({ name, input });
@@ -992,7 +993,7 @@ describe("codex / handleMessage — tool use", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "wrap up",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1025,7 +1026,7 @@ describe("codex / handleMessage — thread options", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "ping",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1071,7 +1072,7 @@ describe("codex / handleMessage — thread options", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "ping",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1122,7 +1123,7 @@ describe("codex / handleMessage — active abort registry", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1236,7 +1237,7 @@ describe("codex / handleMessage — tool call accounting", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "react please",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onToolUse: (name, input) => {
         tools.push({ name, input });
@@ -1302,7 +1303,7 @@ describe("codex / handleMessage — tool call accounting", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "say hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onToolUse: (name) => {
         tools.push(name);
@@ -1353,7 +1354,7 @@ describe("codex / handleMessage — tool call accounting", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "react please",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onToolUse: (name) => {
         tools.push(name);
@@ -1385,7 +1386,7 @@ describe("codex / handleMessage — tool call accounting", () => {
           type: "mcp_tool_call",
           server: "mempalace-tools",
           tool: "mempalace_search",
-          arguments: { query: "Dylan" },
+          arguments: { query: "Ada" },
           status: "completed",
         },
       },
@@ -1425,8 +1426,8 @@ describe("codex / handleMessage — tool call accounting", () => {
     const calls: string[] = [];
     await handleMessage({
       chatId: "test-chat",
-      text: "look up Dylan and react",
-      senderName: "Dylan",
+      text: "look up Ada and react",
+      senderName: "Ada",
       isGroup: false,
       onToolUse: (name) => {
         calls.push(name);
@@ -1466,7 +1467,7 @@ describe("codex / handleMessage — model resolution", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1512,7 +1513,7 @@ describe("codex / handleMessage — model resolution", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1545,7 +1546,7 @@ describe("codex / handleMessage — agent_message edge cases", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "say nothing",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onTextBlock: async (t) => {
         delivered.push(t);
@@ -1581,7 +1582,7 @@ describe("codex / handleMessage — agent_message edge cases", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "say nothing",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onTextBlock: async (t) => {
         delivered.push(t);
@@ -1663,7 +1664,7 @@ describe("codex / handleMessage — non-MCP items", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "do a thing",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       onToolUse: (name, input) => {
         tools.push({ name, input });
@@ -1733,7 +1734,7 @@ describe("codex / handleMessage — non-MCP items", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "go",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1767,7 +1768,7 @@ describe("codex / handleMessage — session name", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "Help me debug the gateway please",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1804,7 +1805,7 @@ describe("codex / handleMessage — session name", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "A totally different second-turn topic about Marrow",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1826,7 +1827,7 @@ describe("codex / handleMessage — terminal failure accounting", () => {
       handleMessage({
         chatId: "test-chat",
         text: "hi",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       }),
     ).rejects.toThrow();
@@ -1879,7 +1880,7 @@ describe("codex / handleMessage — error recovery", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "resume me",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1927,7 +1928,7 @@ describe("codex / handleMessage — error recovery", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "huge message",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -1984,7 +1985,7 @@ describe("codex / handleMessage — error recovery", () => {
       const result = await handleMessage({
         chatId: "test-chat",
         text: "retry me",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       });
 
@@ -2018,7 +2019,7 @@ describe("codex / handleMessage — error recovery", () => {
       handleMessage({
         chatId: "test-chat",
         text: "doomed",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       }),
     ).rejects.toThrow();
@@ -2041,7 +2042,7 @@ describe("codex / handleMessage — error recovery", () => {
       handleMessage({
         chatId: "test-chat",
         text: "auth failure",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       }),
     ).rejects.toThrow();
@@ -2074,7 +2075,7 @@ describe("codex / handleMessage — usage propagation", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "q",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -2093,9 +2094,9 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
   // configured model is known-incompatible, (2) post-hoc retry when
   // the model passed validation but Codex returned a 400 anyway.
 
-  it("pre-emptively swaps gpt-5-codex → gpt-5.5 under ChatGPT auth", async () => {
+  it("pre-emptively swaps gpt-5-codex → the ChatGPT default under ChatGPT auth", async () => {
     // Set up a fake HOME with a chatgpt auth.json so this test is
-    // self-contained and works on CI (not just on Dylan's machine where
+    // self-contained and works on CI (not just on Ada's machine where
     // the real ~/.codex/auth.json happens to be in chatgpt mode).
     const fakeHome = mkdtempSync(join(tmpdir(), "talon-codex-handler-"));
     mkdirSync(join(fakeHome, ".codex"), { recursive: true });
@@ -2114,7 +2115,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
       // No codexApiKey + no OPENAI_API_KEY env → init reads the fake
       // ~/.codex/auth.json we just created (chatgpt mode). With
       // `gpt-5-codex` set in config, the handler should detect the
-      // mismatch before calling `runStreamed` and pass `gpt-5.5` to
+      // mismatch before calling `runStreamed` and pass the ChatGPT default to
       // ThreadOptions.
       initCodexAgent(
         {
@@ -2163,22 +2164,22 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
-    // ThreadOptions saw `gpt-5.5` even though config said `gpt-5-codex`.
-    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5.5");
+    // ThreadOptions saw the ChatGPT default even though config said `gpt-5-codex`.
+    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     // No retry needed — the pre-emptive swap means runStreamed is
     // called exactly once.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(1);
   });
 
-  it("post-hoc retries with gpt-5.5 when Codex returns the ChatGPT 400", async () => {
+  it("post-hoc retries with the ChatGPT default when Codex returns the ChatGPT 400", async () => {
     // Api-key auth so the pre-emptive swap doesn't fire — the handler
     // believes gpt-5-codex is valid, hands it to Codex, and Codex
     // returns the chatgpt-mismatch 400. The handler should classify
-    // the error, reset the session, and retry on gpt-5.5.
+    // the error, reset the session, and retry on the ChatGPT default.
     setupHandler();
 
     const chatgptMismatch = new Error(
@@ -2209,7 +2210,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "force the 400",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
@@ -2217,7 +2218,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     // chatgpt-compatible model.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
     expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5-codex");
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(result.text).toBe("on fallback");
 
     // Chat-settings restored to the original after the retry — the
@@ -2236,7 +2237,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     // generator ends cleanly (no throw). The handler sets
     // `turnFailedError` during iteration, the loop exits normally,
     // the post-loop ChatGPT-mismatch check fires the retry.
-    // Second call: clean recovery on gpt-5.5.
+    // Second call: clean recovery on the ChatGPT default.
     MOCK_EVENTS_QUEUE = [
       // Call 1 — events only, no throw
       [
@@ -2273,18 +2274,18 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "force the event-path failure",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(result.text).toBe("recovered");
   });
 
   it("does not retry when the chatgpt-mismatch fires a second time", async () => {
     // Defensive: if the post-hoc retry ALSO returns the 400 (shouldn't
-    // happen since gpt-5.5 is supported, but guards against a future
+    // happen since the ChatGPT default is supported, but guards against a future
     // breakage), don't loop. `_retried` is true on the recursive call
     // so the chatgpt-mismatch branch short-circuits.
     setupHandler();
@@ -2298,7 +2299,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
       handleMessage({
         chatId: "test-chat",
         text: "double-failure",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       }),
     ).rejects.toThrow();
@@ -2306,7 +2307,7 @@ describe("codex / handleMessage — ChatGPT-auth model fallback", () => {
   });
 });
 
-// ── Silent OAuth exit-1 recovery (the 2026-05-20 Pandario regression) ────
+// ── Silent OAuth exit-1 recovery (the 2026-05-20 silent-exit regression) ────
 
 describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
   // Set up a temp HOME with an OAuth auth.json so this whole describe
@@ -2370,11 +2371,11 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
   });
 
   it("retries silent exit-1 on a cache-discovered model under ChatGPT OAuth", async () => {
-    // Pandario 23:13Z replay: `gpt-5.4-mini` was selected (cache says
+    // 2026-05-20 23:13Z replay: `gpt-5.4-mini` was selected (cache says
     // `supported_in_api: true`), pre-emptive swap didn't fire (not
     // curated as apiKeyOnly, not in learned set yet), Codex CLI
     // silently exited 1, SDK surfaced opaque error. The new code path
-    // should detect the silent-exit pattern, retry on gpt-5.5, AND
+    // should detect the silent-exit pattern, retry on the ChatGPT default, AND
     // record the failing model into the learning store.
     initCodexAgent(
       {
@@ -2412,14 +2413,14 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     const result = await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
     // Two runStreamed calls — the silent-exit + the recovery.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
     expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5.4-mini");
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(result.text).toBe("recovered on 5.5");
 
     // Silent-exit is ambiguous (transient outage vs real incompat),
@@ -2434,7 +2435,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
   it("surfaces an expired login as an auth error without resetting or retrying", async () => {
     // Daemon log 2026-08-24: the refresh token was invalidated, the CLI
     // exited 1 behind the same banner the silent-incompat exit uses, and
-    // the handler reset the thread and retried on gpt-5.5 — which failed
+    // the handler reset the thread and retried on the ChatGPT default — which failed
     // identically. Now the exit is classified as an expired login first.
     initCodexAgent(
       {
@@ -2464,7 +2465,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
       handleMessage({
         chatId: "test-chat",
         text: "hi",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       }),
     ).rejects.toMatchObject({
@@ -2489,7 +2490,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     // already in the learned set — so the pre-empt skips and the
     // model gets passed through to runStreamed, which throws the
     // explicit-mismatch error. The post-hoc retry then both swaps to
-    // gpt-5.5 AND records the model into the persistent store.
+    // the ChatGPT default AND records the model into the persistent store.
     initCodexAgent(
       {
         model: "gpt-future-model",
@@ -2527,13 +2528,13 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
-    // Both runs fired (original + retry on gpt-5.5).
+    // Both runs fired (original + retry on the ChatGPT default).
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(2);
-    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[1].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
 
     // The explicit-mismatch retry path persisted to the store —
     // unambiguous signal justifies the permanent record.
@@ -2583,13 +2584,13 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     await handleMessage({
       chatId: "test-chat",
       text: "hi",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
 
-    // Single runStreamed call (pre-empt fired) and it saw gpt-5.5.
+    // Single runStreamed call (pre-empt fired) and it saw the ChatGPT default.
     expect(MOCK_RUN_STREAMED_CALLS).toHaveLength(1);
-    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe("gpt-5.5");
+    expect(MOCK_THREAD_OPTIONS_SEEN[0].model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
   });
 
   it("does NOT retry a silent exit on api-key auth (different bug class)", async () => {
@@ -2608,7 +2609,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
         handleMessage({
           chatId: "test-chat",
           text: "hi",
-          senderName: "Dylan",
+          senderName: "Ada",
           isGroup: false,
         }),
       ).rejects.toThrow();
@@ -2622,12 +2623,12 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
     }
   });
 
-  it("does NOT retry when the active model is already gpt-5.5", async () => {
-    // Pathological case — if even gpt-5.5 silent-exits, the credential
+  it("does NOT retry when the active model is already the ChatGPT default", async () => {
+    // Pathological case — if even the ChatGPT default silent-exits, the credential
     // is broken; retrying would loop or swap to itself.
     initCodexAgent(
       {
-        model: "gpt-5.5",
+        model: CODEX_CHATGPT_DEFAULT_MODEL,
         workspace: "/tmp",
         systemPrompt: "Test system prompt.",
         frontend: "telegram",
@@ -2645,7 +2646,7 @@ describe("codex / handleMessage — silent OAuth exit-1 recovery", () => {
       handleMessage({
         chatId: "test-chat",
         text: "hi",
-        senderName: "Dylan",
+        senderName: "Ada",
         isGroup: false,
       }),
     ).rejects.toThrow();

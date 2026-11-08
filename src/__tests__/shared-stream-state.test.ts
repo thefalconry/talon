@@ -62,7 +62,7 @@ describe("closeCurrentSegment", () => {
 describe("recordToolUse", () => {
   it("increments toolCalls", () => {
     const s = createStreamState();
-    recordToolUse(s, "get_weather", { city: "Dublin" });
+    recordToolUse(s, "get_weather", { city: "London" });
     expect(s.toolCalls).toBe(1);
   });
 
@@ -108,7 +108,7 @@ describe("recordToolUse", () => {
 
   it("does NOT flip turnTerminated for non-terminator tools", () => {
     const s = createStreamState();
-    recordToolUse(s, "get_weather", { city: "Dublin" });
+    recordToolUse(s, "get_weather", { city: "London" });
     expect(s.turnTerminated).toBe(false);
   });
 
@@ -148,7 +148,7 @@ describe("recordToolUse", () => {
 
   it("flips hadBridgeDelivery for MCP-prefixed send", () => {
     const s = createStreamState();
-    recordToolUse(s, "talon-tools--1001426819337_send", {
+    recordToolUse(s, "talon-tools--1009876543210_send", {
       type: "poll",
       question: "?",
     });

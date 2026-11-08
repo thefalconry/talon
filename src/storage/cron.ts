@@ -12,11 +12,11 @@
 
 import { randomUUID } from "node:crypto";
 import { Cron } from "croner";
-import { log, logError } from "../util/log.js";
+import { log, logError, logWarn } from "../util/log.js";
 import { recordError } from "../util/watchdog.js";
 import { files } from "../util/paths.js";
 import { importLegacyJson } from "./legacy-import.js";
-import { inTransaction } from "./db.js";
+import { dbErrorFields, inTransaction } from "./db.js";
 import * as repo from "./repositories/cron-repo.js";
 import { nextDueMs, type CatchupPolicy } from "../native/scheduler-core.js";
 
@@ -92,15 +92,31 @@ export function loadCronJobs(): void {
     });
 
     let invalidTz = 0;
-    for (const job of repo.listAll()) {
+    let retired = 0;
+    for (let job of repo.listAll()) {
       if (job.timezone && !isValidTimezone(job.timezone)) {
         log(
           "cron",
           `Job "${job.name}" has invalid timezone "${job.timezone}" — clearing`,
         );
-        repo.upsert({ ...job, timezone: undefined });
+        job = { ...job, timezone: undefined };
+        repo.upsert(job);
         invalidTz++;
       }
+      if (isStrandedOneShot(job)) {
+        logWarn(
+          "cron",
+          `One-shot job "${job.name}" [${job.id}] already ran and failed — disabling (last error: ${job.lastError ?? "unknown"})`,
+        );
+        repo.upsert({ ...job, enabled: false, runCount: 1 });
+        retired++;
+      }
+    }
+    if (retired > 0) {
+      logWarn(
+        "cron",
+        `Retired ${retired} one-shot job(s) left enabled by a failed run`,
+      );
     }
 
     const count = repo.count();
@@ -113,6 +129,22 @@ export function loadCronJobs(): void {
   } catch (err) {
     logError("cron", "Failed to load cron jobs", err);
   }
+}
+
+/**
+ * A one-shot whose only run failed before failed runs counted toward the cap:
+ * still enabled with runCount 0, but lastStatus says it ran. Left alone it
+ * fires again at the next matching time — a year later for a date-pinned
+ * expression.
+ */
+function isStrandedOneShot(job: CronJob): boolean {
+  return (
+    job.enabled &&
+    job.maxRuns === 1 &&
+    (job.runCount || 0) === 0 &&
+    job.lastStatus === "error" &&
+    job.lastRunAt !== undefined
+  );
 }
 
 /** Check if an IANA timezone string is valid using the Intl API. */
@@ -182,14 +214,35 @@ export function nextRunAt(job: CronJob, fromMs = Date.now()): number | null {
       });
       const d = cron.nextRun(new Date(floor - 1));
       next = d ? d.getTime() : null;
-    } catch {
+    } catch (err) {
       next = null;
+      warnUnschedulable(job, err);
     }
   }
 
   if (next === null) return null;
   if (job.endAt && next > job.endAt) return null;
   return next;
+}
+
+/**
+ * Schedules already reported as unparseable. Expressions are validated
+ * on create, so one that fails here (edited row, croner upgrade) means a
+ * job that silently never fires again — say so once per job+schedule,
+ * not on every scheduler tick.
+ */
+const reportedUnschedulable = new Set<string>();
+
+function warnUnschedulable(job: CronJob, err: unknown): void {
+  const key = `${job.id}\0${job.schedule}\0${job.timezone ?? ""}`;
+  if (reportedUnschedulable.has(key)) return;
+  reportedUnschedulable.add(key);
+  logWarn(
+    "cron",
+    `Job will not fire: unparseable schedule job=${job.id} chat=${job.chatId} ` +
+      `schedule=${JSON.stringify(job.schedule)} tz=${job.timezone ?? "local"}: ` +
+      `${err instanceof Error ? err.message : String(err)}`,
+  );
 }
 
 /** Compact human description of a job's cadence for list output. */
@@ -278,7 +331,11 @@ export function recordCronRun(
       repo.upsert(job);
     });
   } catch (err) {
-    logError("cron", "Failed to record cron run", err);
+    logError(
+      "cron",
+      `Failed to record cron run job=${id}${dbErrorFields(err)}`,
+      err,
+    );
     recordError(
       `Cron run record failed: ${err instanceof Error ? err.message : err}`,
     );

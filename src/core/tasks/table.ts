@@ -13,6 +13,7 @@
  */
 
 import { bus } from "../bus/index.js";
+import { logWarn } from "../../util/log.js";
 import type { TaskSettledEvent, TaskStartedEvent } from "../bus/events.js";
 import type {
   KillOutcome,
@@ -114,9 +115,14 @@ export class TaskTable {
       task.killRequested = true;
       try {
         task.abort();
-      } catch {
+      } catch (err) {
         // The abort hook contract is "must not throw" — a violation must
-        // not break the kill path for the caller.
+        // not break the kill path for the caller, but the run may now
+        // never settle, so leave a trace of why.
+        logWarn(
+          "tasks",
+          `Abort hook threw task=${id} kind=${task.record.kind} label=${JSON.stringify(task.record.label)}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
     return { ok: true };

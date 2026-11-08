@@ -1,11 +1,9 @@
 /**
- * Native frontend runtime — the state every bridge module shares.
- *
- * `createNativeFrontend` used to hold all of this as closure variables with
- * every handler nested inside it. It is now one explicit object, constructed
- * once, that each module (chat-wire, context, emit, turn, …) takes as its
- * first parameter. The runtime carries state plus two primitives — the
- * message-id minter and the broadcast sink; the modules own the behaviour.
+ * Native frontend runtime — the state every bridge module shares: one
+ * object, constructed once, that each module (chat-wire, context, emit,
+ * turn, …) takes as its first parameter. It carries state plus two
+ * primitives — the message-id minter and the broadcast sink; the modules
+ * own the behaviour.
  */
 
 import type { TalonConfig } from "../../core/config/index.js";
@@ -55,6 +53,12 @@ export type NativeRuntime = {
    * frontends behave).
    */
   readonly media: Map<string, string>;
+  /**
+   * `media` reversed (path → id). Every history page re-registers its
+   * attachments, so without this each fetch — and every client reconnect
+   * re-fetches — grew `media` by one entry per attachment, forever.
+   */
+  readonly mediaIds: Map<string, string>;
   /**
    * Uploads this daemon run has accepted, keyed by their media id. `/send`
    * resolves a client's attachment references through here rather than
@@ -110,6 +114,7 @@ export function createNativeRuntime(
     chats: new NativeChats(),
     mesh: getMeshService(),
     media: new Map(),
+    mediaIds: new Map(),
     uploads: new Map(),
     contextByChat: new Map(),
     liveTurns: new Map(),

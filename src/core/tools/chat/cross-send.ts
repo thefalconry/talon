@@ -25,7 +25,7 @@ Media: give file_path (a workspace file) or url (a public URL, fetched by the pl
 Examples:
   send_via(frontend="whatsapp", target="+353871234567", text="On my way")
   send_via(frontend="whatsapp", target="+353871234567", file_path="media/plot.png", text="here's the chart")
-  send_via(frontend="telegram", target="-1001426819337", text="Build is green")
+  send_via(frontend="telegram", target="-1009876543210", text="Build is green")
 
 Fails with a clear error when the named frontend is not enabled or not connected.`,
     schema: {

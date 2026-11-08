@@ -22,8 +22,8 @@
  * `~/.ssh/authorized_keys` is not a safety net.
  */
 
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, symlink, utimes } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, open, symlink, utimes } from "node:fs/promises";
 import { once } from "node:events";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { Writable } from "node:stream";
@@ -262,6 +262,9 @@ export class TarWriter {
    * Stream a file from disk. `size` is the length recorded in the header:
    * a file that changes under us is truncated or zero-padded to it, because
    * a tar whose payload length disagrees with its header is unreadable.
+   * The source is opened before the header goes out, so a file that
+   * vanished or became unreadable since it was listed throws with nothing
+   * written — the archive is still whole and the caller may carry on.
    */
   async addFile(
     path: string,
@@ -270,9 +273,16 @@ export class TarWriter {
     mtime: number,
     size: number,
   ): Promise<void> {
-    await this.writeHeaders({ path, type: "file", mode, mtime, size });
+    const handle = await open(source, "r");
+    try {
+      await this.writeHeaders({ path, type: "file", mode, mtime, size });
+    } catch (err) {
+      await handle.close();
+      throw err;
+    }
     let written = 0;
-    const stream = createReadStream(source);
+    // Owns the handle from here: closed when the stream ends or is destroyed.
+    const stream = handle.createReadStream();
     for await (const chunk of stream) {
       const buf = chunk as Buffer;
       const room = size - written;

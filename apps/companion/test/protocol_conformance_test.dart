@@ -1,9 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:talon_companion/src/models/connection.dart';
+import 'package:talon_companion/src/models/credentials.dart';
+import 'package:talon_companion/src/services/bridge_client.dart';
 import 'package:talon_companion/src/services/device_exec.dart';
 import 'package:talon_companion/src/services/mesh_service.dart';
 import 'package:talon_companion/src/services/prefs.dart';
@@ -23,6 +26,10 @@ void main() {
   ) as Map<String, dynamic>;
   final meshFixture = jsonDecode(
     File('../../protocol/fixtures/mesh_v1.json').readAsStringSync(),
+  ) as Map<String, dynamic>;
+
+  final authFixture = jsonDecode(
+    File('../../protocol/fixtures/auth_v1.json').readAsStringSync(),
   ) as Map<String, dynamic>;
 
   List<Map<String, dynamic>> mapList(dynamic v) => (v as List)
@@ -149,9 +156,9 @@ void main() {
       await _waitFor(() =>
           state.messagesFor('d_abc123').last.text.contains('SDK error'));
 
-      // locate + device_command are mesh events — the chat layer must
-      // tolerate them silently; the trailing chat_deleted proves the stream
-      // survived them.
+      // locate + device_command are mesh events and bye is the daemon's
+      // restart notice — the chat layer must tolerate them silently; the
+      // trailing chat_deleted proves the stream survived them.
       await playThrough('chat_deleted');
       await _waitFor(() => !state.chats.any((c) => c.id == 'd_new777'));
 
@@ -188,10 +195,15 @@ void main() {
           stringList(meshFixture['companionDeviceControlCapabilities']);
 
       await prefs.setMeshDeviceControl(true);
-      expect(MeshService.capabilitiesFor(prefs), [...core, ...control]);
+      expect(
+        MeshService.capabilitiesFor(prefs, sandboxed: false),
+        [...core, ...control],
+      );
+      // The Flatpak build is client-only: core surface, whatever the switch.
+      expect(MeshService.capabilitiesFor(prefs, sandboxed: true), core);
 
       await prefs.setMeshDeviceControl(false);
-      expect(MeshService.capabilitiesFor(prefs), core);
+      expect(MeshService.capabilitiesFor(prefs, sandboxed: false), core);
     });
 
     test('DeviceExec answers the canonical commands with contract keys',
@@ -234,6 +246,159 @@ void main() {
       }
       expect(covered, greaterThanOrEqualTo(8),
           reason: 'fixture should exercise the full exec/fs surface');
+    });
+
+    test('streamed transfers (transfer: true) answer with contract keys',
+        () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await Prefs.load();
+      final config = ConnectionConfig(
+        host: bridge.host,
+        port: bridge.port,
+        manageLocalDaemon: false,
+        localAutoDiscover: false,
+      );
+      await prefs.setConnection(config);
+      await prefs.setMeshDeviceControl(true);
+      final client = BridgeClient(config);
+      addTearDown(client.dispose);
+      await client.connect();
+      final service = MeshService(
+        prefs,
+        client,
+        batteryProvider: () async => const MeshBattery(),
+        nameProvider: () async => 'rack-01',
+        versionProvider: () async => '1.0.0+1',
+        foregroundStarter: () async {},
+      );
+      addTearDown(service.stop);
+      await service.start();
+      await _waitFor(() => bridge.devices.length == 1);
+      final id = bridge.devices.single['id'] as String;
+
+      final body = utf8.encode(meshFixture['transferBody'] as String);
+      final bodySha = sha256.convert(body).toString();
+      final sandbox = await Directory.systemTemp.createTemp('talon-conf-');
+      addTearDown(() => sandbox.delete(recursive: true));
+      for (final file in (meshFixture['sandboxFiles'] as Map)
+          .cast<String, String>()
+          .entries) {
+        await File('${sandbox.path}/${file.key}').writeAsString(file.value);
+      }
+
+      var covered = 0;
+      for (final entry in mapList(meshFixture['commands'])) {
+        if (entry['transfer'] != true) continue;
+        covered++;
+        final command = (entry['command'] as Map).cast<String, dynamic>();
+        final params = <String, dynamic>{
+          for (final p
+              in (command['params'] as Map).cast<String, dynamic>().entries)
+            p.key: p.value is String
+                ? (p.value as String).replaceAll('{{TMP}}', sandbox.path)
+                : p.value,
+        };
+        final token = params['token'] as String;
+        bridge.uploadTokens.add(token);
+        bridge.downloadFiles[token] = body;
+
+        final before = bridge.commandResults.length;
+        await bridge.emit({
+          'kind': 'device_command',
+          ...command,
+          'deviceId': id,
+          'params': params,
+        });
+        await _waitFor(() => bridge.commandResults.length == before + 1);
+        final result = bridge.commandResults.last;
+        final name = command['name'];
+        expect(result['ok'], entry['expectOk'], reason: '$name: $result');
+        final data = (result['data'] as Map).cast<String, dynamic>();
+        for (final key in stringList(entry['dataKeys'])) {
+          expect(data.containsKey(key), isTrue,
+              reason: '$name result data is missing contract key "$key"');
+        }
+        if (name == 'download_file') {
+          expect(params['sha256'], bodySha);
+          expect(data['sha256'], bodySha);
+        } else {
+          final sent = bridge.uploadedFiles[token]!;
+          expect(data['sha256'], sha256.convert(sent).toString());
+        }
+      }
+      expect(covered, 2, reason: 'upload_file and download_file samples');
+    });
+  });
+
+  group('per-device credentials (auth_v1.json)', () {
+    Map<String, dynamic> section(String key) =>
+        (authFixture[key] as Map).cast<String, dynamic>();
+    Map<String, dynamic> sample(String key, String name) =>
+        (section(key)[name] as Map).cast<String, dynamic>();
+    final credentials = stringList(authFixture['sampleCredentials']);
+    final sharedTokens = stringList(authFixture['sampleSharedTokens']);
+
+    test('tells a per-device credential from the shared token', () {
+      for (final t in credentials) {
+        expect(isDeviceCredential(t), isTrue, reason: t);
+      }
+      for (final t in sharedTokens) {
+        expect(isDeviceCredential(t), isFalse, reason: t);
+      }
+    });
+
+    test('the upgrade request BridgeClient sends is the fixture', () {
+      final want = jsonDecode(
+        jsonEncode(sample('upgradeRequests', 'companion'))
+            .replaceAll('{{DEVICE_ID}}', 'dev_pixel8'),
+      );
+      final got = jsonDecode(
+        jsonEncode(BridgeClient.upgradeRequestBody('dev_pixel8')),
+      );
+      expect(got, want);
+    });
+
+    test('every fixture upgrade reply parses to its credential', () {
+      for (final name in ['node', 'companion']) {
+        final reply = sample('upgradeReplies', name);
+        final grant = CredentialGrant.fromJson(reply);
+        expect(grant.token, reply['token']);
+        expect(grant.credentialId, reply['credentialId']);
+        expect(grant.deviceId, reply['deviceId']);
+        expect(grant.scopes, stringList(reply['scopes']));
+      }
+      for (final error in mapList(authFixture['upgradeErrors'])) {
+        expect(
+          () => CredentialGrant.fromJson(
+            (error['body'] as Map).cast<String, dynamic>(),
+          ),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test('whoami: act on upgrade/rotate only, ignore anything else', () {
+      final shared = sharedTokens.first;
+      final own = credentials.first;
+      final byName = {
+        for (final name in ['shared', 'device', 'rotate', 'open'])
+          name: CredentialStatus.fromJson(sample('whoami', name)),
+      };
+      expect(byName['shared']!.wantsNewCredential(shared), isTrue);
+      expect(byName['shared']!.wantsNewCredential(own), isFalse);
+      expect(byName['device']!.wantsNewCredential(own), isFalse);
+      expect(byName['device']!.deviceId, 'dev_node01');
+      expect(byName['rotate']!.wantsNewCredential(own), isTrue);
+      expect(byName['open']!.wantsNewCredential(shared), isFalse);
+      final future = CredentialStatus.fromJson({
+        ...sample('whoami', 'device'),
+        'action': (section('registerReplies')['forwardCompat']
+            as Map)['credential']['action'],
+      });
+      expect(future.wantsNewCredential(own), isFalse);
+      expect(future.wantsNewCredential(shared), isFalse);
     });
   });
 }

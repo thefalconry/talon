@@ -6,6 +6,7 @@
  *
  *   backups/<id>/manifest.json          what this snapshot is
  *   backups/<id>/state.tar.zst          identity + state + database
+ *   backups/<id>/logins.tar.zst         WhatsApp auth + userbot session
  *   backups/<id>/palace-<hash12>.tar.zst  the memory palace, when present
  *
  * The manifest on disk is authoritative. SQLite is a cache so `/backup`
@@ -16,15 +17,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import {
-  link,
-  copyFile,
-  mkdir,
-  readdir,
-  readFile,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { link, copyFile, mkdir, readdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { dirs } from "../../util/paths.js";
@@ -39,6 +32,12 @@ import {
   recordBackup,
   updateBackupManifest,
 } from "../../storage/backup/index.js";
+import { pathExists } from "./sources/sessions.js";
+import {
+  describeRetention,
+  planRetention,
+  type RetentionPolicy,
+} from "./retention/policy.js";
 import type {
   Manifest,
   RemoteState,
@@ -50,6 +49,8 @@ import type {
 const SNAPSHOT_ID_RE = /^\d{8}T\d{6}Z-[0-9a-f]{6}$/;
 const MANIFEST_NAME = "manifest.json";
 export const STATE_PART = "state.tar.zst";
+/** Where the database copy lands inside the state part. */
+export const DB_MEMBER = "db/talon.db";
 
 function backupsRoot(home: string = dirs.root): string {
   return join(home, "backups");
@@ -100,10 +101,11 @@ export async function writeManifest(
   home: string = dirs.root,
 ): Promise<void> {
   const dir = snapshotDir(manifest.id, home);
-  await mkdir(dir, { recursive: true });
+  await mkdir(dir, { recursive: true, mode: 0o700 });
   await writeFileAtomic(
     join(dir, MANIFEST_NAME),
     JSON.stringify(manifest, null, 2) + "\n",
+    { mode: 0o600 },
   );
 }
 
@@ -210,20 +212,13 @@ export async function listSnapshots(
       pinned: record.pinned,
       createdAt: record.createdAt,
       sizeBytes: record.sizeBytes,
-      local: await exists(join(snapshotDir(record.id, home), MANIFEST_NAME)),
+      local: await pathExists(
+        join(snapshotDir(record.id, home), MANIFEST_NAME),
+      ),
       remote,
     });
   }
   return summaries;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /** Pin or unpin a snapshot, on disk and in the index. Returns false if unknown. */
@@ -246,26 +241,6 @@ export async function setSnapshotPinned(
 
 // ── Retention ───────────────────────────────────────────────────────────────
 
-/**
- * Which snapshots to drop so that at most `keep` unpinned ones remain.
- * Pure, and the order is the one the caller sees: newest first, pinned
- * snapshots kept unconditionally and not counted against the budget —
- * pinning is the user saying "this one outlives the policy".
- */
-export function selectPrunable<
-  T extends { id: string; createdAt: number; pinned: boolean },
->(snapshots: readonly T[], keep: number): T[] {
-  const ordered = [...snapshots].sort((a, b) => b.createdAt - a.createdAt);
-  const doomed: T[] = [];
-  let kept = 0;
-  for (const snapshot of ordered) {
-    if (snapshot.pinned) continue;
-    kept += 1;
-    if (kept > keep) doomed.push(snapshot);
-  }
-  return doomed;
-}
-
 /** Delete a snapshot directory and its index rows. */
 async function removeSnapshot(
   id: string,
@@ -276,14 +251,24 @@ async function removeSnapshot(
   deleteBackup(id);
 }
 
-/** Apply the local retention policy. Returns the ids removed. */
+/**
+ * Apply the local retention policy (see retention/policy.ts). Returns the ids
+ * removed. A directory whose manifest cannot be read never reaches the
+ * listing, so it is never pruned.
+ */
 export async function pruneLocal(
-  keep: number,
+  policy: RetentionPolicy,
   home: string = dirs.root,
 ): Promise<string[]> {
-  const doomed = selectPrunable(await listLocalManifests(home), keep);
+  const plan = planRetention(await listLocalManifests(home), policy);
+  for (const manifest of plan.skipped) {
+    logWarn(
+      "backup",
+      `Not pruning ${manifest.id}: its manifest has no usable createdAt`,
+    );
+  }
   const removed: string[] = [];
-  for (const manifest of doomed) {
+  for (const manifest of plan.prune) {
     try {
       await removeSnapshot(manifest.id, home);
       removed.push(manifest.id);
@@ -294,7 +279,7 @@ export async function pruneLocal(
   if (removed.length > 0) {
     log(
       "backup",
-      `Pruned ${removed.length} local snapshot(s) (keepLocal=${keep})`,
+      `Pruned ${removed.length} local snapshot(s) (${describeRetention(policy)})`,
     );
   }
   return removed;

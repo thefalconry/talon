@@ -6,7 +6,7 @@
  * query execution via runJobOneShot.
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../storage/cron.js";
 import { deriveNumericChatId } from "../core/frontend-runtime/chat-id.js";
 
@@ -85,10 +85,18 @@ vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend: mocks.chooseBackend,
   resolveRoutedModel: mocks.resolveRoutedModel,
   recordBackendRunUsage: vi.fn(),
+  recordBackendRunFailure: vi.fn(),
+  recordBackendRunSuccess: vi.fn(),
 }));
 
-const { executeJob, initCron, runJobNow, runStartupCatchup } =
-  await import("../core/background/cron/scheduler.js");
+const {
+  executeJob,
+  initCron,
+  runJobNow,
+  runStartupCatchup,
+  startCronTimer,
+  stopCronTimer,
+} = await import("../core/background/cron/scheduler.js");
 const { addCronJob, getCronJob, getAllCronJobs, deleteCronJob } =
   await import("../storage/cron.js");
 const { resetJobHealth } =
@@ -167,6 +175,20 @@ describe("executeJob — isolated query runtime", () => {
       timeoutMs: 10 * 60_000,
     });
     expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("honours a per-job timeout instead of the 10-minute default", async () => {
+    await executeJob(
+      makeJob({
+        type: "query",
+        content: "wait for CI",
+        timeoutMs: 45 * 60_000,
+      }),
+    );
+
+    expect(mocks.runJobOneShot.mock.calls[0]?.[0]).toMatchObject({
+      timeoutMs: 45 * 60_000,
+    });
   });
 
   it("hands the role backend to jobs that inherited the chat's backend", async () => {
@@ -432,13 +454,17 @@ describe("runJobNow — failure bookkeeping", () => {
     expect(typeof after.lastDurationMs).toBe("number");
   });
 
-  it("a failure does not bump runCount", async () => {
+  it("a failure still counts as a run (bumps runCount and lastRunAt)", async () => {
     mocks.runJobOneShot.mockRejectedValueOnce(new Error("nope"));
     const job = seed({ type: "query", content: "x", runCount: 5 });
 
+    const before = Date.now();
     await runJobNow(job.id);
 
-    expect(getCronJob(job.id)!.runCount).toBe(5);
+    const after = getCronJob(job.id)!;
+    expect(after.runCount).toBe(6);
+    expect(after.lastRunAt).toBeGreaterThanOrEqual(before);
+    expect(after.enabled).toBe(true); // uncapped: a failure never retires it
   });
 
   it("a message job whose sendMessage throws is reported as an error", async () => {
@@ -516,15 +542,51 @@ describe("runJobNow — maxRuns retirement", () => {
     expect(getCronJob(job.id)!.enabled).toBe(false);
   });
 
-  it("a failed run does not retire a one-shot job", async () => {
+  it("a failed run retires a one-shot job instead of leaving it to re-fire next year", async () => {
+    const { resetAlertsForTest, activeAlerts } =
+      await import("../core/frontend-runtime/alerts.js");
+    const sent: string[] = [];
+    resetAlertsForTest(async (text) => {
+      sent.push(text);
+    });
     mocks.runJobOneShot.mockRejectedValueOnce(new Error("fail"));
-    const job = seed({ type: "query", content: "x", maxRuns: 1, runCount: 0 });
+    const job = seed({
+      type: "query",
+      content: "x",
+      name: "Merge PR",
+      // Date-pinned: the next match after a failure is a year away.
+      schedule: "30 14 1 10 *",
+      maxRuns: 1,
+      runCount: 0,
+    });
+
+    const res = await runJobNow(job.id);
+
+    expect(res.ok).toBe(false);
+    const after = getCronJob(job.id)!;
+    expect(after.runCount).toBe(1);
+    expect(after.enabled).toBe(false);
+    expect(after.lastStatus).toBe("error");
+    expect(after.lastError).toBe("fail");
+    // Nothing retries a retired job, so the operator hears about it.
+    expect(activeAlerts().map((a) => a.key)).toContain(`cron.job.${job.id}`);
+    expect(sent.at(-1)).toMatch(
+      /Cron job "Merge PR" failed on its final run and was disabled: fail/,
+    );
+  });
+
+  it("a failed run consumes one slot of a larger cap but keeps the job enabled", async () => {
+    mocks.runJobOneShot.mockRejectedValueOnce(new Error("flaky"));
+    const job = seed({ type: "query", content: "x", maxRuns: 3, runCount: 0 });
 
     await runJobNow(job.id);
+    expect(getCronJob(job.id)!.runCount).toBe(1);
+    expect(getCronJob(job.id)!.enabled).toBe(true);
 
-    const after = getCronJob(job.id)!;
-    expect(after.runCount).toBe(0);
-    expect(after.enabled).toBe(true);
+    await runJobNow(job.id); // succeeds
+    await runJobNow(job.id); // succeeds — third run hits the cap
+    expect(getCronJob(job.id)!.runCount).toBe(3);
+    expect(getCronJob(job.id)!.enabled).toBe(false);
   });
 });
 
@@ -844,5 +906,82 @@ describe("runStartupCatchup — fleet behavior", () => {
     await runStartupCatchup();
 
     expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+// ── live tick — overlapping ticks ────────────────────────────────────────────
+
+describe("cron tick — a slow job overlapping the next tick", () => {
+  afterEach(() => {
+    stopCronTimer();
+    vi.useRealTimers();
+  });
+
+  it("does not re-fire a job the overlapping tick already ran", async () => {
+    vi.useFakeTimers();
+    const MINUTE = 60_000;
+    // Tick A reaches `slow` first and blocks on its send; tick B runs 60s
+    // later and runs `fast`. When `slow` finally returns, tick A walks on
+    // to `fast` — which must not run a second time off tick A's stale
+    // listing (lastRunAt from before tick B ran it).
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    mocks.sendMessage.mockImplementation(async (_chatId, text) => {
+      if (text === "slow") await gate;
+    });
+    const due = {
+      schedule: undefined,
+      everyMs: MINUTE,
+      lastRunAt: Date.now() - 2 * MINUTE,
+      type: "message" as const,
+    };
+    seed({ ...due, content: "slow", createdAt: Date.now() - 2 });
+    const fast = seed({ ...due, content: "fast", createdAt: Date.now() - 1 });
+
+    startCronTimer();
+    await vi.advanceTimersByTimeAsync(MINUTE); // tick A: blocks on "slow"
+    await vi.advanceTimersByTimeAsync(MINUTE); // tick B: runs "fast"
+    expect(getCronJob(fast.id)!.runCount).toBe(1);
+
+    release();
+    await vi.advanceTimersByTimeAsync(0); // tick A resumes
+
+    const fastSends = mocks.sendMessage.mock.calls.filter(
+      (c) => c[1] === "fast",
+    );
+    expect(fastSends).toHaveLength(1);
+    expect(getCronJob(fast.id)!.runCount).toBe(1);
+  });
+});
+
+// ── operator alert ───────────────────────────────────────────────────────────
+
+describe("cron.job alert", () => {
+  it("raises when the breaker opens on the third failure and resolves on the next success", async () => {
+    const { resetAlertsForTest, activeAlerts } =
+      await import("../core/frontend-runtime/alerts.js");
+    const sent: string[] = [];
+    resetAlertsForTest(async (text) => {
+      sent.push(text);
+    });
+    const job = seed({ type: "query", content: "x", name: "Morning digest" });
+    const key = `cron.job.${job.id}`;
+
+    mocks.runJobOneShot.mockRejectedValue(new Error("model unavailable"));
+    await runJobNow(job.id);
+    await runJobNow(job.id);
+    expect(activeAlerts().map((a) => a.key)).not.toContain(key);
+    await runJobNow(job.id);
+    expect(activeAlerts().map((a) => a.key)).toContain(key);
+    expect(sent[0]).toMatch(
+      /Cron job "Morning digest" failed 3 runs in a row: model unavailable/,
+    );
+
+    mocks.runJobOneShot.mockResolvedValue({ status: "ran" });
+    await runJobNow(job.id);
+    expect(activeAlerts().map((a) => a.key)).not.toContain(key);
+    expect(sent.at(-1)).toMatch(/Cron job "Morning digest" is running again/);
   });
 });

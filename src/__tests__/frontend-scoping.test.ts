@@ -24,7 +24,7 @@ describe("frontendForChatId", () => {
     expect(frontendForChatId("teams_chat_19:abc@thread.v2")).toBe("teams");
     expect(frontendForChatId("discord_guild_123_456")).toBe("discord");
     expect(frontendForChatId("discord_dm_789")).toBe("discord");
-    expect(frontendForChatId("-1001426819337")).toBe("telegram");
+    expect(frontendForChatId("-1009876543210")).toBe("telegram");
     expect(frontendForChatId("123456789")).toBe("telegram");
   });
 

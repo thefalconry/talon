@@ -3,6 +3,7 @@ import 'package:flutter_animate/flutter_animate.dart';
 
 import '../state/app_state.dart';
 import '../theme.dart';
+import 'effects.dart';
 
 /// Compact "Talon running / connecting / offline" indicator with a live dot.
 class StatusPill extends StatelessWidget {
@@ -105,7 +106,8 @@ class _Dot extends StatelessWidget {
           )
               .animate(onPlay: (c) => c.repeat())
               .fadeOut(duration: 1200.ms, curve: Curves.easeOut)
-              .scaleXY(end: 2.6, curve: Curves.easeOut),
+              .scaleXY(end: 2.6, curve: Curves.easeOut)
+              .wrapAmbient(),
           dot,
         ],
       ),

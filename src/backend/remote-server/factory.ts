@@ -68,6 +68,9 @@ export function createRemoteBackendFactory(
   return {
     id,
     label,
+    // The server's built-in shell/file tools can't be withheld per turn,
+    // so guest-scoped turns (non-operator senders) are refused.
+    guestToolScope: "refused",
     // The SDK ships as an npm dep but only talks to a server it spawns from
     // the CLI of the same name (`cross-spawn` → PATH lookup). A present
     // package with an absent binary fails at the first turn with a bare

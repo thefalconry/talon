@@ -172,6 +172,28 @@ export type OneShotAgentParams = {
    * and logs a throwing callback so a consumer bug can never fail the run.
    */
   onAssistantText?: (text: string) => void;
+  /**
+   * Resume this backend conversation instead of starting a fresh one — the
+   * handle an earlier run reported through `onSessionId`. Honoured only by
+   * backends whose `BackgroundRunner.supportsResume` is true (Claude SDK:
+   * session id; Codex: thread id); the others ignore it and start fresh,
+   * which is why the sub-agent runner checks that flag before relying on it.
+   */
+  resumeSessionId?: string;
+  /**
+   * Called once the backend knows the run's conversation handle (Claude SDK
+   * session id, Codex thread id) — a sub-agent persists it so a daemon
+   * restart can resume the conversation. Best-effort and synchronous, like
+   * `onAssistantText`: a throwing callback must never fail the run.
+   */
+  onSessionId?: (sessionId: string) => void;
+  /**
+   * Extra environment for the run's own subprocesses (shells, tools),
+   * layered over the daemon's. A sub-agent passes its private scratch dir
+   * as `TMPDIR` here. Honoured by the Claude SDK backend; backends whose
+   * subprocess environment is fixed per process ignore it.
+   */
+  env?: Readonly<Record<string, string>>;
 };
 
 /** How much cache telemetry a backend can surface in /status. */
@@ -227,6 +249,19 @@ export type ExecuteParams = {
   senderName: string;
   /** Sender's platform handle without `@` (Telegram username, Discord username). */
   senderHandle?: string;
+  /**
+   * Every key the ONE person behind this turn is known by, in operator-id
+   * form (Telegram user id, `wa_dm_<number>`, `discord:<id>`,
+   * `teams:<id>`, or `LOCAL_OPERATOR_SENDER`). Decides the turn's tool
+   * scope (core/mcp-hub/guest-scope.ts). Omit when the sender is unknown
+   * or the turn batches several senders — the turn is then guest-scoped.
+   */
+  senderKeys?: readonly string[];
+  /**
+   * Frontend-attested: the operator is a member of this group chat. With
+   * `guestDmScope.operatorGroups` on, such a turn keeps the full surface.
+   */
+  operatorInChat?: boolean;
   isGroup: boolean;
   /** Provider message ID. Numeric for Telegram, string snowflake for Discord. */
   messageId?: number | string;

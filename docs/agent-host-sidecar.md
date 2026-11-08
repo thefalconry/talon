@@ -122,7 +122,7 @@ host and forwarded as `metric` messages, so the rollups are unchanged.
    NDJSON loop; `core/daemon/sidecar.ts`; the process-backed
    `AgentHostClient`. Flag `TALON_AGENT_HOST=process` selects it;
    default stays in-process.
-3. **Soak.** Two weeks on Dylan's daemon with the flag on: `agent_host.respawns`,
+3. **Soak.** Two weeks on Ada's daemon with the flag on: `agent_host.respawns`,
    `agent_host.rss_mb`, `turn.first_token_ms` delta, `cache.first_request.hit`
    unchanged. Then the default flips.
 4. **Package.** `bun build --compile` the host on its own; nfpm/Docker

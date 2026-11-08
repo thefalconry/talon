@@ -15,6 +15,10 @@ import type {
 import type { Gateway } from "../../../core/engine/gateway.js";
 import type { NativeChats, ChatEntry } from "../chats/chats.js";
 import type { BridgeEvent, ClientButton } from "../protocol.js";
+import {
+  deriveNumericChatId,
+  isNativeChatId,
+} from "../../../core/frontend-runtime/chat-id.js";
 
 export type NativeActionDeps = {
   chats: NativeChats;
@@ -69,6 +73,28 @@ const NATIVE_ACTIONS = new Set([
   "send_chat_action",
 ]);
 
+/**
+ * A plain send addressed to a native chat this daemon doesn't list — the
+ * chat that asked for a staged restore, say, when the restored database
+ * predates it. The sender names the chat by key in `body.target`; the
+ * chat is adopted (as a deep link would) so the message lands in its
+ * history and the app shows it. Only when the key really is the chat the
+ * numeric id was derived from, and only for send_message: edits,
+ * reactions and deletes address messages, which an unknown chat has none of.
+ */
+function adoptAddressedChat(
+  chats: NativeChats,
+  action: string,
+  body: Record<string, unknown>,
+  chatId: number,
+): ChatEntry | undefined {
+  if (action !== "send_message") return undefined;
+  const key = typeof body.target === "string" ? body.target : "";
+  if (!key || !isNativeChatId(key) || deriveNumericChatId(key) !== chatId)
+    return undefined;
+  return chats.ensure(key);
+}
+
 export function createNativeActionHandler(
   deps: NativeActionDeps,
 ): FrontendActionHandler {
@@ -77,7 +103,9 @@ export function createNativeActionHandler(
   return async (body, chatId): Promise<ActionResult | null> => {
     const action = typeof body.action === "string" ? body.action : "";
     if (!NATIVE_ACTIONS.has(action)) return null;
-    const entry = chats.byNumeric(chatId);
+    const entry =
+      chats.byNumeric(chatId) ??
+      adoptAddressedChat(chats, action, body, chatId);
     if (!entry) return { ok: false, error: "No active native chat" };
 
     switch (action) {

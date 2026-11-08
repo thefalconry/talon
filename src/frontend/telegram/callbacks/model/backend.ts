@@ -7,7 +7,7 @@
 import type { Context } from "grammy";
 import { setChatBackend } from "../../../../storage/chat-settings.js";
 import { resetSession } from "../../../../storage/sessions.js";
-import { clearHistory } from "../../../../storage/history.js";
+import { sharesSessionStore } from "../../../../core/agent-runtime/backend-registry.js";
 import {
   getBackendIdForChat,
   listAvailableBackends,
@@ -83,6 +83,7 @@ export async function handleBackendSelect(
   // chat already points at the new one and the old in-process state
   // would be unreachable.
   const previousBackend = resolveBackendForChat(cid, gateway);
+  const previousId = getBackendIdForChat(cid);
   const result = await rebindChat(cid, action.backendId, config);
   if (!result.ok) {
     await answerCallbackQuerySafe(ctx, {
@@ -96,9 +97,12 @@ export async function handleBackendSelect(
   // NOT clear `modelByBackend` — keeping each backend's prior
   // pick means switching back-and-forth restores each side's
   // last choice automatically (Codex chat keeps gpt-5.5,
-  // OpenRouter chat keeps owl-alpha, etc).
-  resetSession(cid);
-  clearHistory(cid);
+  // OpenRouter chat keeps owl-alpha, etc). Chat history is never
+  // touched: a switch changes who answers, not what was said. Two logins
+  // of one provider that share a transcript store (Claude accounts) keep
+  // the session.
+  if (!sharesSessionStore(previousId, action.backendId))
+    resetSession(cid, "backend-switch");
   resetPulseCheckpoint(cid);
   handOffBackendSession(cid, previousBackend, gateway);
   const label =
@@ -132,10 +136,12 @@ export async function handleBackendDefault(
   // preserved (modelByBackend stays intact) so reverting and
   // switching back later still restores prior choices.
   const previousBackend = resolveBackendForChat(cid, gateway);
+  const previousId = getBackendIdForChat(cid);
   await releaseChat(cid);
   setChatBackend(cid, undefined);
-  resetSession(cid);
-  clearHistory(cid);
+  // History stays — see handleBackendSelect.
+  if (!sharesSessionStore(previousId, getBackendIdForChat(cid)))
+    resetSession(cid, "backend-switch");
   resetPulseCheckpoint(cid);
   handOffBackendSession(cid, previousBackend, gateway);
   // Resolve the now-default backend's model for the toast.

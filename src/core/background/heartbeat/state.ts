@@ -100,7 +100,10 @@ export const hb: {
   intervalMinutesRef: 60,
   config: null,
   logFileSequence: 0,
-  failureBackoff: new FailureBackoff(),
+  failureBackoff: new FailureBackoff({
+    key: "heartbeat.failing",
+    label: "The heartbeat",
+  }),
 };
 
 // ── State-file I/O ───────────────────────────────────────────────────────────
@@ -160,7 +163,11 @@ export function readHeartbeatState(): HeartbeatState | null {
   return normalizeHeartbeatState(kvGet(HEARTBEAT_STATE_KEY));
 }
 
-export function writeHeartbeatState(state: HeartbeatState): void {
+/**
+ * Persist the state. Returns whether last_run actually landed: kvSet logs
+ * and swallows a failed write (full disk), so the store is read back.
+ */
+export function writeHeartbeatState(state: HeartbeatState): boolean {
   // Re-derive last_run_at from last_run so the persisted ISO stamp can
   // never drift from the millisecond field; omit it on the sentinel
   // last_run === 0 (never-run) to match the pre-SQLite file format.
@@ -172,4 +179,5 @@ export function writeHeartbeatState(state: HeartbeatState): void {
       : {}),
   };
   kvSet(HEARTBEAT_STATE_KEY, enriched);
+  return readHeartbeatState()?.last_run === state.last_run;
 }

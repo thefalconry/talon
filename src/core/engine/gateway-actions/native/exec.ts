@@ -61,23 +61,20 @@ async function bash(
     }
   }
 
-  const result = await (async () => {
-    if (background === true) {
-      if (active) {
-        return {
-          ok: false,
-          text:
-            "background:true runs on the daemon host only. On a teleported device, " +
-            "background it in-shell instead: `cmd > /tmp/out.log 2>&1 &`, then poll " +
-            "the log with read.",
-        };
-      }
-      return bashBackground(cmd, dir);
+  if (background === true) {
+    if (active) {
+      return {
+        ok: false,
+        text:
+          "background:true runs on the daemon host only. On a teleported device, " +
+          "background it in-shell instead: `cmd > /tmp/out.log 2>&1 &`, then poll " +
+          "the log with read.",
+      };
     }
-    if (active) return bashTeleported(chatId, active.deviceId, cmd, timeoutMs);
-    return bashLocal(cmd, dir, timeoutMs);
-  })();
-  return result;
+    return bashBackground(cmd, dir);
+  }
+  if (active) return bashTeleported(chatId, active.deviceId, cmd, timeoutMs);
+  return bashLocal(cmd, dir, timeoutMs);
 }
 
 function bashLocal(

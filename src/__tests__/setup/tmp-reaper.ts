@@ -1,59 +1,43 @@
 /**
- * Global test teardown — reap leaked `mkdtemp` scratch directories.
+ * Global test setup — give the run a private temp root and delete it after.
  *
  * Most suites tear down their own temp dirs, but a dozen or so create one in
  * `beforeAll` and never remove it (native-tools, native-frontend, mesh-service,
- * node-binaries, native-tls, harden, protocol-conformance …).
- * Each full `vitest run` therefore leaves a fresh pile behind in `os.tmpdir()`,
- * and `native-tools.test.ts` alone writes ~33 MB of fixtures (`big.log`,
- * `blob.bin`) per run. On a dev box that runs the suite repeatedly this is a
- * real disk leak — it filled several GB of root in a single afternoon.
+ * node-binaries, native-tls, harden, protocol-conformance …), and
+ * `native-tools.test.ts` alone writes ~33 MB of fixtures per run. On a dev box
+ * that runs the suite repeatedly this filled several GB of root in an
+ * afternoon.
  *
- * Rather than patch (and keep re-patching) every suite, reap centrally:
- *   - snapshot `os.tmpdir()` before the run,
- *   - after the run delete directories that appeared *during* it and whose
- *     name matches a prefix the test suite owns.
- *
- * Both conditions must hold, so a temp dir belonging to a concurrently running
- * daemon — or anything predating the run — is never touched. Set
- * `TALON_TEST_KEEP_TMP=1` to disable reaping when debugging a suite's fixtures.
+ * Rather than patch every suite, the run gets its own `talon-run-*` directory
+ * and TMPDIR/TMP/TEMP point at it before any worker starts, so every
+ * `os.tmpdir()` / `mkdtemp` lands inside it; teardown removes the whole tree.
+ * Scoping by directory (not by "appeared during the run") keeps concurrent
+ * runs — two worktrees, or CI shards on one box — from reaping each other's
+ * live fixtures. Set `TALON_TEST_KEEP_TMP=1` to keep it when debugging a
+ * suite's fixtures; the path is printed.
  */
 
-import { readdir, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-/** Prefixes owned by this repo's suites (see `mkdtemp` calls in src/__tests__). */
-const OWNED = /^(talon|blake3-napi-test|blake3-wasm|trigger-log-err)-/;
-
-async function listTmp(): Promise<Set<string>> {
-  try {
-    return new Set(await readdir(tmpdir()));
-  } catch {
-    return new Set();
-  }
-}
+const TMP_VARS = ["TMPDIR", "TMP", "TEMP"] as const;
 
 export async function setup(): Promise<() => Promise<void>> {
-  if (process.env.TALON_TEST_KEEP_TMP === "1") {
-    return async () => {};
-  }
-
-  const root = tmpdir();
-  const before = await listTmp();
+  const root = await mkdtemp(join(tmpdir(), "talon-run-"));
+  const saved = TMP_VARS.map((name) => [name, process.env[name]] as const);
+  for (const name of TMP_VARS) process.env[name] = root;
 
   return async () => {
-    const after = await listTmp();
-    for (const name of after) {
-      if (before.has(name) || !OWNED.test(name)) continue;
-      const path = join(root, name);
-      try {
-        if (!(await stat(path)).isDirectory()) continue;
-        await rm(path, { recursive: true, force: true });
-      } catch {
-        // Best-effort cleanup: a racing suite or a permission quirk must never
-        // fail the run.
-      }
+    for (const [name, value] of saved) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
     }
+    if (process.env.TALON_TEST_KEEP_TMP === "1") {
+      console.log(`[tmp-reaper] kept ${root}`);
+      return;
+    }
+    // Best-effort: a permission quirk must never fail the run.
+    await rm(root, { recursive: true, force: true }).catch(() => {});
   };
 }

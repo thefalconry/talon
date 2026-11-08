@@ -10,10 +10,9 @@
  * skip this entirely and yield events directly — `runChatTurn` lives
  * in the backend module and owns its own stream surface.
  *
- * Replaces the historical `to-event-stream.ts` shim that lived under
- * "shared". The reframing matters: this is not a "legacy adapter,"
- * it's the canonical bridge between an SDK that emits via callbacks
- * and the `AgentEvent` contract every consumer reads.
+ * This is not a legacy adapter: it is the canonical bridge between an
+ * SDK that emits via callbacks and the `AgentEvent` contract every
+ * consumer reads.
  */
 
 import {

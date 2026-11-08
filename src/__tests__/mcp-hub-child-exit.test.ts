@@ -233,3 +233,49 @@ describe("plugin MCP registration warning", () => {
     expect(client.mcp.add).not.toHaveBeenCalled();
   });
 });
+
+describe("hub child spawn-failure alert", () => {
+  it("logs each failed spawn, alerts on the third in a row, resolves on the next good spawn", async () => {
+    const { resetAlertsForTest, activeAlerts } =
+      await import("../core/frontend-runtime/alerts.js");
+    const sent: string[] = [];
+    resetAlertsForTest(async (text) => {
+      sent.push(text);
+    });
+    // Only Date is faked: the children are real processes on real timers,
+    // the negative-cache window is measured with Date.now().
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const key = "flaky\u0000c1";
+      const fail = async () =>
+        expect(acquireChild(key, () => DIES_IN_HANDSHAKE)).rejects.toThrow();
+
+      await fail();
+      const line = warnings().find((m) =>
+        m.startsWith("hub child spawn failed flaky chat=c1"),
+      );
+      expect(line).toContain("attempt=1 backoff_ms=30000");
+      expect(line).toContain('stderr="fatal: browser endpoint refused"');
+
+      vi.setSystemTime(Date.now() + 31_000);
+      await fail();
+      expect(activeAlerts().map((a) => a.key)).not.toContain("mcp.child.flaky");
+
+      vi.setSystemTime(Date.now() + 61_000);
+      await fail();
+      expect(activeAlerts().map((a) => a.key)).toContain("mcp.child.flaky");
+      expect(sent[0]).toMatch(
+        /MCP server "flaky" has failed to start 3 times in a row: .*fatal: browser endpoint refused/,
+      );
+
+      vi.setSystemTime(Date.now() + 121_000);
+      await acquireChild(key, () => DIES_ON_TOOLS_LIST);
+      expect(activeAlerts().map((a) => a.key)).not.toContain("mcp.child.flaky");
+      expect(sent.at(-1)).toMatch(
+        /MCP server "flaky" is starting normally again/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 30_000);
+});

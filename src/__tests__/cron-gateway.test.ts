@@ -26,7 +26,7 @@
  * for the trigger_* actions; mocked to a no-op so the module loads.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ── fs / persistence mocks (so the REAL cron-store stays in-memory) ──────────
 
@@ -69,9 +69,15 @@ vi.mock("../core/background/cron/scheduler.js", () => ({
 }));
 
 // Trigger spawn/cancel — only referenced by trigger_* actions; no-op here.
-vi.mock("../core/background/triggers/index.js", () => ({
+// The per-chat cap check is the real one (caps.ts is not mocked).
+vi.mock("../core/background/triggers/index.js", async () => ({
   spawnTrigger: vi.fn(),
   cancelTrigger: vi.fn(() => false),
+  triggerCapError: (
+    await vi.importActual<typeof import("../core/background/triggers/caps.js")>(
+      "../core/background/triggers/caps.js",
+    )
+  ).triggerCapError,
 }));
 
 // Per-chat backend lookup — values are opaque to the model validator below.
@@ -105,6 +111,7 @@ const { handleSharedAction } =
   await import("../core/engine/gateway-actions/index.js");
 const { getCronJob, addCronJob } = await import("../storage/cron.js");
 const { getTrigger } = await import("../storage/triggers.js");
+const { setTriggerCaps } = await import("../core/background/triggers/caps.js");
 
 const CHAT_ID = 4242;
 
@@ -675,5 +682,62 @@ describe("canonical chat key", () => {
     const trigger = getTrigger(id!);
     expect(trigger?.chatId).toBe("d_native");
     expect(trigger?.numericChatId).toBe(CHAT_ID);
+  });
+
+  describe("trigger_create per-chat cap", () => {
+    async function createTrigger(
+      chatKey: string,
+      name: string,
+      persistent = false,
+    ): Promise<ActionResult> {
+      const res = await handleSharedAction(
+        {
+          action: "trigger_create",
+          name,
+          language: "bash",
+          script: "sleep 60",
+          persistent,
+        },
+        CHAT_ID,
+        undefined,
+        chatKey,
+      );
+      return res as ActionResult;
+    }
+
+    afterEach(() => setTriggerCaps());
+
+    it("refuses the 6th active trigger by default and names the config key", async () => {
+      for (let i = 0; i < 5; i++) {
+        expect((await createTrigger("cap_default", `w${i}`)).ok).toBe(true);
+      }
+      const res = await createTrigger("cap_default", "w5");
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain("(5 active)");
+      expect(res.error).toContain("triggers.maxActivePerChat");
+    });
+
+    it("honours a configured cap", async () => {
+      setTriggerCaps({ maxActivePerChat: 7 });
+      for (let i = 0; i < 7; i++) {
+        expect((await createTrigger("cap_config", `w${i}`)).ok).toBe(true);
+      }
+      const res = await createTrigger("cap_config", "w7");
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain("(7 active)");
+    });
+
+    it("keeps persistent watchers from starving ad-hoc ones when budgeted", async () => {
+      setTriggerCaps({ maxActivePerChat: 1, maxPersistentPerChat: 2 });
+      expect((await createTrigger("cap_split", "p0", true)).ok).toBe(true);
+      expect((await createTrigger("cap_split", "p1", true)).ok).toBe(true);
+      const p2 = await createTrigger("cap_split", "p2", true);
+      expect(p2.ok).toBe(false);
+      expect(p2.error).toContain("triggers.maxPersistentPerChat");
+      expect((await createTrigger("cap_split", "ci-wait")).ok).toBe(true);
+      const second = await createTrigger("cap_split", "ci-wait-2");
+      expect(second.ok).toBe(false);
+      expect(second.error).toContain("triggers.maxActivePerChat");
+    });
   });
 });

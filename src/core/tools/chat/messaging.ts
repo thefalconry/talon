@@ -257,7 +257,7 @@ Examples:
       chat_id: chatIdSchema
         .optional()
         .describe(
-          "Target chat ID. Omit to send to the current chat (chat mode). Required from heartbeat mode where there is no ambient chat — use list_chats or known IDs from memory. Telegram supergroup/channel IDs are negative (e.g. -1001426819337); user DMs are positive.",
+          "Target chat ID. Omit to send to the current chat (chat mode). Required from heartbeat mode where there is no ambient chat — use list_chats or known IDs from memory. Telegram supergroup/channel IDs are negative (e.g. -1009876543210); user DMs are positive.",
         ),
       silent: z
         .boolean()

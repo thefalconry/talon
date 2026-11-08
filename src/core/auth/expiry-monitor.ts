@@ -10,9 +10,10 @@
  */
 
 import { notifyAdmin } from "../frontend-runtime/admin-notify.js";
+import { logWarn } from "../../util/log.js";
 import {
   daysUntil,
-  PROVIDER_LABELS,
+  providerLabel,
   readAllProviderStatus,
   type ProviderAuthStatus,
 } from "./status.js";
@@ -34,7 +35,7 @@ export function alertKeyFor(
 }
 
 export function alertTextFor(s: ProviderAuthStatus, now = Date.now()): string {
-  const label = PROVIDER_LABELS[s.provider];
+  const label = providerLabel(s.provider);
   if (!s.loggedIn)
     return `🔑 ${label} is not signed in — send /auth to sign in from here.`;
   if (s.expired)
@@ -75,7 +76,14 @@ export function resetAuthExpiryAnnouncements(): void {
 
 export function startAuthExpiryMonitor(): () => void {
   const tick = (): void => {
-    void runAuthExpiryCheck().catch(() => {});
+    void runAuthExpiryCheck().catch((err: unknown) => {
+      // The alert is already marked announced, so a failed send is not
+      // retried until the status changes — the log is its only trace.
+      logWarn(
+        "notify",
+        `auth expiry check failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   };
   // First check shortly after boot so a lapsed login is surfaced right away.
   const first = setTimeout(tick, 30_000);

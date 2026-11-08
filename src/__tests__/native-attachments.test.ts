@@ -205,12 +205,25 @@ describe("attachments through a message and back out of history", () => {
       "logs.zip",
     ]);
     expect(row?.attachments?.map((a) => a.path)).toEqual([shot.path, zip.path]);
-    // Media ids are per-run, so hydration mints fresh, fetchable URLs.
+    // Media ids are per-run, so hydration registers fetchable URLs.
     for (const a of row?.attachments ?? []) {
       expect(a.url).toMatch(/^\/media\?id=/);
       expect(runtime.media.get(mediaIdFrom(a.url) ?? "")).toBe(a.path);
     }
     expect(row?.imagePath).toBe(row?.attachments?.[0]?.url);
+  });
+
+  it("re-serves the same media ids however often history is fetched", async () => {
+    const entry = runtime.chats.create();
+    const shot = await upload("again.png", "png");
+    emitUser(runtime, entry, "", [shot]);
+
+    const urls = () => historyPage(runtime, entry.id)[0]?.attachments?.[0]?.url;
+    const first = urls();
+    const registered = runtime.media.size;
+    // A reconnecting client re-fetches its open chat every time.
+    for (let i = 0; i < 5; i++) expect(urls()).toBe(first);
+    expect(runtime.media.size).toBe(registered);
   });
 
   it("previews a file-only message by name in the sidebar", async () => {

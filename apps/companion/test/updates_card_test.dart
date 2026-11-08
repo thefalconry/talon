@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -19,11 +20,18 @@ class _RecordingInstaller implements UpdateInstaller {
   File? installed;
   int quits = 0;
 
+  /// Installs to refuse before succeeding, like a blocked package installer.
+  int failuresLeft = 0;
+
   @override
   Future<Directory> stagingDir() async => dir;
 
   @override
   Future<InstallOutcome> install(File artifact, UpdateRelease release) async {
+    if (failuresLeft > 0) {
+      failuresLeft--;
+      return const InstallOutcome.failed('The installer was blocked.');
+    }
     installed = artifact;
     return const InstallOutcome.restartPending(
       'Restart Talon to finish — it reopens on its own.',
@@ -59,13 +67,17 @@ void main() {
     if (await tmp.exists()) await tmp.delete(recursive: true);
   });
 
-  Future<(AppState, UpdateService, _RecordingInstaller)> harness() async {
+  Future<(AppState, UpdateService, _RecordingInstaller)> harness({
+    bool flatpak = false,
+    void Function()? onRequest,
+  }) async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await Prefs.load();
     final installer = _RecordingInstaller(tmp);
     final svc = UpdateService(
       prefs: prefs,
       client: MockClient((req) async {
+        onRequest?.call();
         if (req.url.path.endsWith('.apk')) {
           return http.Response.bytes(asset, 200);
         }
@@ -80,6 +92,7 @@ void main() {
                 'browser_download_url':
                     'https://example.invalid/talon-companion-android.apk',
                 'size': asset.length,
+                'digest': 'sha256:${sha256.convert(asset)}',
               },
             ],
           }),
@@ -89,6 +102,7 @@ void main() {
       installer: installer,
       versionProvider: () async => '4.1.0',
       platform: 'android',
+      flatpak: flatpak,
     );
     return (AppState(prefs), svc, installer);
   }
@@ -165,5 +179,58 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
     expect(state.prefs.autoUpdateCheck, isFalse);
+  });
+
+  testWidgets('a Flatpak build defers to Flatpak and never checks',
+      (tester) async {
+    var requests = 0;
+    final (state, svc, installer) = await harness(
+      flatpak: true,
+      onRequest: () => requests++,
+    );
+    addTearDown(state.dispose);
+    addTearDown(svc.dispose);
+
+    await tester.pumpWidget(wrap(state, svc));
+    await tester.pump();
+
+    expect(find.text('Updates are managed by Flatpak'), findsOneWidget);
+    // No auto-check switch to flip, and "Check now" is inert.
+    expect(find.byType(Switch), findsNothing);
+    await tester.tap(find.text('Check now'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(requests, 0);
+    expect(find.textContaining('is available'), findsNothing);
+    expect(installer.installed, isNull);
+  });
+
+  testWidgets('a refused install offers Retry install without re-downloading',
+      (tester) async {
+    var downloads = 0;
+    final (state, svc, installer) = await harness(onRequest: () => downloads++);
+    addTearDown(state.dispose);
+    addTearDown(svc.dispose);
+    installer.failuresLeft = 1;
+
+    await tester.pumpWidget(wrap(state, svc));
+    await tester.tap(find.text('Check now'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    await tester.tap(find.text('Download & install'));
+    await _settleIo(tester);
+
+    expect(installer.installed, isNull);
+    expect(svc.canInstallStaged, isTrue);
+    final requestsAfterDownload = downloads;
+
+    await tester.tap(find.text('Retry install').first);
+    await _settleIo(tester);
+
+    expect(installer.installed, isNotNull);
+    expect(downloads, requestsAfterDownload, reason: 'no second download');
+    expect(find.text('Restart now'), findsOneWidget);
   });
 }

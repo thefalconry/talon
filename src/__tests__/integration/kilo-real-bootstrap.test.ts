@@ -55,6 +55,9 @@ import type { Frontend } from "../../bootstrap.js";
 import type { ContextManager } from "../../core/types.js";
 import { toolInputToRecord } from "../../core/agent-runtime/events.js";
 
+/** Admin id in the test config; the test turns are sent as this user. */
+const ADMIN_ID = 1;
+
 // ── Preflight gating ───────────────────────────────────────────────────────
 
 const KILO_EXECUTABLE_ENV = "KILO_CODE_EXECUTABLE";
@@ -147,7 +150,7 @@ const HEALTH_TIMEOUT_MS = 15_000;
  *
  *   - `cwd` set to a fresh tempdir → kilo derives its `projectID` from a
  *     hash of the working directory; a unique cwd → unique projectID →
- *     no shared sessions / MCP catalog with prod's `/home/dylan/...` cwd.
+ *     no shared sessions / MCP catalog with prod's `/home/ada/...` cwd.
  *   - `HOME` + `XDG_DATA_HOME` + `XDG_CONFIG_HOME` set inside the tempdir
  *     → kilo writes its global state under our temp tree, not
  *     `~/.local/share/kilocode/`.
@@ -257,9 +260,10 @@ kiloDescribe("Kilo backend — real bootstrap (integration)", () => {
           frontend: "telegram",
           backend: "kilo",
           model: modelId,
-          // Telegram frontend validation requires botToken — never used,
-          // since we never call frontend.start().
+          // Telegram frontend validation requires botToken and an admin —
+          // never used, since we never call frontend.start().
           botToken: "test-bot-token",
+          adminUserId: ADMIN_ID,
           systemPrompt: "You are a test assistant. Be terse.",
           pulse: false,
           heartbeat: false,
@@ -376,6 +380,9 @@ kiloDescribe("Kilo backend — real bootstrap (integration)", () => {
       senderName: "Test",
       isGroup: false,
       source: "message",
+      // The configured admin: a turn from anyone else is guest-scoped,
+      // which this backend refuses (it cannot enforce the guest surface).
+      senderKeys: [String(ADMIN_ID)],
       onEvent: async (event) => {
         if (event.type === "assistant_message") {
           textBlocks.push(event.text);
@@ -449,6 +456,9 @@ kiloDescribe("Kilo backend — real bootstrap (integration)", () => {
       senderName: "Test",
       isGroup: false,
       source: "message",
+      // The configured admin: a turn from anyone else is guest-scoped,
+      // which this backend refuses (it cannot enforce the guest surface).
+      senderKeys: [String(ADMIN_ID)],
     });
 
     const afterA = getRegisteredMcpServerNames().filter((n) =>
@@ -467,6 +477,9 @@ kiloDescribe("Kilo backend — real bootstrap (integration)", () => {
       senderName: "Test",
       isGroup: false,
       source: "message",
+      // The configured admin: a turn from anyone else is guest-scoped,
+      // which this backend refuses (it cannot enforce the guest surface).
+      senderKeys: [String(ADMIN_ID)],
     });
 
     const afterB = getRegisteredMcpServerNames();

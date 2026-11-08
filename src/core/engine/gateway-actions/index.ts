@@ -22,13 +22,14 @@
  *   - `mesh`      — companion device mesh (presence + location)
  *   - `cross-send` — explicit-target sends through any enabled frontend
  *   - `backup`    — snapshots and checkpoints (chat-free; no restore)
+ *   - `secrets`   — secret-drop links (core/secrets; needs the chat)
  */
 
 import type { ActionResult } from "../../types.js";
 import type { Backend } from "../../agent-runtime/capabilities.js";
 import type { SharedActionHandlers } from "./types.js";
 import { historyHandlers } from "./history.js";
-import { fetchUrlHandlers } from "./fetch-url.js";
+import { fetchUrlHandlers } from "./fetch-url/index.js";
 import { cronHandlers } from "./cron.js";
 import { triggerHandlers } from "./triggers.js";
 import { agentContextActions, agentHandlers } from "./agents/index.js";
@@ -47,8 +48,10 @@ import {
   whatsappAccountHandlers,
   whatsappAccountChatFreeActions,
 } from "./whatsapp-account.js";
-import { nativeHandlers } from "./native/index.js";
+import { nativeActionRefusal, nativeHandlers } from "./native/index.js";
 import { backupChatFreeActions, backupHandlers } from "./backup/index.js";
+import { secretHandlers } from "../../secrets/actions.js";
+import { attachInboxNotice } from "./agents/inbox-notice.js";
 
 // Null-prototype so a request `action` of "toString" / "constructor" / etc.
 // can't resolve an inherited Object.prototype method — `handlers[action]` only
@@ -70,6 +73,7 @@ const handlers: SharedActionHandlers = Object.assign(Object.create(null), {
   ...whatsappAccountHandlers,
   ...nativeHandlers,
   ...backupHandlers,
+  ...secretHandlers,
 });
 
 /**
@@ -98,7 +102,10 @@ export async function handleSharedAction(
   const action = body.action as string;
   const handler = handlers[action];
   if (!handler) return null; // not a shared action — delegate to frontend
-  return handler(body, chatId, backend, chatKey);
+  const refusal = nativeActionRefusal(action);
+  if (refusal) return refusal;
+  const result = await handler(body, chatId, backend, chatKey);
+  return result ? attachInboxNotice(result, chatKey) : null;
 }
 
 /**
@@ -133,7 +140,8 @@ export async function handleAgentContextAction(
   if (!isAgentContextAction(action)) return null;
   const handler = handlers[action];
   if (!handler) return null;
-  return handler(body, 0, undefined, contextKey);
+  const result = await handler(body, 0, undefined, contextKey);
+  return result ? attachInboxNotice(result, contextKey) : null;
 }
 
 /**

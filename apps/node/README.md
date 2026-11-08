@@ -19,6 +19,10 @@ works out of the box.
   the node verifies its hash, atomically swaps its own binary, and restarts
   into it (in-place `execve` on Linux/macOS, so the mesh reconnects in
   seconds). Version tracks the Talon release it was built against.
+- **Prompt reconnects across daemon restarts**: the daemon ends each event
+  stream with a restart notice (`bye`, `reason: "restart"`); the node waits
+  the advertised delay, then retries every second for up to two minutes
+  instead of climbing its 1 s → 30 s backoff.
 
 ## Quick start
 
@@ -47,6 +51,15 @@ Config lives at `~/.talon-node/config.json` (0600 — it holds the bearer
 token). Flags and env vars (`TALON_BRIDGE`, `TALON_TOKEN`,
 `TALON_NODE_NAME`) override the file.
 
+The token is this node's **own credential** (`tdc1.…`, device scope only —
+see [docs/mesh-credentials.md](../../docs/mesh-credentials.md)); installer
+links embed one. A node configured with the daemon's shared bridge token
+trades it for its own credential on its first heartbeat and rewrites
+`token` in the config. `talon-node status` shows which kind it holds. If you
+pass the shared token through `TALON_TOKEN`, replace it with the credential
+from the config once the node has upgraded — the env var wins on every
+start.
+
 ```json
 {
   "bridge": "https://100.64.0.7:19880",
@@ -62,6 +75,93 @@ duplicate registry entries. `fingerprint` is captured on the first
 successful authenticated connect (TOFU) and enforced afterwards; pre-seed it
 via `--fingerprint` for a fully pinned first contact (`/health` on the
 bridge reports it).
+
+When the node pins a certificate on first use it logs a banner with the
+fingerprint. Compare it with the `Bridge TLS` line of `talon status` on the
+daemon host. If they differ, stop the node, delete `fingerprint` from the
+config and reconnect with `--fingerprint <the daemon's value>`.
+
+`endpoints` and `endpointsVersion` appear once the daemon advertises
+fallback ways to reach the bridge (`native.endpoints`). The node writes
+them itself. `bridge` is always tried first, and every fallback must present
+the pinned certificate. See
+[Fallback endpoints](../../docs/headless-node.md#fallback-endpoints).
+
+### Strict TLS (opt-in)
+
+Trust-on-first-use stays the default. To refuse any bridge whose
+fingerprint was not configured up front, pass `--strict-tls` to `run` or
+`install` (saved as `"strictTls": true` in the config):
+
+```sh
+./talon-node install --bridge https://<daemon-host>:19880 --token <token> \
+  --fingerprint <sha256 from talon status> --strict-tls
+```
+
+With strict TLS on, the node:
+
+- refuses to start (and `install` refuses) without a `fingerprint`, or with
+  a plain `http://` bridge URL;
+- rejects the TLS handshake with an unpinned bridge instead of adopting the
+  certificate it sees.
+
+`talon-node status` shows the mode on its `tls mode:` line.
+`--strict-tls=false` turns it back off.
+
+### Local command policy
+
+The optional `policy` block controls what the mesh may do on this host. Only
+someone who can edit `config.json` can change it. Filesystem commands never
+touch the config directory or the node's own binary.
+
+```json
+"policy": {
+  "disableExec": true,
+  "disableUpdate": false,
+  "disableComputer": false,
+  "readPaths": ["/srv/share", "/var/log"],
+  "writePaths": ["/srv/share"],
+  "maxConcurrent": 8,
+  "maxWriteBytes": 4294967296
+}
+```
+
+| Key               | Effect                                                                              | Default  |
+| ----------------- | ----------------------------------------------------------------------------------- | -------- |
+| `disableExec`     | refuse `exec` (shell) and stop advertising it                                       | `false`  |
+| `disableUpdate`   | refuse `update_node` and stop advertising it                                        | `false`  |
+| `disableComputer` | refuse `computer` (screen capture, pointer, keyboard) and stop advertising it       | `false`  |
+| `readPaths`       | confine `read_file` / `list_dir` / `stat` / `upload_file` to these trees            | anywhere |
+| `writePaths`      | confine `write_file` / `delete` / `mkdir` / `move` / `download_file` to these trees | anywhere |
+| `maxConcurrent`   | commands running at once. 32 more can queue. Beyond that the answer is "busy"       | `8`      |
+| `maxWriteBytes`   | largest file `write_file` / `download_file` may produce                             | 4 GiB    |
+
+Paths are checked after resolving symlinks. Path limits only mean something
+with `disableExec`, because a shell can reach any file.
+
+### Command audit
+
+Every mesh command the node runs is logged to `audit.jsonl` next to
+`config.json` (0600, the newest 500–999 entries). One JSON line per command:
+
+```json
+{
+  "time": "2026-09-28T10:00:00Z",
+  "commandId": "…",
+  "name": "exec",
+  "target": "sha256:…",
+  "ok": true,
+  "durationMs": 12,
+  "credential": "device:0123456789abcdef"
+}
+```
+
+`target` is the path a filesystem command touched (`from -> to` for
+`move`), or the SHA-256 of an `exec` command line. File contents and command
+lines are never recorded. `credential` names the bearer the node was using
+(`device:<credential id>`, `shared`), never the secret. `talon-node status`
+shows the last 10 entries; `talon-node audit [-n 50] [--json]` prints more.
+Writing the log never delays or fails a command.
 
 ## How it plugs in
 
@@ -79,11 +179,23 @@ apps pair with). No daemon-side changes are required for headless nodes.
 
 ## Service management
 
-| OS      | Mechanism                                    | Notes                                              |
-| ------- | -------------------------------------------- | -------------------------------------------------- |
-| Linux   | systemd unit (system as root, else user)     | user units need `loginctl enable-linger` for boot  |
-| macOS   | LaunchAgent (`com.talon.node`)               | per-user, `KeepAlive` restarts on crash            |
-| Windows | Scheduled task (`TalonNode`, ONSTART/SYSTEM) | plain console binary — no SCM plumbing needed      |
+| OS      | Mechanism                                              | Notes                                                     |
+| ------- | ------------------------------------------------------ | --------------------------------------------------------- |
+| Linux   | systemd unit (system as root, else user)               | user units need `loginctl enable-linger` for boot         |
+| macOS   | LaunchAgent (`com.talon.node`)                         | per-user, `KeepAlive` restarts on crash                   |
+| Windows | Scheduled task (`TalonNode`, ONSTART, installing user) | runs as you, unelevated, no stored password (`/RU … /NP`) |
+
+The node always runs as the account that installed it, and it never runs as
+SYSTEM on Windows. The binary and config sit in that account's own profile,
+so a SYSTEM task would run files the user can rewrite. On Windows, creating
+the boot task still needs an elevated PowerShell. `talon-node status` flags a
+task registered by an older build that still runs as SYSTEM. Re-run
+`talon-node install` to replace it.
+
+A root install on Linux (system unit) refuses to register if the binary, the
+config, or any directory above them is owned by another user or is
+world-writable. For example, `TALON_NODE_DIR` pointed at a user-writable
+directory is refused.
 
 ## Building all targets
 
@@ -115,9 +227,15 @@ it matches:
 `update_node` (daemon-side mesh tool) streams a replacement binary to the
 node, which re-hashes it, atomically swaps its own binary, and restarts into
 it — an in-place `execve` on Linux/macOS (same pid, no supervisor
-crash-accounting), a rename-aside + relaunch on Windows. A truncated or
-mismatched binary is refused before the swap, so the running node is never
-left broken. With no `binary_path` the daemon resolves the right build
+crash-accounting), a rename-aside + relaunch on Windows. The command must
+carry the binary's `sha256` (the daemon always sends it); a missing digest,
+or a truncated or mismatched binary, is refused before the swap, so the
+running node is never left broken. The node also reads the pushed binary's
+embedded version and refuses an older release, or the exact build it is
+already running, unless the command passes `allow_downgrade: true` (the
+`update_node` tool's parameter of the same name). A different build of the
+same release (a dev checkout at a newer commit) is allowed. With no
+`binary_path` the daemon resolves the right build
 itself from the node's registered platform/arch (nodes advertise
 `runtime.GOARCH`) — source build in a dev checkout, else the digest-verified
 release download. Confirm with `get_device_status` once `appVersion`
@@ -133,3 +251,90 @@ Headless nodes do not advertise `locate` (no GPS) or `install_apk`
 equivalent self-update. Everything else matches the app's device-control
 surface, including the capped exec output contract (192 KB head + rolling
 64 KB tail) that teleport's cwd tracking depends on.
+
+## Desktop control (`computer`, macOS)
+
+A node on a Mac also advertises `computer`: the daemon can look at the
+desktop and operate it. One command, eight actions:
+
+| Action       | What it does                                                                      |
+| ------------ | --------------------------------------------------------------------------------- |
+| `screenshot` | the primary display as a JPEG, always small enough to deliver                     |
+| `snapshot`   | the frontmost window's accessibility tree: each control, its name, where to click |
+|              | `scope: "all"` adds the menu bar, menu extras, menus, popovers and panels         |
+| `click`      | `x`, `y`, optional `button`, `count` (double/triple), `modifiers`, `verify`       |
+| `move`       | move the pointer                                                                  |
+| `drag`       | press at `x`,`y`, release at `toX`,`toY`                                          |
+| `scroll`     | `dy` / `dx` in lines, optionally aimed at `x`,`y` first                           |
+| `type`       | type `text` into whatever has keyboard focus                                      |
+| `key`        | one key with modifiers, e.g. `cmd+s`, `escape`                                    |
+
+**One coordinate space.** The primary display is mapped onto a space whose
+longest edge is at most 1280, and the screenshot is rendered at exactly that
+size. A pixel in the image, a position in a snapshot and a click target are
+the same pair of numbers, on Retina and non-Retina displays alike.
+
+**System UI.** The frontmost window's tree never holds the system's own
+UI — menu bar extras, Control Center and its module popovers (Video
+Effects, Focus, Sound), open menus, Notification Center, floating panels —
+because all of it belongs to other processes. `snapshot` with
+`scope: "all"` reads those too, straight through the AXUIElement API: the
+frontmost app's menu bar titles, every menu bar extra (on macOS 26 each
+owner's `AXExtrasMenuBar`; on 27 the system ones are grouped under
+MenuBarAgent), and the controls in every on-screen window that is not an
+ordinary app window, frontmost first. Ordinary background windows are
+listed by owner, title and frame but not walked. Toggles (checkboxes,
+switches, radio buttons, checked menu items) report `state: on|off|mixed`.
+
+**Checked clicks.** A `click` hit-tests the point first and reports the
+control it is about to hit; after the click it waits `settleMs` (default 400) and reports the same control again — a toggle shows its new state —
+and whatever is under the pointer now (a menu or popover that opened).
+`verify: false` skips both.
+
+**Screenshots that always arrive.** A result over the transport cap is
+never delivered (the daemon only times out), so the node re-encodes until
+it fits under 300 KB (or a smaller `maxBytes`): JPEG quality first, then
+the image size in proportion to how far over it is. A shrunk image reports
+`scale` — space pixels per image pixel — and its own `width`/`height`; the
+click space (`space`) never changes.
+
+**Nothing to install.** Capture is `screencapture` + `sips`; the pointer is
+CoreGraphics events, the keyboard and the frontmost window's tree are
+System Events, and system UI and click checks use the AXUIElement API, all
+driven through `osascript` (JXA). The script is compiled into
+the binary and passed inline, so nothing is written to disk and the node
+stays a single static file with no cgo.
+
+**Permissions.** macOS asks the host owner three times, once each, under
+System Settings › Privacy & Security, for the process that runs the node:
+
+- **Screen Recording** for `screenshot`. Without it macOS hands back the
+  wallpaper with no windows on it, and nothing reports an error.
+- **Accessibility** for `click`, `move`, `drag`, `scroll`, `type`, `key`.
+  Without it the events are dropped; every result carries `trusted: false`
+  and the daemon turns that into a warning.
+- **Automation › System Events** for `type`, `key` and `snapshot`.
+
+`talon-node permissions` opens the Screen Recording and Accessibility panes
+directly. A failed capture or an untrusted action names the missing grant and
+its pane (`x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture`,
+`?Privacy_Accessibility`).
+
+macOS ties these grants to the binary's code signature. Release binaries
+are signed with the project's stable self-signed identity (`Talon Companion`,
+identifier `dev.talon.node`), so the grants survive `update_node`. A binary
+built from source (`go run ./tools/build`, or the daemon building one in a
+dev checkout) is only ad-hoc signed, so macOS treats each such build as a new
+app and asks again.
+
+**Limits.** Primary display only. `snapshot` reads the frontmost window and
+stops at 150 elements or 8 seconds (both adjustable per call), because a web
+page can hold thousands; with `scope: "all"` the system UI gets its own
+element limit and at most half the time. The audit log records the action name and nothing
+else: typed text can be a password.
+
+Set `"disableComputer": true` in the policy block to turn it off. It is on
+by default for the same reason `exec` is: a node that runs shell commands
+can already run `osascript`, so the switch that matters for an untrusted
+daemon is `disableExec`, and this one exists for hosts that want a shell
+but not a hand on the mouse.

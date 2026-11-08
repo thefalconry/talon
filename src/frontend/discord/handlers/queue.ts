@@ -83,6 +83,7 @@ async function flushQueue(chatId: string): Promise<void> {
       isGroup: last.isGroup,
       senderUsername: last.senderUsername,
       senderId: last.senderId,
+      singleSender: messages.every((m) => m.senderId === last.senderId),
       channel: last.channel,
       chatTitle: last.chatTitle,
     });

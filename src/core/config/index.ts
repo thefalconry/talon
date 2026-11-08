@@ -4,9 +4,21 @@ import { z } from "zod";
 import { dirs, files as pathFiles } from "../../util/paths.js";
 import { hardenTalonPermissions } from "./harden.js";
 import { setTimezone } from "../../util/time.js";
-import { BACKEND_IDS } from "../agent-runtime/model-ref.js";
+import { BACKEND_IDS, type BackendId } from "../agent-runtime/model-ref.js";
+import {
+  claudeAccountConfigIssues,
+  claudeAccountSchema,
+  isClaudeAccountId,
+  MAX_CLAUDE_ACCOUNTS,
+  resolveClaudeAccounts,
+  setClaudeAccounts,
+} from "./claude-accounts.js";
 import { REASONING_LEVEL_ORDER } from "../models/reasoning-levels.js";
 import { DEFAULT_BACKUP_SETTINGS } from "../backup/plan.js";
+import {
+  MAX_MESH_ENDPOINTS,
+  parseDialAddress,
+} from "../mesh/links/endpoints.js";
 import {
   assembleSystemPrompt,
   joinSystemPromptParts,
@@ -29,6 +41,19 @@ const BACKEND_ID_ENUM = [...BACKEND_IDS] as [
   (typeof BACKEND_IDS)[number],
   ...(typeof BACKEND_IDS)[number][],
 ];
+
+/**
+ * A backend id field: a built-in id, or an extra Claude account
+ * (`claude-<name>`). The shape check is here; whether the account is
+ * declared in `claudeAccounts` is checked after parsing
+ * (`claudeAccountConfigIssues`), since one field can't see another.
+ */
+const backendIdSchema = z.union([
+  z.enum(BACKEND_ID_ENUM),
+  z.custom<BackendId>(isClaudeAccountId, {
+    message: `expected one of ${BACKEND_IDS.join(", ")}, or a "claude-<name>" account from claudeAccounts`,
+  }),
+]);
 
 /**
  * Reasoning-effort literal source for the background-agent knobs
@@ -154,7 +179,8 @@ const frontendEnum = z.enum([
  *
  * Defaults are loopback-only and unauthenticated (single-machine use). To
  * reach Talon remotely, set `host: "0.0.0.0"` and a `token` — the bridge
- * then requires `Authorization: Bearer <token>` (or `?token=` for SSE).
+ * then requires `Authorization: Bearer <token>` (or `?token=` on `GET /events`
+ * and `GET /media` only, where clients can't set a header).
  * A non-loopback bind with no token auto-mints a persistent one
  * (~/.talon/keys/bridge-token) rather than serving the LAN open.
  */
@@ -170,11 +196,42 @@ const nativeConfigSchema = z
     host: z.string().default("127.0.0.1"),
     /**
      * Optional shared secret. When set, every request must present it as a
-     * bearer token (header) or `?token=` query param (SSE). When unset on a
-     * non-loopback `host`, the bridge mints and persists one automatically
-     * (~/.talon/keys/bridge-token) — the network never gets an open bridge.
+     * bearer token (header), or a `?token=` query param on `GET /events` and
+     * `GET /media` only. When unset on a non-loopback `host`, the bridge
+     * mints and persists one automatically (~/.talon/keys/bridge-token) —
+     * the network never gets an open bridge.
      */
     token: z.string().optional(),
+    /**
+     * Start the bridge on a network-reachable `host` even though `token`
+     * looks weak (under ~128 bits by a length × alphabet estimate, e.g.
+     * `hunter2`). Off by default: a weak token on a non-loopback bind
+     * refuses to start, with instructions to generate a strong one. With
+     * this set the bridge starts and logs a security warning every time.
+     * Loopback binds only ever warn.
+     */
+    allowWeakToken: z.boolean().optional(),
+    /**
+     * Maximum lifetime of one authenticated event stream (`GET /events`),
+     * in ms. When set, each stream is closed after roughly this long
+     * (±10% jitter) and the client reconnects, presenting its token again.
+     * Unset (default) = streams live until the client leaves. The companion
+     * and talon-node both reconnect on their own, but with their own
+     * backoff, and a device command sent in that gap is dropped, so this is
+     * opt-in. Minimum 60000.
+     */
+    sseMaxLifetimeMs: z.number().int().min(60_000).optional(),
+    /**
+     * How long a device command waits, in ms, when its device has no live
+     * event stream (it is reconnecting: after a daemon restart, a network
+     * change, an `sseMaxLifetimeMs` cycle). The command is sent the moment
+     * the device's stream returns; if it does not return in this window the
+     * command fails then, saying it was not delivered, rather than waiting
+     * out its whole timeout. Default 20000; 0 fails such commands at once.
+     * The hold always ends max(3 s, 10% of the command's timeout) before
+     * that timeout, so a command is never delivered too late to answer.
+     */
+    commandHoldMs: z.number().int().min(0).max(300_000).optional(),
     /**
      * Origins allowed to call the bridge from a BROWSER. Native clients
      * (Electron main, Flutter, curl, talon-node) send no Origin header and
@@ -192,6 +249,74 @@ const nativeConfigSchema = z
      * working zero-config).
      */
     tls: z.boolean().optional(),
+    /**
+     * The URL other devices should dial, when it isn't the bind address —
+     * a container (Docker, TrueNAS) or anything behind NAT or a proxy,
+     * where the bridge only sees its internal IP. Used for pairing links,
+     * node installers and `/mesh`. e.g. "https://truenas.lan:19880".
+     */
+    publicUrl: z
+      .string()
+      .regex(/^https?:\/\/\S+$/, "native.publicUrl must be an http(s) URL")
+      .optional(),
+    /**
+     * Other ways devices can reach this bridge, advertised to every device
+     * in its heartbeat reply so it can fail over when one stops working
+     * (e.g. DNS is down). `publicUrl` always stays first. Each entry is a
+     * `url` (https; its host goes in TLS SNI and Host) and an optional
+     * `dial` — an IP literal and port to connect to instead of resolving
+     * that host, e.g. `{ "url": "https://mesh.example.org", "dial":
+     * "203.0.113.7:443" }`. Every entry must present this bridge's own
+     * certificate: devices keep the pin they hold and refuse any other.
+     * Unset (default) = nothing is advertised; `[]` tells devices to
+     * forget a list they learned before.
+     */
+    endpoints: z
+      .array(
+        z
+          .object({
+            url: z
+              .string()
+              .regex(
+                /^https:\/\/[^\s"'`$\\%?#@]+$/,
+                "native.endpoints[].url must be a plain https URL",
+              ),
+            dial: z
+              .string()
+              .refine(
+                (v) => parseDialAddress(v) !== null,
+                "native.endpoints[].dial must be an IP literal and port, e.g. 203.0.113.7:443 or [2001:db8::1]:443",
+              )
+              .optional(),
+            label: z.string().max(64).optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_MESH_ENDPOINTS)
+      .optional(),
+    /**
+     * Accept the shared `token` from remote (non-loopback, or proxied)
+     * clients. Every device now gets its own credential when it pairs, and
+     * devices still holding the shared token trade it for one in-band on
+     * their next connect; the daemon log and `talon mesh` list the ones
+     * that have not. Once none remain, set this to false and rotate
+     * `token` — it then only works for same-machine clients (the desktop
+     * app and CLI, via the 0600 discovery file). Default true for this
+     * release; the default flips to false in a later one.
+     */
+    legacySharedToken: z.boolean().optional(),
+    /**
+     * Scopes a companion's per-device credential carries — at pairing and
+     * on the in-band upgrade. Default ["device", "client", "operator"]:
+     * the mesh, the chat UI and its settings (config writes, plugin
+     * toggles, logs) — what the shared token allowed. Set ["device",
+     * "client"] to keep paired phones out of config; `talon mesh scopes
+     * <device> <list>` changes one device. Nodes always get ["device"].
+     */
+    companionScopes: z
+      .array(z.enum(["device", "client", "operator"]))
+      .min(1)
+      .optional(),
   })
   .strict();
 
@@ -264,6 +389,80 @@ const whatsappConfigSchema = z
   })
   .strict();
 
+/** `fetch` — the fetch ladder behind `fetch_url` (docs/fetch-ladder.md). */
+export const fetchConfigSchema = z
+  .object({
+    /** Browser-TLS impersonation via curl-impersonate (default true). */
+    impersonate: z.boolean().default(true),
+    /** curl-impersonate profiles for the direct rung, tried in order. */
+    impersonateTargets: z
+      .array(
+        z
+          .string()
+          .regex(
+            /^[a-z0-9_]+$/,
+            "a curl-impersonate target name, e.g. safari184",
+          ),
+      )
+      .min(1)
+      .optional(),
+    /** Use this curl-impersonate binary instead of the first-use download. */
+    curlImpersonatePath: z.string().trim().min(1).optional(),
+    /**
+     * SOCKS exits for the impersonation rung, e.g.
+     * "socks5h://socks-nl1.nordvpn.com:1080". Credentials are never
+     * accepted here: they come from TALON_FETCH_SOCKS_USER /
+     * TALON_FETCH_SOCKS_PASS or `socksCredentialsFile` (one line,
+     * "user:pass").
+     */
+    socksExits: z
+      .array(
+        z
+          .string()
+          .trim()
+          .refine((value) => {
+            try {
+              return /^socks(4a?|5h?):$/.test(new URL(value).protocol);
+            } catch {
+              return false;
+            }
+          }, "must be a socks5h://, socks5://, socks4a:// or socks4:// URL")
+          .refine((value) => {
+            try {
+              const u = new URL(value);
+              return !u.username && !u.password;
+            } catch {
+              return true;
+            }
+          }, "must not contain credentials — set TALON_FETCH_SOCKS_USER/TALON_FETCH_SOCKS_PASS or fetch.socksCredentialsFile"),
+      )
+      .default([]),
+    socksCredentialsFile: z.string().trim().min(1).optional(),
+    /**
+     * Anti-detect browser rung: connect to the Camoufox/Playwright server
+     * at `browserEndpoint` (default: the playwright plugin's endpoint).
+     */
+    camoufox: z.boolean().default(false),
+    browserEndpoint: z.string().trim().min(1).optional(),
+    /**
+     * Last resort: run curl on this mesh device (id or name). Off unless
+     * set — the device's owner pays for the traffic and the IP.
+     */
+    egressDevice: z.string().trim().min(1).optional(),
+    /**
+     * Daily cap (bytes) on traffic through relayed rungs (SOCKS exits and
+     * the egress device). 0 disables those rungs. Direct rungs are
+     * uncapped. The counter is in-memory and resets at UTC midnight and
+     * on restart.
+     */
+    dailyByteCap: z
+      .number()
+      .int()
+      .min(0)
+      .default(100 * 1024 * 1024),
+  })
+  .strict();
+
 const playwrightConfigSchema = z.object({
   enabled: z.boolean().default(false),
   /** Browser engine: chromium (default), chrome, firefox, webkit, msedge */
@@ -325,7 +524,7 @@ const mem0SettingsSchema = z.object({
 const configSchema = z.object({
   frontend: z.union([frontendEnum, z.array(frontendEnum)]).default("telegram"),
   botToken: z.string().optional(),
-  backend: z.enum(BACKEND_ID_ENUM).default("claude"),
+  backend: backendIdSchema.default("claude"),
   /**
    * Backend used by the heartbeat agent. Falls back to `backend` when
    * unset. Pair with `heartbeatModel` — the heartbeat agent reads the
@@ -333,12 +532,12 @@ const configSchema = z.object({
    * keeping heartbeats on Claude Sonnet for quality while chat runs
    * on a cheaper / free backend.
    */
-  heartbeatBackend: z.enum(BACKEND_ID_ENUM).optional(),
+  heartbeatBackend: backendIdSchema.optional(),
   /**
    * Backend used by the dream / memory-consolidation agent. Falls
    * back to `backend` when unset. Pair with `dreamModel`.
    */
-  dreamBackend: z.enum(BACKEND_ID_ENUM).optional(),
+  dreamBackend: backendIdSchema.optional(),
   /**
    * Whitelist of backends surfaced in the `/model` picker's backend
    * submenu. Unset → every registered backend is offered. Set →
@@ -350,7 +549,24 @@ const configSchema = z.object({
    * enabled, Talon clears that chat's backend/model override and starts a
    * fresh default session.
    */
-  enabledBackends: z.array(z.enum(BACKEND_ID_ENUM)).optional(),
+  enabledBackends: z.array(backendIdSchema).optional(),
+  /**
+   * Extra Claude subscriptions, each its own backend. The `claude` backend
+   * stays the default account (`$CLAUDE_CONFIG_DIR` or `~/.claude`); every
+   * entry here registers a backend with its `id` that runs the same Claude
+   * SDK driver with `CLAUDE_CONFIG_DIR=<configDir>`. Use the id anywhere a
+   * backend id goes. Talon never moves work between accounts on its own —
+   * see docs/claude-accounts.md.
+   *
+   *   "claudeAccounts": [
+   *     { "id": "claude-2", "label": "Claude (account 2)",
+   *       "configDir": "~/.talon/accounts/claude-2" }
+   *   ]
+   */
+  claudeAccounts: z
+    .array(claudeAccountSchema)
+    .max(MAX_CLAUDE_ACCOUNTS)
+    .optional(),
   claudeBinary: z.string().optional(),
   /**
    * Override the path to the `codex` executable the Codex backend spawns
@@ -398,6 +614,19 @@ const configSchema = z.object({
   apiHash: z.string().optional(),
   adminUserId: z.number().int().optional(),
   allowedUsers: z.array(z.number().int()).optional(), // Whitelist of user IDs allowed to DM the bot
+  /**
+   * Telegram groups the bot serves. When unset, groups are admitted by the
+   * admin's membership (legacy, warned at startup). Only the operator's own
+   * messages get the full tool set in any group.
+   */
+  allowedGroups: z.array(z.number().int()).optional(),
+  /**
+   * Further operator identities, beyond `adminUserId`: messages from these
+   * senders get the full tool set; everyone else is guest-scoped. Forms:
+   * Telegram user id ("123"), WhatsApp "wa_dm_<number>", "discord:<userId>",
+   * "teams:<userId>". Discord `adminUserIds` are included automatically.
+   */
+  operatorIds: z.array(z.string()).optional(),
   // Denylist of user IDs dropped in silence — no warning reply, no admin
   // notification. For spam and prompt-injection senders, where the warning
   // itself is the reward: it confirms a live bot is reading.
@@ -414,6 +643,20 @@ const configSchema = z.object({
   planAlertThreshold: z.number().int().min(1).max(100).default(80),
   /** Chat that receives plan warnings. Defaults to `adminUserId`. */
   planAlertChatId: z.string().optional(),
+  /**
+   * Operator alerts (core/frontend-runtime/alerts.ts): faults that need a
+   * human — a full disk, a crash, an error spike, a dead frontend — sent
+   * to the admin chat, once per fault per `cooldownMinutes`, with a
+   * recovery notice when it clears. `enabled: false` keeps them in the
+   * log and in `talon status` only.
+   */
+  alerts: z
+    .object({
+      enabled: z.boolean().default(true),
+      cooldownMinutes: z.number().int().min(0).max(1440).default(30),
+    })
+    .strict()
+    .optional(),
   /** Background memory-consolidation (dream) runs. Mirrors `pulse`/`heartbeat`. */
   dream: z.boolean().default(true),
   /**
@@ -455,15 +698,18 @@ const configSchema = z.object({
     })
     .optional(),
   /**
-   * Soft token budgets for backends with no account usage API (agy,
-   * openai-agents). Talon keeps a local rolling ledger of every turn and
+   * Soft token budgets for backends with no account usage API
+   * (openai-agents). Talon keeps a local rolling ledger of every turn and
    * one-shot it runs on a backend and derives headroom from it, so a
    * provider that cannot report a plan still has a load-balancing signal.
-   * Keyed by backend id; a backend with no entry contributes no signal
-   * (headroom 1, ranked below any backend with real telemetry on a tie).
+   * A backend's own plan windows always win; for agy (which reads its
+   * quota from `agy -p /usage`) a budget is only the fallback for when
+   * that read fails. Keyed by backend id; a backend with no entry
+   * contributes no signal (headroom 1, ranked below any backend with real
+   * telemetry on a tie).
    *
    * Example:
-   *   "backendBudgets": { "agy": { "tokensPer5h": 2000000, "tokensPerDay": 8000000 } }
+   *   "backendBudgets": { "openai-agents": { "tokensPer5h": 2000000, "tokensPerDay": 8000000 } }
    */
   backendBudgets: z
     .record(
@@ -485,35 +731,79 @@ const configSchema = z.object({
    *   - `maxDepth` — how far delegation may nest. 0 = chats only, 2 (the
    *     default) = chat → agent → agent.
    *   - `defaultTimeoutMs` — hard wall-clock cap when a spawn doesn't pass
-   *     its own. Per-spawn values are clamped to [30s, 60min].
+   *     its own. Unset (the default) = no hard cap: a run ends when it is
+   *     done, killed, or stalled (see `stallTimeoutMs`).
+   *   - `maxTimeoutMs` — optional global ceiling on every run's hard cap,
+   *     including spawns that pass none. Unset = no ceiling. Per-spawn
+   *     values are floored at 30s.
+   *   - `stallTimeoutMs` — the no-progress watchdog step N (default 15
+   *     min): after N with no tool call or output the agent is pinged,
+   *     after 2N its parent is warned, after 3N it is killed (`timed_out`).
+   *     0 disables it.
+   *   - `allowedBackends` — optional allowlist of backend ids sub-agents
+   *     may run on. Unset = any backend with a background capability. A
+   *     spawn that names (or inherits) a backend outside it is refused.
+   *   - `minHeadroomPct` — refuse a spawn when the backend it would run on
+   *     has less than this percent of measured plan headroom left (default
+   *     25; 0 disables). Checked on the final backend, so it also covers an
+   *     explicit backend or model, which skip routing. Unmeasured backends
+   *     (no plan API, no `backendBudgets` entry) are allowed. A spawn with
+   *     `force: true` bypasses it.
    */
   agents: z
     .object({
       maxConcurrent: z.number().int().min(1).max(64).default(6),
       maxDepth: z.number().int().min(0).max(5).default(2),
-      defaultTimeoutMs: z
+      defaultTimeoutMs: z.number().int().min(30_000).optional(),
+      maxTimeoutMs: z.number().int().min(30_000).optional(),
+      stallTimeoutMs: z
         .number()
         .int()
-        .min(30_000)
-        .max(3_600_000)
+        .min(0)
         .default(15 * 60 * 1000),
+      allowedBackends: z.array(z.string().min(1)).optional(),
+      minHeadroomPct: z.number().min(0).max(100).default(25),
+    })
+    .optional(),
+  /**
+   * Triggers — per-chat caps on active watcher scripts (running or
+   * pending). Checked when `trigger_create` runs; triggers already running
+   * are never killed when a cap is lowered.
+   *
+   *   - `maxActivePerChat` — active triggers per chat (default 5). When
+   *     `maxPersistentPerChat` is unset this counts persistent and ad-hoc
+   *     triggers together, exactly as before.
+   *   - `maxPersistentPerChat` — optional separate budget for persistent
+   *     triggers. When set, persistent triggers count only against it and
+   *     `maxActivePerChat` bounds ad-hoc (non-persistent) triggers only, so
+   *     long-lived watchers can't starve short ad-hoc ones.
+   */
+  triggers: z
+    .object({
+      maxActivePerChat: z.number().int().min(1).max(50).default(5),
+      maxPersistentPerChat: z.number().int().min(1).max(50).optional(),
     })
     .optional(),
   /**
    * Backups & checkpoints (docs/backups.md). Talon's only safety net, so
    * it is on by default: every `intervalHours` it writes a snapshot of
    * the identity, state, database and memory under ~/.talon/backups/,
-   * keeps `keepLocal` of them, and uploads to whatever remote targets
+   * keeps them on a tiered schedule (newest `keepLocal`, one a day for
+   * `keepDaily` days, one a week for `keepWeekly` weeks), and uploads to whatever remote targets
    * are registered (`targets: []` keeps everything local).
    *
    *   - `workspaceInclude` — the workspace is mostly bulk that can be
    *     refetched; this is the subset that IS the agent.
+   *   - `includeSessions` — backend session transcripts (Claude Code
+   *     projects for the workspace, Codex/OpenCode/Kilo/Antigravity
+   *     stores for enabled backends) and data/traces, in their own part.
    *   - `extraPaths` — absolute or `~/…` paths outside ~/.talon worth
    *     carrying along (a Claude Code memory directory, say).
    *   - `checkpointBeforeUpdate` — pinned checkpoint before `/update`,
    *     so a bad update is one restore away from undone.
    *   - `notifyChatId` — where failures are reported; falls back to the
    *     admin chat.
+   *   - `encryption` / `loginSessions` — see docs/backup-security.md.
    */
   backup: z
     .object({
@@ -536,7 +826,42 @@ const configSchema = z.object({
         .min(1)
         .max(1000)
         .default(DEFAULT_BACKUP_SETTINGS.keepRemote),
+      /**
+       * Tiered retention on top of the newest `keepLocal`/`keepRemote`
+       * (docs/backups.md#retention): the newest snapshot of each of the
+       * last `keepDaily` days and `keepWeekly` weeks, plus up to
+       * `keepCheckpoints` unpinned checkpoints counted on their own.
+       */
+      keepDaily: z
+        .number()
+        .int()
+        .min(0)
+        .max(1000)
+        .default(DEFAULT_BACKUP_SETTINGS.keepDaily),
+      keepWeekly: z
+        .number()
+        .int()
+        .min(0)
+        .max(1000)
+        .default(DEFAULT_BACKUP_SETTINGS.keepWeekly),
+      keepCheckpoints: z
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .default(DEFAULT_BACKUP_SETTINGS.keepCheckpoints),
       includePalace: z.boolean().default(DEFAULT_BACKUP_SETTINGS.includePalace),
+      /**
+       * WhatsApp auth + the userbot's Telegram login. "local" (default)
+       * keeps them in local snapshots only; "remote" also uploads them
+       * (encrypted); "off" leaves them out entirely.
+       */
+      loginSessions: z
+        .enum(["off", "local", "remote"])
+        .default(DEFAULT_BACKUP_SETTINGS.loginSessions),
+      includeSessions: z
+        .boolean()
+        .default(DEFAULT_BACKUP_SETTINGS.includeSessions),
       workspaceInclude: z
         .array(z.string().min(1))
         .default([...DEFAULT_BACKUP_SETTINGS.workspaceInclude]),
@@ -547,10 +872,55 @@ const configSchema = z.object({
         .boolean()
         .default(DEFAULT_BACKUP_SETTINGS.checkpointBeforeUpdate),
       notifyChatId: z.string().optional(),
+      /**
+       * Encrypt every part (AES-256-GCM, scrypt-derived key). The
+       * passphrase comes from TALON_BACKUP_PASSPHRASE or this file —
+       * never inline, since config.json is itself inside the backup.
+       * Without a passphrase, remote targets refuse the upload.
+       */
+      encryption: z
+        .object({ passphraseFile: z.string().trim().min(1).optional() })
+        .strict()
+        .optional(),
     })
     .strict()
     .optional(),
   braveApiKey: z.string().optional(),
+  /**
+   * `fetch_url` reaches any address by default, local services included (a
+   * home lab, a dev server, the LAN). Set `allowPrivateNetworks: false` to
+   * opt into the SSRF guard: it then refuses hosts that resolve to
+   * loopback, private (RFC 1918, CGNAT, ULA), link-local (incl. the
+   * 169.254.169.254 metadata endpoint) or reserved addresses, re-checking
+   * every redirect hop — worth it on a cloud VM.
+   */
+  fetchUrl: z
+    .object({ allowPrivateNetworks: z.boolean().default(true) })
+    .strict()
+    .optional(),
+  /**
+   * Inbound credential redaction (docs/secret-drop.md). Before a user's
+   * message is saved or shown to the model, passwords, API keys, tokens and
+   * any value already in ~/.talon/secrets become `[REDACTED:<kind>]`, and
+   * the chat is told once to use /secret. `deleteOriginal` also deletes the
+   * platform message where the bot can: in DMs (default), everywhere, or
+   * never.
+   */
+  redaction: z
+    .object({
+      enabled: z.boolean().default(true),
+      deleteOriginal: z.enum(["dm", "always", "never"]).default("dm"),
+    })
+    .strict()
+    .optional(),
+  /**
+   * The fetch ladder behind `fetch_url` (docs/fetch-ladder.md): when a page
+   * answers with a bot wall it retries through browser-TLS impersonation,
+   * SOCKS exits, a plain fetch, an anti-detect browser and — only if set —
+   * a mesh device, in that order. Everything but impersonation is off
+   * until configured.
+   */
+  fetch: fetchConfigSchema.optional(),
   /**
    * Codex-specific OpenAI API key. Prefer this, CODEX_API_KEY, or
    * TALON_CODEX_KEY when the Codex backend should use API-key billing
@@ -558,6 +928,14 @@ const configSchema = z.object({
    * Codex.
    */
   codexApiKey: z.string().optional(),
+  /**
+   * Model a ChatGPT-OAuth Codex session falls back to (pre-emptive swaps,
+   * mismatch retries, the default when no model is configured). Unset =
+   * the Codex CLI's own default for the signed-in account (first listed
+   * model in `~/.codex/models_cache.json`), else a bundled default. The
+   * TALON_CODEX_CHATGPT_MODEL env var overrides this.
+   */
+  codexChatGptDefaultModel: z.string().min(1).optional(),
   /**
    * OpenAI API key — used by the OpenAI Agents backend and accepted by
    * Codex only as a last-resort legacy fallback when no Codex-specific
@@ -591,6 +969,22 @@ const configSchema = z.object({
    * explicitly to "responses" only if your proxy supports it.
    */
   openaiApiMode: z.enum(["responses", "chat_completions"]).optional(),
+  /**
+   * Tool surface for the `openai-agents` backend's background runs
+   * (sub-agents, isolated cron jobs, heartbeat, dream).
+   *   - "lean" (default) — the built-ins (Read, Write, Edit, Bash, Glob,
+   *     Grep) plus the agent-plumbing tools (report_result, check_inbox,
+   *     message_parent, message_peer, list_peers). A few thousand tokens:
+   *     fits a 32k-context local model.
+   *   - "full" — every frontend tool server and every plugin, like the
+   *     chat path. Can run past 100k tokens of tool schemas.
+   *   - an array — the lean set plus these entries: a Talon tool name
+   *     (e.g. "send", "remember") adds that tool, a plugin server name
+   *     (e.g. "brave-search", "github-tools") adds that whole server.
+   */
+  openaiBackgroundTools: z
+    .union([z.enum(["lean", "full"]), z.array(z.string())])
+    .optional(),
   timezone: z.string().optional(),
   plugins: z.array(pluginEntrySchema).default([]),
 
@@ -608,6 +1002,28 @@ const configSchema = z.object({
    */
   disabledTools: z.array(z.string()).optional(),
   disabledToolTags: z.array(z.string()).optional(),
+
+  /**
+   * Conversation-only ("guest") tool surface for anyone who isn't an
+   * operator (`adminUserId`, `operatorIds`, `operatorChats`): reply/react/
+   * history/stickers plus the `guestPlugins` servers — no shell, files,
+   * mail, devices, cron, memory, agents or cross-chat sends. Always applied
+   * to non-operator senders in groups; applied to non-operator DMs unless
+   * `enabled: false` (legacy opt-out). See core/mcp-hub/guest-scope.ts.
+   */
+  guestDmScope: z
+    .object({
+      enabled: z.boolean().default(true),
+      operatorChats: z.array(z.string()).default([]),
+      guestPlugins: z.array(z.string()).optional(),
+      /**
+       * Groups the operator is a member of give EVERY member the full
+       * surface (shell, files, mail, devices…). Off by default; only for
+       * groups whose members the operator trusts with the host.
+       */
+      operatorGroups: z.boolean().default(false),
+    })
+    .optional(),
 
   /**
    * Developer build flag. Gates dev-only affordances such as the
@@ -697,6 +1113,16 @@ const configSchema = z.object({
   // and restart), with an instant rollback by flipping back to false.
   nativeTools: z.boolean().default(false),
 
+  // Claude backend — offer Claude Code's OWN in-process sub-agent tool
+  // (`Agent`, `Task` on older builds) to the model. Off by default: those
+  // sub-agents live inside one turn, die with it without reporting, and are
+  // invisible to Talon's agent caps and headroom guard, so a model that
+  // reaches for them instead of `spawn_agent` can spend a whole plan window
+  // for no output. When false the tools are dropped from the whitelist and
+  // added to the SDK's `disallowedTools` for chat turns, heartbeat, dream,
+  // cron/query jobs and sub-agents. Talon's own `spawn_agent` is unaffected.
+  allowNativeSubagents: z.boolean().default(false),
+
   // FUSE layer for the talon:// namespace (~/.talon/ns). "auto" mounts the
   // live views (proc/, plugins/) when the host can (Linux, /dev/fuse, the
   // talon-fusefs addon present) and degrades to the plain symlink farm with a
@@ -757,15 +1183,84 @@ const DEFAULT_CONFIG = {
   pulseIntervalMs: 300000,
 };
 
-function loadConfigFile(): Record<string, unknown> {
-  try {
-    if (existsSync(CONFIG_FILE)) {
-      return JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
-    }
-  } catch {
-    /* corrupt — will be recreated */
+/**
+ * A config.json that exists but cannot be used — unreadable, not JSON, or
+ * rejected by the schema. Thrown instead of falling back to defaults: a
+ * daemon that silently boots on defaults (e.g. the telegram frontend) is
+ * far more surprising than one that refuses to start. The file on disk is
+ * never touched. `issues` carries one line per problem for callers that
+ * want to render them individually.
+ */
+export class ConfigFileError extends Error {
+  constructor(
+    message: string,
+    readonly path: string,
+    readonly issues: readonly string[] = [],
+  ) {
+    super(message);
+    this.name = "ConfigFileError";
   }
-  return {};
+}
+
+/**
+ * Append a line/column hint to a JSON.parse error message. Recent V8
+ * already includes "(line L column C)"; older runtimes only report
+ * "at position N", so derive it from the raw text in that case.
+ */
+function describeJsonError(err: unknown, raw: string): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (/\(line \d+ column \d+\)/.test(message)) return message;
+  const match = /at position (\d+)/.exec(message);
+  if (!match) return message;
+  const before = raw.slice(0, Number(match[1]));
+  const line = before.split("\n").length;
+  const column = before.length - before.lastIndexOf("\n");
+  return `${message} (line ${line} column ${column})`;
+}
+
+/** Render zod issues as `path: message` lines (`(root)` for top-level). */
+function formatSchemaIssues(error: z.ZodError): string[] {
+  return error.issues.map((issue) => {
+    const path = issue.path.map(String).join(".") || "(root)";
+    return `${path}: ${issue.message}`;
+  });
+}
+
+/**
+ * Read config.json. A missing file is `{}` (first run — defaults apply);
+ * a present file that cannot be read or parsed throws ConfigFileError.
+ */
+function loadConfigFile(): Record<string, unknown> {
+  if (!existsSync(CONFIG_FILE)) return {};
+  let raw: string;
+  try {
+    raw = readFileSync(CONFIG_FILE, "utf-8");
+  } catch (err) {
+    throw new ConfigFileError(
+      `Cannot read ${CONFIG_FILE}: ${err instanceof Error ? err.message : err}`,
+      CONFIG_FILE,
+    );
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (err) {
+    const detail = describeJsonError(err, raw);
+    throw new ConfigFileError(
+      `Invalid JSON in ${CONFIG_FILE}: ${detail}. ` +
+        `The file was left untouched — fix it and start Talon again.`,
+      CONFIG_FILE,
+      [detail],
+    );
+  }
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    throw new ConfigFileError(
+      `Invalid config in ${CONFIG_FILE}: the top level must be a JSON object.`,
+      CONFIG_FILE,
+      ["(root): expected a JSON object"],
+    );
+  }
+  return data as Record<string, unknown>;
 }
 
 function normalizeDeprecatedFrontendConfig(
@@ -851,7 +1346,30 @@ export function loadConfig(): TalonConfig {
     }
   }
 
-  const parsed = configSchema.parse(fileConfig);
+  const result = configSchema.safeParse(fileConfig);
+  if (!result.success) {
+    const issues = formatSchemaIssues(result.error);
+    throw new ConfigFileError(
+      `Invalid config in ${CONFIG_FILE}:\n` +
+        issues.map((line) => `  - ${line}`).join("\n") +
+        `\nThe file was left untouched — fix it and start Talon again.`,
+      CONFIG_FILE,
+      issues,
+    );
+  }
+  const parsed = result.data;
+
+  const accountIssues = claudeAccountConfigIssues(parsed, BACKEND_IDS);
+  if (accountIssues.length > 0) {
+    throw new ConfigFileError(
+      `Invalid config in ${CONFIG_FILE}:\n` +
+        accountIssues.map((line) => `  - ${line}`).join("\n") +
+        `\nThe file was left untouched — fix it and start Talon again.`,
+      CONFIG_FILE,
+      accountIssues,
+    );
+  }
+  setClaudeAccounts(resolveClaudeAccounts(parsed.claudeAccounts));
 
   // The soul kernel is gone (#953). Its config block still parses so an
   // existing config.json keeps loading, but it no longer does anything —
@@ -889,9 +1407,11 @@ export function loadConfig(): TalonConfig {
     ? parsed.frontend
     : [parsed.frontend];
   for (const fe of frontends) {
-    if (fe === "telegram" && !parsed.botToken) {
+    if (fe === "telegram" && (!parsed.botToken || !parsed.adminUserId)) {
       throw new Error(
-        `Telegram frontend requires "botToken" in ${CONFIG_FILE}. Run "talon setup" to configure.`,
+        parsed.botToken
+          ? TELEGRAM_ADMIN_REQUIRED
+          : `Telegram frontend requires "botToken" in ${CONFIG_FILE}. Run "talon setup" to configure.`,
       );
     }
     if (fe === "teams" && !parsed.teamsWebhookUrl) {
@@ -916,6 +1436,39 @@ export function loadConfig(): TalonConfig {
     systemPrompt: joinSystemPromptParts(promptParts),
     systemPromptParts: promptParts,
   };
+}
+
+/**
+ * Why a Telegram frontend without `adminUserId` refuses to start: the admin
+ * is who may run operator commands and who the DM allowlist defaults to, so
+ * without one the bot would have no owner at all.
+ */
+export const TELEGRAM_ADMIN_REQUIRED =
+  `Telegram frontend requires "adminUserId" (your numeric Telegram user id) in ${CONFIG_FILE}. ` +
+  `It decides who may run admin commands and, unless "allowedUsers" lists more people, who may DM the bot. ` +
+  `Find your id by messaging @userinfobot, then run "talon setup" or add "adminUserId": <id> to the config.`;
+
+/**
+ * Only the `backup` block, validated — without writing a default config
+ * or checking frontend requirements. `talon backup restore` on a fresh
+ * host has no real config yet (it is inside the snapshot), and the
+ * default one would fail on its empty botToken before anything restored.
+ */
+export function loadBackupConfig(): TalonConfig["backup"] {
+  const fileConfig = loadConfigFile();
+  const result = configSchema.shape.backup.safeParse(fileConfig.backup);
+  if (!result.success) {
+    const issues = formatSchemaIssues(result.error).map(
+      (line) => `backup.${line}`,
+    );
+    throw new ConfigFileError(
+      `Invalid backup config in ${CONFIG_FILE}:\n` +
+        issues.map((line) => `  - ${line}`).join("\n"),
+      CONFIG_FILE,
+      issues,
+    );
+  }
+  return result.data;
 }
 
 /**

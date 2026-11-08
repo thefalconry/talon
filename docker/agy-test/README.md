@@ -1,7 +1,8 @@
 # Antigravity backend Docker harness
 
 Containerised Talon instance configured for the `agy` backend, running
-against a dedicated test bot. Designed to coexist with a production
+against a dedicated test bot. (To run agy in *production* from the root
+image instead, see [`docs/docker.md`](../../docs/docker.md#antigravity-agy-backend).) Designed to coexist with a production
 Talon process on the same host without state, port, or Telegram
 collisions.
 

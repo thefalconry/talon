@@ -14,26 +14,63 @@ import { classify } from "../errors.js";
 import { getActiveCount } from "./dispatcher.js";
 import { Loom, getActiveLoom, type ContextRegistry } from "../weaver/index.js";
 import { getHealthStatus } from "../../util/watchdog.js";
+import { activeAlerts } from "../frontend-runtime/alerts.js";
 import { getActiveSessionCount } from "../../storage/sessions.js";
 import { log, logError, logDebug } from "../../util/log.js";
+import { runInChatTurnScope } from "../../util/logging/turn-scope.js";
 import {
   handleSharedAction,
   handleChatFreeAction,
   handleAgentContextAction,
   isChatFreeAction,
 } from "./gateway-actions/index.js";
+import { attachInboxNotice } from "./gateway-actions/agents/inbox-notice.js";
 import { AGENT_CONTEXT_PREFIX } from "../agents/context.js";
 import { registerCrossSendTarget } from "./gateway-actions/cross-send.js";
 import { getHubSessionCount } from "../mcp-hub/index.js";
 import {
   dispatchGatewayRoute,
   listenWithRetry,
+  type PortInUseCheck,
   type GatewayRouteHost,
 } from "./gateway-routes.js";
+import { gatewayToken } from "./gateway-auth.js";
 import { handlePluginAction } from "../plugin/index.js";
-import type { FrontendActionHandler } from "../types.js";
+import type { ActionResult, FrontendActionHandler } from "../types.js";
 import type { Backend } from "../agent-runtime/capabilities.js";
 import { resolveOwnerFrontendId } from "../frontend-runtime/routing.js";
+
+/** Serialized size of an action result; -1 when it can't be serialized. */
+function actionResultBytes(result: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(result) ?? "");
+  } catch {
+    return -1;
+  }
+}
+
+/** `tool.action name=… chat=… ms=… ok=… bytes=… [err=…]` for one bridge action. */
+function logActionOutcome(
+  body: Record<string, unknown>,
+  chat: string,
+  ms: number,
+  result: unknown,
+): void {
+  const action = typeof body.action === "string" ? body.action : "?";
+  const r = result as { ok?: unknown; error?: unknown } | null | undefined;
+  const failed = !!r && typeof r === "object" && r.ok === false;
+  const line =
+    `tool.action name=${action} chat=${chat || "-"} ms=${ms} ` +
+    `ok=${!failed} bytes=${actionResultBytes(result)}`;
+  if (!failed) {
+    logDebug("gateway", line);
+    return;
+  }
+  const err = String(r.error ?? "")
+    .replace(/\s+/g, " ")
+    .slice(0, 200);
+  log("gateway", `${line} err=${err}`);
+}
 
 // ── Retry helper (stateless — standalone export) ─────────────────────────────
 
@@ -239,6 +276,11 @@ export class Gateway {
     return this.port;
   }
 
+  /** True while the tool bridge's HTTP server is bound and accepting. */
+  isListening(): boolean {
+    return this.server?.listening === true;
+  }
+
   getActiveChats(): number {
     return this.loom.activeContextCount();
   }
@@ -274,22 +316,56 @@ export class Gateway {
     const where = agentContext ? rawChatId : "chat-free";
     const t0 = Date.now();
     try {
-      const result = agentContext
-        ? await handleAgentContextAction(body, rawChatId)
+      // An agent context first tries the agent-only actions; if the action
+      // isn't one of those it may still be a chat-free action (mesh, send_via,
+      // backup, whatsapp_account), which a sub-agent is offered and must be
+      // able to reach. Without this fall-through those calls returned null and
+      // dropped into chat routing, failing with "No active chat context".
+      let result = agentContext
+        ? ((await handleAgentContextAction(body, rawChatId)) ??
+          (isChatFreeAction(action) ? await handleChatFreeAction(body) : null))
         : await handleChatFreeAction(body);
       if (result) {
         logDebug("gateway", `${action} ${where} ${Date.now() - t0}ms`);
+        if (agentContext && typeof result === "object") {
+          result = attachInboxNotice(result as ActionResult, rawChatId);
+        }
         return result;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logError("gateway", `${action} (${where}) failed: ${msg}`);
-      return { ok: false, error: `${action}: ${msg}` };
+      const errResult: ActionResult = { ok: false, error: `${action}: ${msg}` };
+      return agentContext ? attachInboxNotice(errResult, rawChatId) : errResult;
     }
     return null;
   }
 
-  private async handleAction(body: Record<string, unknown>): Promise<unknown> {
+  /**
+   * Run one bridge action inside the log scope of the turn that issued it
+   * (the MCP subprocess reaches us over HTTP, a fresh async root), so the
+   * action's own lines carry `turn=<id>`, and close it with one
+   * `tool.action` summary line — debug on success, info with the error
+   * text when the action answered `ok:false`.
+   */
+  private handleAction(body: Record<string, unknown>): Promise<unknown> {
+    const rawChatId = body._chatId ? String(body._chatId) : "";
+    const numericId = Number(rawChatId);
+    const chatKeys = [
+      rawChatId,
+      rawChatId !== "" && !isNaN(numericId)
+        ? this.loom.stringIdForNumeric(numericId)
+        : null,
+    ];
+    return runInChatTurnScope(chatKeys, async () => {
+      const t0 = Date.now();
+      const result = await this.routeAction(body);
+      logActionOutcome(body, rawChatId, Date.now() - t0, result);
+      return result;
+    });
+  }
+
+  private async routeAction(body: Record<string, unknown>): Promise<unknown> {
     // Route by _chatId from the MCP subprocess request.
     // _chatId may be a string (Teams: "teams_chat_19:...") or numeric string
     // (Telegram: "123456"). The context map is keyed by numeric chatId, so
@@ -331,11 +407,22 @@ export class Gateway {
       chatId = this.findContextByStringId(rawChatId);
     }
     if (chatId === null) {
-      return { ok: false, error: "No active chat context" };
+      const errResult: ActionResult = {
+        ok: false,
+        error: "No active chat context",
+      };
+      return rawChatId.startsWith(AGENT_CONTEXT_PREFIX)
+        ? attachInboxNotice(errResult, rawChatId)
+        : errResult;
     }
 
     const action = typeof body.action === "string" ? body.action : "";
-    if (!action) return { ok: false, error: "Missing action" };
+    if (!action) {
+      const errResult: ActionResult = { ok: false, error: "Missing action" };
+      return rawChatId.startsWith(AGENT_CONTEXT_PREFIX)
+        ? attachInboxNotice(errResult, rawChatId)
+        : errResult;
+    }
     const t0 = Date.now();
     // The canonical string id for this chat. The bridge only carries the
     // numeric id, but the turn's Thread is keyed by the dispatcher's string
@@ -406,6 +493,15 @@ export class Gateway {
    * A failed bind clears the in-flight state, so a later `start()` retries;
    * so does `stop()`, so start-after-stop binds afresh.
    */
+  /**
+   * Veto for the EADDRINUSE port walk (see `listenWithRetry`). The daemon
+   * installs one that refuses when the busy port is another daemon.
+   */
+  setPortInUseCheck(check: PortInUseCheck | undefined): void {
+    this.portInUseCheck = check;
+  }
+  private portInUseCheck: PortInUseCheck | undefined;
+
   async start(port = 19876): Promise<number> {
     if (this.server) return this.port;
     if (this.starting) return this.starting;
@@ -422,8 +518,11 @@ export class Gateway {
 
   /** The actual bind. Always called through `start()`'s single-flight guard. */
   private async bind(port: number): Promise<number> {
+    const token = gatewayToken();
     const host: GatewayRouteHost = {
-      healthSnapshot: () => this.healthSnapshot(),
+      port: () => this.port,
+      token: () => token,
+      healthSnapshot: (full) => this.healthSnapshot(full),
       requestShutdown: () => {
         const handler = this.shutdownHandler;
         if (!handler) return false;
@@ -441,7 +540,7 @@ export class Gateway {
     const httpServer = createServer(
       (req, res) => void dispatchGatewayRoute(req, res, host),
     );
-    const bound = await listenWithRetry(httpServer, port);
+    const bound = await listenWithRetry(httpServer, port, this.portInUseCheck);
     this.server = httpServer;
     this.port = bound;
     log("gateway", `Action gateway on :${this.port}`);
@@ -458,17 +557,21 @@ export class Gateway {
   /**
    * The /health body. Identity fields first — daemon discovery matches on
    * them to tell a Talon daemon from chat sessions and unrelated localhost
-   * services — then live counters.
+   * services — then, for an authenticated caller only, live counters.
    */
-  private healthSnapshot(): Record<string, unknown> {
+  private healthSnapshot(full: boolean): Record<string, unknown> {
     const w = getHealthStatus();
-    return {
+    const identity = {
       app: "talon",
       mode: this.mode,
       pid: process.pid,
       port: this.port,
       startedAt: this.startedAt,
       ok: w.healthy,
+    };
+    if (!full) return identity;
+    return {
+      ...identity,
       uptime: Math.round(process.uptime()),
       memory: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
       bridge: {
@@ -484,6 +587,7 @@ export class Gateway {
         w.msSinceLastMessage < 60000
           ? "just now"
           : `${Math.round(w.msSinceLastMessage / 60000)}m ago`,
+      alerts: activeAlerts(),
     };
   }
 

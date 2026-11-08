@@ -2,10 +2,10 @@
  * Local rolling token ledger — the headroom signal for backends with no
  * account usage API.
  *
- * Claude and Codex report subscription windows; `agy` has no account
- * endpoint and `openai-agents` has no plan at all. Without a second signal
- * the router would treat those as infinitely fresh and pile every background
- * run onto them. So Talon counts what it spends itself: every chat turn,
+ * Claude, Codex and `agy` report subscription windows; `openai-agents` has
+ * no plan at all, and `agy`'s read (a CLI spawn) can fail. Without a second
+ * signal the router would treat those as infinitely fresh and pile every
+ * background run onto them. So Talon counts what it spends itself: every chat turn,
  * one-shot and sub-agent folds its token total into a per-backend ledger,
  * and `headroom.ts` reads that against the operator's soft budget
  * (`config.backendBudgets`).

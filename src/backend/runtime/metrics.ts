@@ -84,11 +84,7 @@ export type TurnMetricInputs = {
   usage?: TokenUsageSnapshot;
 };
 
-/**
- * Record the uniform per-turn metric set. Replaces the per-backend
- * `recordHistogram("response_latency_ms")` + `incrementCounter
- * ("queries_total")` pairs (and codex's private `codex.*` family).
- */
+/** Record the uniform per-turn metric set. */
 export function recordTurnMetrics(inputs: TurnMetricInputs): void {
   recordSessionMetrics(inputs.chatId, inputs);
 }
@@ -97,11 +93,10 @@ export function recordTurnMetrics(inputs: TurnMetricInputs): void {
  * Terminal-failure accounting — call right before re-throwing a turn
  * that exhausted its retries.
  *
- * Historically every backend skipped BOTH `recordTurnMetrics` and
- * `recordUsage` when a turn errored: the tokens the failed turn burned
- * vanished from /status and /metrics, latency histograms only sampled
- * successes, and the live-turn overlay leaked until the next turn.
- * This helper closes all three gaps in one call:
+ * A failed turn still burned tokens. Without this, they vanish from
+ * /status and /metrics, latency histograms sample only successes, and
+ * the live-turn overlay leaks until the next turn. One call covers all
+ * three:
  *
  *   - per-turn metrics with `failed: true` (also feeds
  *     `backend.<id>.turn_failed`)
@@ -158,9 +153,8 @@ export function recordFailedTurnAccounting(inputs: {
 /**
  * Record a flow violation (prose written without a delivery tool).
  * Always counts the dropped text; the outcome picks the second
- * counter. Centralised because openai-agents historically skipped the
- * cap-exhausted counter, making "how often do models ignore the
- * reminder" unanswerable for that backend.
+ * counter. Centralised so every backend counts cap exhaustion — "how
+ * often do models ignore the reminder" needs both halves.
  */
 export function recordFlowViolation(
   chatId: string,

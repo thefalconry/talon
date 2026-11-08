@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { parsePlanUsage } from "../backend/claude-sdk/plan-usage.js";
+import {
+  parseBankedResets,
+  parsePlanUsage,
+} from "../backend/claude-sdk/usage/plan-usage.js";
 import { buildPlanDisplay } from "../frontend/presentation/status-context.js";
 import { setTimezone } from "../util/time.js";
 
@@ -136,5 +139,65 @@ describe("buildPlanDisplay", () => {
   it("hides the section when there is nothing to show", () => {
     expect(buildPlanDisplay(undefined)).toBeNull();
     expect(buildPlanDisplay({ fetchedAt: Date.now(), windows: [] })).toBeNull();
+  });
+});
+
+describe("parseBankedResets", () => {
+  const now = Date.parse("2026-09-24T00:00:00Z");
+  const grant = (over: Record<string, unknown> = {}) => ({
+    id: "opus55-launch",
+    resets_total: 1,
+    resets_left: 1,
+    starts_at: "2026-09-22T16:00:00+00:00",
+    ends_at: "2026-10-22T16:00:00+00:00",
+    paused: false,
+    usable_now: true,
+    ...over,
+  });
+
+  it("counts unpaused, unexpired grants and reports the soonest deadline", () => {
+    const r = parseBankedResets(
+      {
+        cedar_ember: {
+          eligible: true,
+          grants: [
+            grant(),
+            grant({ resets_left: 2, ends_at: "2026-10-01T00:00:00+00:00" }),
+            grant({ paused: true }),
+            grant({ ends_at: "2026-09-01T00:00:00+00:00" }),
+            grant({ resets_left: 0 }),
+          ],
+        },
+      },
+      now,
+    );
+    expect(r).toEqual({ count: 3, expiresAt: "2026-10-01T00:00:00+00:00" });
+  });
+
+  it("returns undefined when ineligible, absent or empty", () => {
+    expect(parseBankedResets({}, now)).toBeUndefined();
+    expect(parseBankedResets({ cedar_ember: null }, now)).toBeUndefined();
+    expect(
+      parseBankedResets(
+        { cedar_ember: { eligible: false, grants: [grant()] } },
+        now,
+      ),
+    ).toBeUndefined();
+    expect(
+      parseBankedResets({ cedar_ember: { eligible: true, grants: [] } }, now),
+    ).toBeUndefined();
+  });
+
+  it("feeds resetsAvailable through parsePlanUsage", () => {
+    const usage = parsePlanUsage({
+      limits: [limit()],
+      cedar_ember: {
+        eligible: true,
+        grants: [grant({ ends_at: "2099-01-01T00:00:00+00:00" })],
+      },
+    });
+    expect(usage?.resetsAvailable).toBe(1);
+    expect(usage?.resetsExpireAt).toBe("2099-01-01T00:00:00+00:00");
+    expect(buildPlanDisplay(usage)?.resetsExpireLabel).toBeTruthy();
   });
 });

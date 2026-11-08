@@ -39,7 +39,7 @@
  * Keyed by auth fingerprint
  * ─────────────────────────
  *
- * If Dylan switches OAuth accounts (e.g. work vs personal) the cache
+ * If Ada switches OAuth accounts (e.g. work vs personal) the cache
  * file at `~/.codex/auth.json` changes, and what we learned about
  * account A doesn't necessarily apply to account B. To stay correct
  * across credential changes we tag the store with a fingerprint of the
@@ -75,6 +75,7 @@
  *     stay synchronous (they only touch the in-memory set).
  */
 
+import { scryptSync } from "node:crypto";
 import { logDebug } from "../../util/log.js";
 import { files } from "../../util/paths.js";
 import { kvGet, kvSet } from "../../storage/kv.js";
@@ -118,7 +119,7 @@ let memoryStore: InMemoryStore | null = null;
  *
  * Fingerprint shape:
  *   - `mode:source` for ChatGPT OAuth (no token to hash)
- *   - `mode:source:<first 16 chars of key>` for api-key billing
+ *   - `mode:source:<scrypt(key), 16 hex>` for api-key billing
  *   - `mode:source` for missing/empty
  *
  * Constant-folded by `mode === "none"` — no learning happens without
@@ -127,9 +128,12 @@ let memoryStore: InMemoryStore | null = null;
 export function computeAuthFingerprint(info: CodexAuthInfo): string {
   const base = `${info.mode}:${info.source}`;
   if (info.mode === "api-key" && info.apiKey) {
-    // First 16 chars is enough to distinguish keys for fingerprint
-    // purposes without storing the full secret on disk.
-    return `${base}:${info.apiKey.slice(0, 16)}`;
+    // A digest, never key material: the fingerprint is persisted in kv
+    // and appears in debug logs.
+    // scrypt, not a bare hash: the input is a credential. Computed once
+    // per codex init.
+    const digest = scryptSync(info.apiKey, "talon.codex.fingerprint", 8);
+    return `${base}:${digest.toString("hex")}`;
   }
   return base;
 }

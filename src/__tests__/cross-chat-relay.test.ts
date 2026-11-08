@@ -33,10 +33,10 @@ describe("cross-chat relay", () => {
   beforeEach(() => resetCrossChatRelay());
 
   it("queues a reply for the chat that messaged in", () => {
-    noteCrossSend("tg_123", "wa_dm_353863715529");
-    expect(relayInbound("wa_dm_353863715529", "Nyika", "on my way")).toBe(1);
+    noteCrossSend("tg_123", "wa_dm_447700900103");
+    expect(relayInbound("wa_dm_447700900103", "Grace", "on my way")).toBe(1);
     expect(takePendingRelay("tg_123")).toEqual([
-      "Nyika (in wa_dm_353863715529): on my way",
+      "Grace (in wa_dm_447700900103): on my way",
     ]);
   });
 
@@ -47,7 +47,7 @@ describe("cross-chat relay", () => {
 
   it("drains exactly once, so a reply is not re-read every turn", () => {
     noteCrossSend("tg_123", "wa_dm_1");
-    relayInbound("wa_dm_1", "Nyika", "hi");
+    relayInbound("wa_dm_1", "Grace", "hi");
     expect(takePendingRelay("tg_123")).toHaveLength(1);
     expect(takePendingRelay("tg_123")).toEqual([]);
   });
@@ -55,25 +55,25 @@ describe("cross-chat relay", () => {
   it("fans one reply out to every subscribed chat", () => {
     noteCrossSend("tg_123", "wa_dm_1");
     noteCrossSend("discord_9", "wa_dm_1");
-    expect(relayInbound("wa_dm_1", "Nyika", "hi")).toBe(2);
+    expect(relayInbound("wa_dm_1", "Grace", "hi")).toBe(2);
     expect(takePendingRelay("tg_123")).toHaveLength(1);
     expect(takePendingRelay("discord_9")).toHaveLength(1);
   });
 
   it("ignores a chat sending into itself", () => {
     noteCrossSend("tg_123", "tg_123");
-    expect(relayInbound("tg_123", "Dylan", "hi")).toBe(0);
+    expect(relayInbound("tg_123", "Ada", "hi")).toBe(0);
   });
 
   it("ignores a send with no identified caller", () => {
     noteCrossSend("", "wa_dm_1");
-    expect(relayInbound("wa_dm_1", "Nyika", "hi")).toBe(0);
+    expect(relayInbound("wa_dm_1", "Grace", "hi")).toBe(0);
   });
 
   it("refreshes the window on a repeat send rather than double-subscribing", () => {
     noteCrossSend("tg_123", "wa_dm_1");
     noteCrossSend("tg_123", "wa_dm_1");
-    expect(relayInbound("wa_dm_1", "Nyika", "hi")).toBe(1);
+    expect(relayInbound("wa_dm_1", "Grace", "hi")).toBe(1);
     expect(takePendingRelay("tg_123")).toHaveLength(1);
   });
 
@@ -82,7 +82,7 @@ describe("cross-chat relay", () => {
     try {
       noteCrossSend("tg_123", "wa_dm_1");
       vi.advanceTimersByTime(RELAY_TTL_MS + 1000);
-      expect(relayInbound("wa_dm_1", "Nyika", "too late")).toBe(0);
+      expect(relayInbound("wa_dm_1", "Grace", "too late")).toBe(0);
       expect(takePendingRelay("tg_123")).toEqual([]);
     } finally {
       vi.useRealTimers();
@@ -92,7 +92,7 @@ describe("cross-chat relay", () => {
   it("keeps the newest lines when a burst exceeds the cap", () => {
     noteCrossSend("tg_123", "wa_dm_1");
     for (let i = 0; i < RELAY_MAX_PENDING + 5; i++) {
-      relayInbound("wa_dm_1", "Nyika", `msg ${i}`);
+      relayInbound("wa_dm_1", "Grace", `msg ${i}`);
     }
     const queued = takePendingRelay("tg_123");
     expect(queued).toHaveLength(RELAY_MAX_PENDING);
@@ -101,7 +101,7 @@ describe("cross-chat relay", () => {
 
   it("truncates a very long message instead of eating the prompt", () => {
     noteCrossSend("tg_123", "wa_dm_1");
-    relayInbound("wa_dm_1", "Nyika", "x".repeat(RELAY_MAX_TEXT * 3));
+    relayInbound("wa_dm_1", "Grace", "x".repeat(RELAY_MAX_TEXT * 3));
     const [line] = takePendingRelay("tg_123");
     expect(line).toContain("truncated");
     expect(line.length).toBeLessThan(RELAY_MAX_TEXT * 2);
@@ -109,9 +109,9 @@ describe("cross-chat relay", () => {
 
   it("renders nothing for an empty drain, and a labelled block otherwise", () => {
     expect(formatRelayBlock([])).toBe("");
-    const block = formatRelayBlock(["Nyika (in wa_dm_1): hi"]);
+    const block = formatRelayBlock(["Grace (in wa_dm_1): hi"]);
     expect(block).toContain("Cross-chat");
-    expect(block).toContain("- Nyika (in wa_dm_1): hi");
+    expect(block).toContain("- Grace (in wa_dm_1): hi");
     expect(block.endsWith("\n\n")).toBe(true);
   });
 });
@@ -125,7 +125,7 @@ describe("send_via subscribes the calling chat", () => {
     return handleChatFreeAction({
       action: "send_via",
       frontend: "whatsapp",
-      target: "+353863715529",
+      target: "+447700900103",
       text: "hi",
       _chatId: "tg_123",
       ...extra,
@@ -138,13 +138,13 @@ describe("send_via subscribes the calling chat", () => {
       vi.fn(async () => ({
         ok: true,
         message_id: 1,
-        chat_id: "wa_dm_353863715529",
+        chat_id: "wa_dm_447700900103",
       })),
     );
     expect((await sendVia())?.ok).toBe(true);
     // A phone number is not a chat id — the subscription must key off
     // what the frontend reported, or the reply never matches.
-    expect(relayInbound("wa_dm_353863715529", "Nyika", "hi back")).toBe(1);
+    expect(relayInbound("wa_dm_447700900103", "Grace", "hi back")).toBe(1);
     expect(takePendingRelay("tg_123")).toHaveLength(1);
   });
 
@@ -153,8 +153,8 @@ describe("send_via subscribes the calling chat", () => {
       "whatsapp",
       vi.fn(async () => ({ ok: true })),
     );
-    await sendVia({ target: "-1001426819337" });
-    expect(relayInbound("-1001426819337", "Someone", "hi")).toBe(1);
+    await sendVia({ target: "-1009876543210" });
+    expect(relayInbound("-1009876543210", "Someone", "hi")).toBe(1);
   });
 
   it("does not subscribe when the send failed", async () => {
@@ -163,7 +163,7 @@ describe("send_via subscribes the calling chat", () => {
       vi.fn(async () => ({ ok: false, error: "not connected" })),
     );
     await sendVia();
-    expect(relayInbound("+353863715529", "Nyika", "hi")).toBe(0);
+    expect(relayInbound("+447700900103", "Grace", "hi")).toBe(0);
   });
 
   it("does not subscribe when the caller is unidentified", async () => {
@@ -172,6 +172,6 @@ describe("send_via subscribes the calling chat", () => {
       vi.fn(async () => ({ ok: true, chat_id: "wa_dm_1" })),
     );
     await sendVia({ _chatId: undefined });
-    expect(relayInbound("wa_dm_1", "Nyika", "hi")).toBe(0);
+    expect(relayInbound("wa_dm_1", "Grace", "hi")).toBe(0);
   });
 });

@@ -150,4 +150,37 @@ describe("whatsapp connection loop", () => {
     expect(ended).toBe(true);
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
+
+  it("ends without opening a socket when stop() lands while auth loads", async () => {
+    const { useAtomicAuthState } =
+      await import("../frontend/whatsapp/connection/auth-state.js");
+    let releaseAuth!: () => void;
+    vi.mocked(useAtomicAuthState).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseAuth = () =>
+            resolve({
+              state: {
+                creds: { registered: true, me: { id: "1@s.whatsapp.net" } },
+              },
+              saveCreds: vi.fn(),
+            } as never);
+        }),
+    );
+    const runtime = makeRuntime();
+    const loop = runConnectionLoop(runtime, () => {});
+    await until(() => releaseAuth !== undefined);
+
+    // stop(): runtime.sock is still null, so there is nothing to end().
+    runtime.stopping = true;
+    runtime.stopRequest.abort();
+    releaseAuth();
+
+    let ended = false;
+    void loop.then(() => {
+      ended = true;
+    });
+    await until(() => ended);
+    expect(FakeSocket.created).toHaveLength(0);
+  });
 });

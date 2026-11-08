@@ -1,7 +1,7 @@
 /**
  * Lua trigger runner — executes a trigger script inside a WASM-sandboxed
  * Lua 5.4 VM (wasmoon), speaking the same stdout protocol bash/python/node
- * triggers use (see core/background/triggers.ts).
+ * triggers use (see core/background/triggers/).
  *
  * Why a separate process at all: the trigger supervisor's whole contract
  * (kill/respawn, SIGTERM grace, log streaming, TALON_FIRE line scanning)
@@ -62,7 +62,11 @@ import { basename } from "node:path";
  *  Dispatched by src/index.ts and src/cli.ts before the app graph loads. */
 export const LUA_RUN_SUBCOMMAND = "_lua-run";
 
-/** Must match FIRE_PREFIX in core/background/triggers.ts. */
+/**
+ * Must match FIRE_PREFIX in core/background/triggers/state.ts. Copied,
+ * not imported: that module pulls in the dispatcher, and the `_lua-run`
+ * helper process must stay light.
+ */
 const FIRE_PREFIX = "TALON_FIRE:";
 
 /**

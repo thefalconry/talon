@@ -37,8 +37,11 @@ export interface IsolatedRunOptions {
   readonly background: BackgroundRunner;
   /** Fully-built one-shot params (must carry an `abortController`). */
   readonly params: OneShotAgentParams;
-  /** Hard timeout before the run is aborted. */
-  readonly timeoutMs: number;
+  /**
+   * Hard timeout before the run is aborted. Unset = none: the run is only
+   * ended by its own completion or by an abort of `params.abortController`.
+   */
+  readonly timeoutMs?: number;
   /** Bounded grace for the backend to honour the abort (default 30s). */
   readonly abortGraceMs?: number;
   /**
@@ -50,8 +53,12 @@ export interface IsolatedRunOptions {
   readonly logCategory?: LogComponent;
 }
 
-/** Resolves to the value, or the string "timed_out" if `ms` elapses first. */
-async function raceWithTimeout<T>(
+/**
+ * Resolves to the value, or the string "timed_out" if `ms` elapses first.
+ * A rejection of `promise` inside the window propagates — `.catch()` it
+ * first for a never-throwing race.
+ */
+export async function raceWithTimeout<T>(
   promise: Promise<T>,
   ms: number,
 ): Promise<T | "timed_out"> {
@@ -87,10 +94,11 @@ export async function runIsolatedAgent(
   const agentPromise = background.runOneShotAgent(params);
 
   const timeoutPromise = new Promise<never>((_, reject) => {
+    if (timeoutMs === undefined) return;
     timer = setTimeout(() => {
       timeoutError = new IsolatedAgentTimeoutError(timeoutMs);
       try {
-        params.abortController.abort();
+        params.abortController.abort(timeoutError);
       } catch {
         /* ignore */
       }

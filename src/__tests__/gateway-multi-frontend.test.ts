@@ -36,6 +36,7 @@ vi.mock("../core/engine/dispatcher.js", () => ({
 
 import { Gateway } from "../core/engine/gateway.js";
 import type { FrontendActionHandler } from "../core/types.js";
+import { gatewayFetch } from "./helpers/gateway-fetch.js";
 
 let gateway: Gateway;
 let port: number;
@@ -68,7 +69,7 @@ describe("gateway multi-frontend registry", () => {
     gateway.setContext(111, "111", "telegram");
     gateway.setContext(222, "d_222", "native");
 
-    const telegramResp = await fetch(`http://127.0.0.1:${port}/action`, {
+    const telegramResp = await gatewayFetch(`http://127.0.0.1:${port}/action`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -77,7 +78,7 @@ describe("gateway multi-frontend registry", () => {
         text: "hello telegram",
       }),
     });
-    const nativeResp = await fetch(`http://127.0.0.1:${port}/action`, {
+    const nativeResp = await gatewayFetch(`http://127.0.0.1:${port}/action`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

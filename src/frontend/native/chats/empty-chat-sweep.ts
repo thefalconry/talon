@@ -28,7 +28,10 @@ function sweepEmptyChats(runtime: NativeRuntime): void {
   for (const entry of runtime.chats.unused(EMPTY_CHAT_MIN_AGE_MS)) {
     if (isBusy(runtime, entry.id) || runtime.queuedByChat.has(entry.id))
       continue;
-    if (getRecentHistory(entry.id, 1).length > 0) continue;
+    // Any stored row at all — even from before a reset — means the chat
+    // was used; never sweep it.
+    if (getRecentHistory(entry.id, 1, { includeCleared: true }).length > 0)
+      continue;
     if (deleteChat(runtime, entry.id)) {
       log("native", `Swept empty chat ${entry.id}`);
     }

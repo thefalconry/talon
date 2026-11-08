@@ -33,8 +33,14 @@ const h = vi.hoisted(() => {
     flushDatabase: vi.fn(() => {
       calls.push("flush");
     }),
+    // Records what had already run when the marker was written.
+    writeMarker: vi.fn((_kind: string, _err: unknown) => [...calls]),
   };
 });
+
+vi.mock("../core/daemon/crash-marker.js", () => ({
+  writeCrashMarker: h.writeMarker,
+}));
 
 vi.mock("../core/daemon/pidfile.js", () => ({
   removePidRecordIfOwnedBy: h.removePid,
@@ -64,6 +70,7 @@ describe("crash-path cleanup", () => {
     h.removePid.mockClear();
     h.spawnSuccessor.mockClear();
     h.flushDatabase.mockClear();
+    h.writeMarker.mockClear();
     exitSpy = vi
       .spyOn(process, "exit")
       .mockImplementation(((code?: number) => code) as never);
@@ -100,10 +107,29 @@ describe("crash-path cleanup", () => {
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
+  it("leaves a crash marker for the next boot, after the essentials", () => {
+    const err = new Error("boom");
+    handleUncaughtException(err, hooks);
+    expect(h.writeMarker).toHaveBeenCalledWith("uncaught", err);
+    expect(h.writeMarker.mock.results[0]?.value).toEqual([
+      "pid",
+      "successor",
+      "flush",
+    ]);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("still exits when the marker cannot be written (full disk)", () => {
+    h.writeMarker.mockImplementationOnce(() => h.boom());
+    handleUncaughtException(new Error("boom"), hooks);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
   it("still suppresses EPIPE without touching the cleanup path", () => {
     const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     handleUncaughtException(epipe, hooks);
     expect(h.calls).toEqual([]);
+    expect(h.writeMarker).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
   });
 

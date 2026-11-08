@@ -24,6 +24,8 @@ import { mediaHandlers } from "./media.js";
 import { chatInfoHandlers } from "./chat-info.js";
 import { moderationHandlers } from "./moderation/index.js";
 import type { TelegramActionContext, TelegramActionHandlers } from "./types.js";
+import { trackDeliveries } from "../../health/delivery.js";
+import { telegramDelivery } from "./send.js";
 
 export { sendText } from "./send.js";
 
@@ -58,7 +60,7 @@ export function createTelegramActionHandler(
   // shutdown — the timers died with the process, the store didn't.
   restoreScheduledMessages(bot, ctx.scheduledMessages);
 
-  return async (
+  const dispatch = async (
     body: Record<string, unknown>,
     chatId: number,
   ): Promise<ActionResult | null> => {
@@ -67,4 +69,5 @@ export function createTelegramActionHandler(
     if (!handler) return null; // not a Telegram action
     return handler(body, chatId, ctx);
   };
+  return trackDeliveries(telegramDelivery, dispatch);
 }

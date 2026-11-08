@@ -21,7 +21,15 @@ vi.mock("undici", () => ({
     (globalThis.fetch as (...a: unknown[]) => unknown)(...args),
 }));
 
+vi.mock("../util/log.js", () => ({
+  log: vi.fn(),
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logDebug: vi.fn(),
+}));
+
 import { createBridge } from "../core/tools/bridge.js";
+import { logWarn } from "../util/log.js";
 
 describe("createBridge", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -59,7 +67,7 @@ describe("createBridge", () => {
     const bridge = createBridge("http://test/", ""); // empty default chat
     await bridge("send_message", {
       text: "hi from heartbeat",
-      chat_id: 352042062,
+      chat_id: 424242420,
     });
 
     const body = JSON.parse(
@@ -68,8 +76,8 @@ describe("createBridge", () => {
     expect(body).toMatchObject({
       action: "send_message",
       text: "hi from heartbeat",
-      chat_id: 352042062, // stays in body — explicit-routing signal
-      _chatId: "352042062", // promoted as the routing key
+      chat_id: 424242420, // stays in body — explicit-routing signal
+      _chatId: "424242420", // promoted as the routing key
     });
   });
 
@@ -124,6 +132,54 @@ describe("createBridge", () => {
     );
   });
 
+  it("an early AbortError is not reported as a timeout", async () => {
+    // A socket drop / cancelled request surfaces as AbortError long before
+    // the budget runs out; it must not be labelled "did not complete within".
+    const abortErr = new Error("This operation was aborted");
+    abortErr.name = "AbortError";
+    (abortErr as Error & { cause?: unknown }).cause = new Error(
+      "other side closed",
+    );
+    fetchMock.mockImplementationOnce(async () => {
+      throw abortErr;
+    });
+
+    const bridge = createBridge("http://test/", "123");
+    const err = await bridge("device_pull_file", { path: "/x" }).catch(
+      (e: Error) => e,
+    );
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    expect(msg).not.toMatch(/did not complete within/);
+    expect(msg).toMatch(/"device_pull_file" was aborted after \d+s \(\d+ms;/);
+    expect(msg).toContain("before its 3600s budget");
+    expect(msg).toContain("other side closed");
+    expect(vi.mocked(logWarn)).toHaveBeenCalledWith(
+      "bridge",
+      expect.stringMatching(
+        /"device_pull_file" aborted after \d+ms \(budget 3600000ms\).*other side closed/,
+      ),
+    );
+  });
+
+  it("an AbortError once the budget has elapsed is still a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(120_001);
+        const e = new Error("aborted");
+        e.name = "AbortError";
+        throw e;
+      });
+      const bridge = createBridge("http://test/", "123");
+      await expect(bridge("send_message", { text: "x" })).rejects.toThrow(
+        /"send_message" did not complete within 120s/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("network failure throws a message naming the action", async () => {
     fetchMock.mockImplementationOnce(async () => {
       throw new Error("connect ECONNREFUSED 127.0.0.1:19876");
@@ -148,19 +204,19 @@ describe("createBridge", () => {
   // ── Edge cases for chat_id values ────────────────────────────────────────
 
   it("negative numeric chat_id (Telegram group ID) is preserved as negative", async () => {
-    // Telegram supergroup IDs are negative (e.g., -1001426819337). The bridge
-    // must not coerce sign — String(-1001426819337) keeps the minus prefix.
+    // Telegram supergroup IDs are negative (e.g., -1009876543210). The bridge
+    // must not coerce sign — String(-1009876543210) keeps the minus prefix.
     const bridge = createBridge("http://test/", "");
     await bridge("send_message", {
       text: "to group",
-      chat_id: -1001426819337,
+      chat_id: -1009876543210,
     });
 
     const body = JSON.parse(
       (fetchMock.mock.calls[0][1] as { body: string }).body,
     );
-    expect(body._chatId).toBe("-1001426819337");
-    expect(body.chat_id).toBe(-1001426819337);
+    expect(body._chatId).toBe("-1009876543210");
+    expect(body.chat_id).toBe(-1009876543210);
   });
 
   it("chat_id=0 is promoted (gateway decides what to do)", async () => {
@@ -203,13 +259,13 @@ describe("createBridge", () => {
     const bridge = createBridge("http://test/", "heartbeat");
     await bridge("send_message", {
       text: "outbound from heartbeat",
-      chat_id: 352042062,
+      chat_id: 424242420,
     });
 
     const body = JSON.parse(
       (fetchMock.mock.calls[0][1] as { body: string }).body,
     );
-    expect(body._chatId).toBe("352042062");
+    expect(body._chatId).toBe("424242420");
     // Critically NOT "heartbeat" — would be a routing-bypass bug.
     expect(body._chatId).not.toBe("heartbeat");
   });

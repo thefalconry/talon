@@ -24,7 +24,27 @@ files in shared storage, and running ordinary shell tools that ship with
 Android (`ls`, `rm`, `mv`, `find`, `cat`, …).
 
 Toggle in the app: **Settings → Mesh → Device control** (default ON). When
-off, the device advertises no exec/fs capabilities and refuses those commands.
+off, the device advertises no exec/fs capabilities and refuses those
+commands.
+
+Root and Shizuku are a separate switch, **Settings → Mesh → Elevated access**
+(default ON, Android only). While it is off, commands run at this app-UID tier
+and the app never asks the root manager or Shizuku for a grant.
+
+Restrictions you can opt into, in the same card:
+
+- **Ask again for each pairing** (default off). Every newly paired bridge
+  starts with device control and elevated access off, and a grant holds only
+  for the bridge it was given to: pointing the app at another bridge turns
+  both off until you enable them there.
+- **Commands at once** (default 4) and **Commands waiting** (default 16).
+  Beyond both, a command is answered "busy" straight away.
+- **Largest file write** (default 4 GiB, the same as talon-node). A
+  `write_file` or `download_file` that would grow a file past it is refused.
+
+Upgrading from a release where both switches defaulted to off: an install
+that never changed them gets the new defaults. A switch you turned off in
+Settings stays off.
 
 ## 2. Shizuku (optional, elevated)
 
@@ -60,16 +80,21 @@ The `update_device` tool:
 
 1. Hashes the new APK on the daemon (streamed SHA-256) and **streams it** to
    the device (default `/sdcard/Download/talon-companion-update.apk`).
-2. Sends `install_apk` with that digest. The device **re-stages the APK into
-   `/data/local/tmp`** via the elevated shell: the push lands on app storage
+2. Sends `install_apk` with that digest. The device **re-stages the APK into a
+   fresh private directory under `/data/local/tmp`** (`mktemp -d`, mode 0700,
+   random name) via the elevated shell, in a single invocation: the push lands on app storage
    (`/sdcard/Download`), which the shell can read but the system installer
    cannot — `pm install` straight off an app-FUSE path fails with
    `Failed transaction`. It then **re-hashes the staged copy** (the file `pm`
    actually reads) and refuses to install on a mismatch — a truncated transfer
    can never be installed. (`pm install -r` also refuses a differently-signed
    APK, so a wrong file can't hijack the app.)
-3. The device runs `pm install -r -d` (keep data, allow same-or-newer)
-   **detached** via `setsid` after a short delay, so the "staged" ack flushes
+3. The device runs `pm install -r` (keep data; no `-d` by default, so an
+   older build is refused; `update_device(..., allow_downgrade: true)` sends
+   `allow_downgrade` and adds `-d` for a deliberate rollback, which Android
+   may still refuse for a non-debuggable package) **detached** via `setsid`
+   after a short delay, re-checking the
+   digest of the staged copy immediately before `pm` reads it, so the "staged" ack flushes
    over the mesh *before* `pm` tears the app down, and the install finishes
    even as the app process dies (its parent is the Shizuku server, not the app).
 
@@ -79,7 +104,7 @@ The `update_device` tool:
 and the service — hence the whole mesh loop — auto-restarts and reconnects. The
 link drops only for the seconds the process is being swapped.
 
-Requirements: **device control on** + **Shizuku granted** (silent install needs
+Requirements: **device control on** + **elevated access on** + **Shizuku granted** (silent install needs
 shell UID; the app UID can't install a package without a user tapping through
 PackageInstaller). Without Shizuku, `install_apk` returns a clear "needs
 Shizuku" message and nothing is installed.

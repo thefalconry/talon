@@ -39,11 +39,7 @@ import {
   type RemoteAssistantInfo,
 } from "./session-helpers.js";
 import { log, logDebug } from "../../util/log.js";
-
-/** Format an error for a debug log line. */
-function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
+import { errMsg } from "./state.js";
 
 // ── Streaming timing ───────────────────────────────────────────────────────
 

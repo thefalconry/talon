@@ -4,7 +4,10 @@
  */
 
 import { log, logError, logWarn } from "../../util/log.js";
+import { raiseAlert, resolveAlert } from "../frontend-runtime/alerts.js";
+import { faultText } from "../engine/fault-text.js";
 import type { TalonConfig } from "../config/index.js";
+import type { TalonPlugin } from "./types.js";
 import { registry, reloadState } from "./registry.js";
 import type { ProvisionOutcome } from "./provision.js";
 import { NATIVE_RUNTIMES, type NativePluginId } from "./native-runtimes.js";
@@ -37,6 +40,7 @@ function reportProvision(
   if (outcome.status === "failed" && outcome.error) {
     logError(pluginName, `provision failed: ${outcome.error}`);
   }
+  alertOnProvision(pluginName, outcome.status, outcome.error);
   const background = outcome.background;
   if (background) {
     // Tracked so the post-update report waits for it to settle (its
@@ -53,6 +57,27 @@ function reportProvision(
           ),
         ),
     );
+  }
+}
+
+/**
+ * A native runtime that could not be provisioned leaves its plugin down
+ * until a human looks (disk, network, a broken toolchain) — alert on the
+ * failed pass, clear once a later pass leaves it usable.
+ */
+function alertOnProvision(
+  pluginName: NativePluginId,
+  status: ProvisionOutcome["status"] | "threw",
+  error: unknown,
+): void {
+  const key = `provision.${pluginName}`;
+  if (status === "failed" || status === "threw") {
+    raiseAlert(
+      key,
+      `Installing the ${pluginName} runtime failed: ${faultText(error ?? "no detail")}. The ${pluginName} plugin will not work until it is fixed (see \`talon doctor\`).`,
+    );
+  } else if (status === "ready" || status === "degraded") {
+    resolveAlert(key, `The ${pluginName} runtime is installed and usable.`);
   }
 }
 
@@ -77,136 +102,109 @@ async function provisionNativeRuntimes(
         runtime.id,
         `provision: ${err instanceof Error ? err.message : err}`,
       );
+      alertOnProvision(runtime.id, "threw", err);
     }
   }
   return outcomes;
 }
 
 /**
+ * Register one built-in plugin from its config section and run its init.
+ * A plugin that fails to build or init is logged, never fatal.
+ */
+async function loadBuiltin(
+  label: string,
+  section: object,
+  initTimeoutMs: number,
+  build: () => Promise<TalonPlugin>,
+): Promise<void> {
+  try {
+    const loaded = registerPlugin(
+      await build(),
+      section as Record<string, unknown>,
+    );
+    if (loaded) {
+      await initPluginWithTimeout(
+        loaded.plugin,
+        loaded.config,
+        initTimeoutMs,
+        `${label} init`,
+        `${label} init`,
+      );
+    }
+  } catch (err) {
+    logError(
+      "plugin",
+      `${label} init: ${err instanceof Error ? err.message : err}`,
+    );
+    raiseAlert(
+      `plugin.${label.toLowerCase()}`,
+      `Built-in plugin ${label} failed to load: ${faultText(err)}. Its tools are unavailable until the next reload or restart.`,
+    );
+  }
+}
+
+/**
  * Load built-in plugins (GitHub, MemPalace, mem0, Playwright) based on config flags.
- * Shared by both bootstrap and hot-reload to avoid duplication.
+ * Shared by both bootstrap and hot-reload.
  */
 export async function loadBuiltinPlugins(config: TalonConfig): Promise<void> {
   const provisioned = await provisionNativeRuntimes(config);
 
   const github = config.github;
   if (github?.enabled) {
-    try {
+    await loadBuiltin("GitHub", github, 15_000, async () => {
       const { createGitHubPlugin } =
         await import("../../plugins/github/index.js");
-      const gh = createGitHubPlugin({
+      return createGitHubPlugin({
         token: github.token,
         imageTag: github.imageTag,
       });
-      const ghConfig = github as unknown as Record<string, unknown>;
-      const loaded = registerPlugin(gh, ghConfig);
-      if (loaded) {
-        await initPluginWithTimeout(
-          loaded.plugin,
-          loaded.config,
-          15_000,
-          "GitHub init",
-          "GitHub init",
-        );
-      }
-    } catch (err) {
-      logError(
-        "plugin",
-        `GitHub init: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    });
   }
 
   const mempalace = config.mempalace;
   if (mempalace?.enabled) {
-    try {
+    await loadBuiltin("MemPalace", mempalace, 30_000, async () => {
       const { createMempalacePlugin } =
         await import("../../plugins/mempalace/index.js");
       const { resolveMempalacePaths } =
         await import("../../plugins/mempalace/provision.js");
       const { pythonPath, palacePath } = resolveMempalacePaths(mempalace);
-      const mp = createMempalacePlugin({
+      return createMempalacePlugin({
         pythonPath,
         palacePath,
         entityLanguages: mempalace.entityLanguages,
         verbose: mempalace.verbose,
         installedVersion: provisioned.get("mempalace")?.version,
       });
-      const mpConfig = mempalace as unknown as Record<string, unknown>;
-      const loaded = registerPlugin(mp, mpConfig);
-      if (loaded) {
-        await initPluginWithTimeout(
-          loaded.plugin,
-          loaded.config,
-          30_000,
-          "MemPalace init",
-          "MemPalace init",
-        );
-      }
-    } catch (err) {
-      logError(
-        "plugin",
-        `MemPalace init: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    });
   }
 
   const mem0 = config.mem0;
   if (mem0?.enabled) {
-    try {
+    await loadBuiltin("mem0", mem0, 15_000, async () => {
       const { createMem0Plugin } = await import("../../plugins/mem0/index.js");
-      const m0 = createMem0Plugin({
+      return createMem0Plugin({
         apiKey: mem0.apiKey,
         host: mem0.host,
         userId: mem0.userId,
       });
-      const m0Config = mem0 as unknown as Record<string, unknown>;
-      const loaded = registerPlugin(m0, m0Config);
-      if (loaded) {
-        await initPluginWithTimeout(
-          loaded.plugin,
-          loaded.config,
-          15_000,
-          "mem0 init",
-          "mem0 init",
-        );
-      }
-    } catch (err) {
-      logError(
-        "plugin",
-        `mem0 init: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    });
   }
 
   const playwright = config.playwright;
   if (playwright?.enabled) {
-    try {
+    await loadBuiltin("Playwright", playwright, 15_000, async () => {
       const { createPlaywrightPlugin } =
         await import("../../plugins/playwright/index.js");
-      const pwConfig = playwright as unknown as Record<string, unknown>;
-      const pw = createPlaywrightPlugin({
+      return createPlaywrightPlugin({
         browser: playwright.browser,
         headless: playwright.headless,
         endpoint: playwright.endpoint,
         endpointFile: playwright.endpointFile,
       });
-      const loaded = registerPlugin(pw, pwConfig);
-      if (loaded) {
-        await initPluginWithTimeout(
-          loaded.plugin,
-          loaded.config,
-          15_000,
-          "Playwright init",
-          "Playwright init",
-        );
-      }
-    } catch (err) {
-      logError(
-        "plugin",
-        `Playwright init: ${err instanceof Error ? err.message : err}`,
-      );
-    }
+    });
   }
 }
 
@@ -217,9 +215,9 @@ export async function loadBuiltinPlugins(config: TalonConfig): Promise<void> {
  *
  * Throws on config parse/validation failure so the gateway can report an error.
  *
- * Does NOT restart the main process, Claude session, or bot connection. Active
- * conversations continue uninterrupted — new MCP servers spawn automatically
- * on the next tool call.
+ * Does NOT restart the main process, backend session, or bot connection.
+ * Active conversations continue uninterrupted — new MCP servers spawn
+ * automatically on the next tool call.
  */
 export async function reloadPlugins(
   activeFrontends?: string[],
@@ -229,30 +227,22 @@ export async function reloadPlugins(
   const { loadConfig, getFrontends } = await import("../config/index.js");
   const config = loadConfig();
 
-  // Derive frontends from config if not explicitly provided
   const frontends = activeFrontends ?? getFrontends(config);
 
-  // Bump reload timestamp so every MCP subprocess env differs from the previous
-  // load — the Claude SDK will see a changed env and spawn fresh subprocesses,
-  // picking up any source-file changes without a full Talon restart.
+  // New cache-bust key: the re-import below must load edited plugin source.
   reloadState.lastReloadAt = new Date().toISOString();
 
-  // Config is valid — safe to destroy current plugins now
   log("plugin", "Hot-reload: destroying current plugins...");
   await registry.destroyAndClear();
 
-  // Re-load external plugins
   if (config.plugins.length > 0) {
     await loadPlugins(config.plugins, frontends);
   }
-
-  // Re-load built-in plugins using shared helper
   await loadBuiltinPlugins(config);
 
   // Retire the hub's MCP children: the next tool call (any chat) spawns
   // fresh processes from the reloaded registry, while in-flight calls
-  // drain on the old ones (stdio-era behaviour was per-turn respawn via
-  // the TALON_RELOAD_AT env bump; the hub owns lifecycles directly).
+  // drain on the old ones.
   const { reloadHubChildren } = await import("../mcp-hub/index.js");
   reloadHubChildren();
 

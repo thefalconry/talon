@@ -22,54 +22,171 @@ import {
 } from "node:http";
 import { createServer as createTlsServer } from "node:https";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, type ReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { log, logError, logDebug, logWarn } from "../../../util/log.js";
-import { formatFingerprint, type BridgeTlsIdentity } from "./tls.js";
-import { contentTypeFor } from "../media/media.js";
+import {
+  raiseAlert,
+  resolveAlert,
+} from "../../../core/frontend-runtime/alerts.js";
+import { errorText } from "../../health/outage.js";
+import {
+  certificateSpkiPin,
+  formatFingerprint,
+  isLoopbackHost,
+  type BridgeTlsIdentity,
+} from "./tls.js";
+import { checkBridgeTokenStrength } from "./auth.js";
+import { AuthGuard, type AuthGuardPolicy } from "./auth-guard.js";
+import { clientAddress } from "./client-address.js";
+import { basename } from "node:path";
+import { contentTypeFor, safeUploadName } from "../media/media.js";
 import { type BridgeEvent } from "../protocol.js";
 import { buildRoutes } from "./routes/index.js";
 import type { BridgeServerHandlers, RouteHost } from "./routes/host.js";
+import type { AdvertisedEndpoints } from "../../../core/mesh/links/endpoints.js";
 import {
   BRIDGE_ROUTE_AUTH,
+  QUERY_TOKEN_ROUTES,
   type AuthState,
   type BridgeRouteKey,
   type RouteContext,
   type RouteHandler,
 } from "./routes/table.js";
+import {
+  describeTier,
+  hasScope,
+  presentedCredentialId,
+  resolvePrincipal,
+  routeAllows,
+  type BridgeCredentials,
+  type BridgePrincipal,
+} from "./credentials/principal.js";
 
 export type { BridgeServerHandlers, SendOptions } from "./routes/host.js";
 export { BRIDGE_ROUTE_AUTH, type BridgeRouteKey } from "./routes/table.js";
+export type { BridgeCredentials } from "./credentials/principal.js";
+
+/**
+ * Where `sendToDevice` put a frame: on a stream the device itself claimed,
+ * on the unclaimed legacy fallback, or nowhere (the device is between
+ * streams — reconnecting, or this process just started).
+ */
+export type DeviceDelivery = "claimed" | "fallback" | "none";
+
+/**
+ * Cap on the device ids remembered as "has claimed a stream". Ids come
+ * from authenticated clients only; the cap just keeps a misbehaving one
+ * from growing the set without bound. Past it, new ids fall back to the
+ * legacy delivery rule.
+ */
+const MAX_REMEMBERED_CLAIMERS = 1_024;
+
+/** One live SSE connection: the device it claimed and who opened it. */
+type StreamSession = {
+  deviceId: string | undefined;
+  principal: BridgePrincipal;
+};
 
 const SSE_PING_MS = 25_000;
-const MAX_BODY_BYTES = 256 * 1024;
+/**
+ * Unsent bytes a stream may hold before it counts as dead. A client that
+ * stops reading without closing (phone asleep, network switch) otherwise
+ * buffers every broadcast in memory until TCP gives up on it, minutes later.
+ * Far past anything a live client falls behind by; evicted, it reconnects
+ * and gets a fresh `hello`.
+ */
+const SSE_MAX_BACKLOG_BYTES = 16 * 1024 * 1024;
+// Device command results ride this route, and a `computer` screenshot is up
+// to 300 KB of JPEG, i.e. ~400 KB once base64'd into JSON. At 256 KB a busy
+// screen's result was rejected and the daemon timed out waiting for it.
+export const MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Routes a page served by the bridge itself posts a plain HTML form to
+ * (the secret drop). A browser stamps that POST with the bridge's own
+ * origin, which is no cross-site request — so these, and only these,
+ * accept it without `native.allowedOrigins`. Every other route still
+ * refuses any Origin not configured, same-origin included: a page under
+ * /media is the bridge's origin too.
+ */
+const SAME_ORIGIN_FORM_ROUTES: ReadonlySet<string> = new Set(["POST /secret"]);
+
+/** `host[:port]` of an Origin header, or undefined when it doesn't parse. */
+function originHost(origin: string): string | undefined {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return undefined;
+  }
+}
 const PORT_FALLBACKS = 5;
 
-// Failed-auth lockout: after this many wrong tokens from one address inside
-// the window, that address gets 429s until the window lapses. The token's
-// 256 bits make brute force hopeless anyway — this is about not letting an
-// internet-facing bridge be hammered for free (and giving fail2ban-style
-// tooling a clean signal in the log). Only *presented-and-wrong* secrets
-// count: tokenless probes are just scanners finding a locked door.
-const AUTH_LOCKOUT_MAX_FAILURES = 20;
-const AUTH_LOCKOUT_WINDOW_MS = 15 * 60 * 1000;
-/** Hard cap on tracked addresses so the map can't become a memory lever. */
-const AUTH_LOCKOUT_MAX_TRACKED = 10_000;
+/**
+ * Server-level socket deadlines (slow-loris resistance). Node applies
+ * `requestTimeout` only until the request has been fully RECEIVED, so the
+ * long-lived SSE stream (a bodyless GET) and file downloads (response
+ * bodies) are unaffected. It does bound request bodies, and every
+ * body-reading route sits behind the bearer check (an unauthenticated
+ * request is answered 401/429 with `Connection: close` before its body is
+ * read) — the one pre-auth exception, `POST /secret`, reads a body only
+ * for a live single-use grant and caps it at 200 KB — so the budget is sized for the largest authenticated upload
+ * (512 MB) on a slow link, not for an attacker.
+ */
+export type BridgeTimeouts = {
+  /** Whole header block must arrive within this. Node default: 60s. */
+  headersMs: number;
+  /** Whole request (headers + body) must arrive within this. Node: 300s. */
+  requestMs: number;
+  /** Idle keep-alive sockets are closed after this. */
+  keepAliveMs: number;
+  /** How often Node sweeps for expired header/request deadlines. */
+  checkIntervalMs: number;
+};
+
+export const DEFAULT_BRIDGE_TIMEOUTS: BridgeTimeouts = {
+  headersMs: 20_000,
+  requestMs: 30 * 60_000,
+  keepAliveMs: 5_000,
+  checkIntervalMs: 30_000,
+};
+
+/**
+ * `pipe` never closes its source when the destination goes away, so a
+ * client that hangs up mid-download (app backgrounded, image scrolled
+ * away) would leave the paused read stream holding its fd forever.
+ */
+function releaseOnClose(res: ServerResponse, stream: ReadStream): void {
+  res.once("close", () => stream.destroy());
+}
 
 export class BridgeServer {
   private server: Server | null = null;
   /**
    * Live SSE connections → the mesh device id each one claimed on connect
    * (undefined for clients that didn't claim one: desktop UIs, and companion
-   * builds from before the claim existed). The claim is what makes
-   * `sendToDevice` addressable rather than a shout.
+   * builds from before the claim existed) and the principal that opened it.
+   * The claim is what makes `sendToDevice` addressable rather than a shout;
+   * the principal is what lets a revocation find and drop the session.
    */
-  private clients = new Map<ServerResponse, string | undefined>();
+  private clients = new Map<ServerResponse, StreamSession>();
+  /**
+   * Device ids that have claimed a stream since this server started. Such a
+   * device is addressable, so while it is between streams its traffic is
+   * held for it (see `sendToDevice`) instead of falling back to unclaimed
+   * clients.
+   */
+  private readonly claimers = new Set<string>();
+  /** Told whenever a stream claiming a device opens (the command hold). */
+  private readonly deviceStreamListeners = new Set<
+    (deviceId: string) => void
+  >();
+  private unsubscribeRevocations: (() => void) | undefined;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private port = 0;
   private tlsIdentity: BridgeTlsIdentity | null = null;
-  /** Wrong-token counts per remote address (behind a proxy: per proxy). */
-  private authFailures = new Map<string, { count: number; resetAt: number }>();
+  /** Backoff, lockout and the global failure budget for wrong tokens. */
+  private readonly authGuard: AuthGuard;
   /** `METHOD /path` → handler; a Map so lookups only ever hit own entries. */
   private readonly routes: ReadonlyMap<BridgeRouteKey, RouteHandler>;
 
@@ -88,9 +205,35 @@ export class BridgeServer {
        * I/O — it resolves once, inside `start()`.
        */
       tls?: () => Promise<BridgeTlsIdentity>;
+      /**
+       * Per-device credentials (core/mesh/credentials) and the migration
+       * policy. Absent: the shared `token` is the only credential, as
+       * before.
+       */
+      credentials?: BridgeCredentials;
+      /** `native.allowWeakToken`: start on a public bind despite a weak token. */
+      allowWeakToken?: boolean;
+      /** Operator alert for security events (the global auth cooldown). */
+      onSecurityAlert?: (message: string) => void;
+      /**
+       * `native.sseMaxLifetimeMs`: end each event stream after this long
+       * (±10% jitter) so clients re-authenticate. Unset = never.
+       */
+      sseMaxLifetimeMs?: number;
+      /**
+       * `native.endpoints`, resolved: the other ways devices can reach this
+       * bridge, sent in every device's register reply. Absent = no field.
+       */
+      endpoints?: AdvertisedEndpoints;
+      /** Overrides for tests; production uses the defaults. */
+      authPolicy?: Partial<AuthGuardPolicy>;
+      timeouts?: Partial<BridgeTimeouts>;
     },
     private readonly handlers: BridgeServerHandlers,
   ) {
+    this.authGuard = new AuthGuard(opts.authPolicy, {
+      onAlert: opts.onSecurityAlert,
+    });
     this.routes = new Map(
       Object.entries(buildRoutes(this.routeHost())) as [
         BridgeRouteKey,
@@ -113,10 +256,56 @@ export class BridgeServer {
     return this.tlsIdentity?.fingerprint ?? null;
   }
 
-  /** Push an event to every connected SSE client. */
+  /** The served key's SPKI pin (base64 SHA-256), or null over HTTP. */
+  getSpkiPin(): string | null {
+    return this.tlsIdentity
+      ? certificateSpkiPin(this.tlsIdentity.certPem)
+      : null;
+  }
+
+  /**
+   * Push an event to every connected SSE client that may see it. Chat
+   * traffic is for `client`-scoped sessions only; a device-only credential
+   * hears the mesh-wide `locate` and nothing else.
+   */
   broadcast(event: BridgeEvent): void {
     if (this.clients.size === 0) return;
-    this.write(this.clients.keys(), event);
+    const targets: ServerResponse[] = [];
+    for (const [res, session] of this.clients) {
+      if (event.kind === "locate" || hasScope(session.principal, "client")) {
+        targets.push(res);
+      }
+    }
+    this.write(targets, event);
+  }
+
+  /**
+   * End every live stream opened with one of `credentialIds` — revocation
+   * (and a scope change) must bite now, not at the client's next request.
+   */
+  dropCredentialSessions(credentialIds: readonly string[]): number {
+    let dropped = 0;
+    for (const [res, { principal }] of this.clients) {
+      if (
+        principal.kind === "device" &&
+        credentialIds.includes(principal.credentialId)
+      ) {
+        this.clients.delete(res);
+        try {
+          res.end();
+        } catch {
+          /* already gone */
+        }
+        dropped++;
+      }
+    }
+    if (dropped > 0) {
+      log(
+        "native",
+        `Dropped ${dropped} live session(s) of revoked/changed credential(s) ${credentialIds.join(", ")}`,
+      );
+    }
+    return dropped;
   }
 
   /**
@@ -125,52 +314,125 @@ export class BridgeServer {
    *
    * Device commands are not public: their params carry one-time transfer
    * tokens, exec command lines, remote paths, and — on the chunked fallback —
-   * whole base64 file bodies. Broadcasting them handed every connected client
-   * another device's secrets and relied on each client discarding what wasn't
-   * addressed to it, which is courtesy, not enforcement.
+   * whole base64 file bodies. Broadcasting them would hand every connected
+   * client another device's secrets and rely on each client discarding what
+   * isn't addressed to it, which is courtesy, not enforcement.
    *
    * A claim is an ADDRESS, not a credential: any client holding the bridge
    * token could claim any id, and the bridge token is (still) the only trust
-   * boundary here. What this buys is that a device no longer passively
-   * receives traffic meant for its peers.
+   * boundary here. What this buys is that a device does not passively
+   * receive traffic meant for its peers.
    *
    * Clients that claimed nothing are the fallback audience, and only when the
    * target claimed nothing either: a companion build that predates the claim
    * can't be addressed, and dropping its commands would take the mesh offline
    * for it. So an updated device's traffic never reaches them — the fallback
-   * shrinks to nothing as the fleet updates.
+   * shrinks to nothing as the fleet updates. Only shared-token sessions are
+   * in that fallback: a per-device credential is its own device or nobody.
+   *
+   * With per-device credentials the claim IS enforced: a credential can
+   * only claim the device it is bound to (credentials/claims.ts).
+   *
+   * A device that has claimed a stream before — or signs in with its own
+   * per-device credential (`claimsItsStreams`) — is never handed to the
+   * fallback: when it has no stream right now it is reconnecting, and the
+   * caller should hold the frame until `onDeviceStream` reports it back.
+   * The return value says which of the three happened.
    */
-  sendToDevice(deviceId: string, event: BridgeEvent): void {
-    if (this.clients.size === 0) return;
+  sendToDevice(deviceId: string, event: BridgeEvent): DeviceDelivery {
     const claimed: ServerResponse[] = [];
     const unclaimed: ServerResponse[] = [];
-    for (const [res, id] of this.clients) {
+    for (const [res, { deviceId: id, principal }] of this.clients) {
       if (id === deviceId) claimed.push(res);
-      else if (id === undefined) unclaimed.push(res);
+      else if (id === undefined && principal.kind !== "device") {
+        unclaimed.push(res);
+      }
     }
-    if (claimed.length === 0) {
+    if (claimed.length > 0) {
+      this.write(claimed, event);
+      return "claimed";
+    }
+    if (unclaimed.length === 0 || this.claimsItsStreams(deviceId)) {
       logDebug(
         "native",
-        `No SSE client claims device ${deviceId} — delivering to ${unclaimed.length} unclaimed client(s)`,
+        `bridge.device_send device=${deviceId} result=no_stream`,
       );
+      return "none";
     }
-    this.write(claimed.length > 0 ? claimed : unclaimed, event);
+    logDebug(
+      "native",
+      `No SSE client claims device ${deviceId} — delivering to ${unclaimed.length} unclaimed client(s)`,
+    );
+    this.write(unclaimed, event);
+    return "fallback";
+  }
+
+  /**
+   * Whether `deviceId` addresses its own streams, so having none right now
+   * means it is reconnecting: it has claimed one since this server started,
+   * or it has authenticated with its own per-device credential, which binds
+   * every stream it opens to its id (credentials/claims.ts). The second
+   * matters after a daemon restart, when `claimers` starts empty and the
+   * first client back may well be an unclaimed one (the desktop app, the
+   * CLI).
+   */
+  private claimsItsStreams(deviceId: string): boolean {
+    if (this.claimers.has(deviceId)) return true;
+    const live = this.opts.credentials?.authority.activeFor(deviceId) ?? [];
+    return live.some((credential) => credential.lastUsedAt !== undefined);
+  }
+
+  /**
+   * Subscribe to "a stream claiming `deviceId` just opened". Fires after
+   * the stream is addressable, so a listener may `sendToDevice` at once.
+   * Returns an unsubscribe.
+   */
+  onDeviceStream(listener: (deviceId: string) => void): () => void {
+    this.deviceStreamListeners.add(listener);
+    return () => this.deviceStreamListeners.delete(listener);
+  }
+
+  private notifyDeviceStream(deviceId: string): void {
+    for (const listener of Array.from(this.deviceStreamListeners)) {
+      try {
+        listener(deviceId);
+      } catch (err) {
+        logError("native", "Device stream listener threw", err);
+      }
+    }
   }
 
   private write(targets: Iterable<ServerResponse>, event: BridgeEvent): void {
     const payload = `data: ${JSON.stringify(event)}\n\n`;
-    for (const res of targets) {
-      try {
-        res.write(payload);
-      } catch {
-        // Write on a half-closed socket — the 'close' handler will evict it.
-      }
+    for (const res of targets) this.send(res, payload);
+  }
+
+  /** Write one frame to a stream, evicting it if its backlog never drains. */
+  private send(res: ServerResponse, frame: string): void {
+    if (res.writableLength > SSE_MAX_BACKLOG_BYTES) {
+      this.clients.delete(res);
+      logWarn(
+        "native",
+        `Dropped an SSE client that stopped reading (${res.writableLength} bytes unsent)`,
+      );
+      res.destroy();
+      return;
+    }
+    try {
+      res.write(frame);
+    } catch {
+      // Write on a half-closed socket — the 'close' handler will evict it.
     }
   }
 
   async start(): Promise<number> {
     if (this.server) return this.port;
-    this.tlsIdentity = this.opts.tls ? await this.opts.tls() : null;
+    checkBridgeTokenStrength({
+      token: this.opts.token,
+      loopback: isLoopbackHost(this.opts.host),
+      allowWeakToken: this.opts.allowWeakToken,
+    });
+    this.tlsIdentity = this.opts.tls ? await this.loadTls(this.opts.tls) : null;
     const onRequest = (req: IncomingMessage, res: ServerResponse): void => {
       this.handle(req, res).catch((err) => {
         logError("native", "Bridge request handler threw", err);
@@ -182,34 +444,89 @@ export class BridgeServer {
     };
     // https.Server extends http.Server's request/lifecycle surface — one
     // `Server`-typed field serves both transports.
+    const t = { ...DEFAULT_BRIDGE_TIMEOUTS, ...this.opts.timeouts };
+    const serverOpts = {
+      headersTimeout: t.headersMs,
+      requestTimeout: t.requestMs,
+      keepAliveTimeout: t.keepAliveMs,
+      connectionsCheckingInterval: t.checkIntervalMs,
+    };
     const server: Server = this.tlsIdentity
       ? createTlsServer(
-          { key: this.tlsIdentity.keyPem, cert: this.tlsIdentity.certPem },
+          {
+            ...serverOpts,
+            key: this.tlsIdentity.keyPem,
+            cert: this.tlsIdentity.certPem,
+          },
           onRequest,
         )
-      : createServer(onRequest);
+      : createServer(serverOpts, onRequest);
 
     this.pingTimer = setInterval(() => {
-      for (const res of this.clients.keys()) {
-        try {
-          res.write(": ping\n\n");
-        } catch {
-          /* evicted on close */
-        }
-      }
+      for (const res of this.clients.keys()) this.send(res, ": ping\n\n");
     }, SSE_PING_MS);
     this.pingTimer.unref?.();
+    this.unsubscribeRevocations = this.opts.credentials?.authority.onRevoked(
+      (ids) => this.dropCredentialSessions(ids),
+    );
 
+    return this.bind(server);
+  }
+
+  /**
+   * The TLS identity, or a thrown boot failure the operator hears about:
+   * without it no companion app can connect.
+   */
+  private async loadTls(
+    load: () => Promise<BridgeTlsIdentity>,
+  ): Promise<BridgeTlsIdentity> {
+    try {
+      const identity = await load();
+      resolveAlert(
+        "bridge.tls",
+        "The client bridge TLS certificate loads again.",
+      );
+      return identity;
+    } catch (err) {
+      logError("native", `bridge.tls.fail err=${errorText(err)}`, err);
+      raiseAlert(
+        "bridge.tls",
+        `The client bridge could not load its TLS certificate: ${errorText(err)}. Companion apps cannot connect.`,
+        { severity: "critical" },
+      );
+      throw err;
+    }
+  }
+
+  /**
+   * Listen on the configured port, stepping up to PORT_FALLBACKS ports past
+   * it when one is taken. A bind that fails for good raises `bridge.listen`
+   * — the frontend has no surface at all without it.
+   */
+  private bind(server: Server): Promise<number> {
     return new Promise<number>((resolve, reject) => {
       let attempt = 0;
       const tryPort = (p: number): void => {
         server.once("error", (err: NodeJS.ErrnoException) => {
           if (err.code === "EADDRINUSE" && attempt < PORT_FALLBACKS) {
             attempt++;
+            logWarn(
+              "native",
+              `bridge.listen port=${p} in use — trying port=${p + 1} attempt=${attempt}/${PORT_FALLBACKS}`,
+            );
             server.removeAllListeners("error");
             server.removeAllListeners("listening");
             tryPort(p + 1);
           } else {
+            logError(
+              "native",
+              `bridge.listen.fail host=${this.opts.host} port=${p} attempt=${attempt} err=${errorText(err)}`,
+            );
+            raiseAlert(
+              "bridge.listen",
+              `The client bridge could not listen on ${this.opts.host}:${p}: ${errorText(err)}. Companion apps cannot connect.`,
+              { severity: "critical" },
+            );
             reject(err);
           }
         });
@@ -237,6 +554,10 @@ export class BridgeServer {
               `Bridge certificate fingerprint ${formatFingerprint(this.tlsIdentity.fingerprint)}`,
             );
           }
+          resolveAlert(
+            "bridge.listen",
+            "The client bridge is listening again.",
+          );
           resolve(this.port);
         });
       };
@@ -244,10 +565,32 @@ export class BridgeServer {
     });
   }
 
-  async stop(): Promise<void> {
+  /**
+   * Close every stream and stop listening. Each stream is told why first
+   * (a `bye` frame): with `restart`, a successor is about to listen on the
+   * same address and clients should be back after `reconnectAfterMs`
+   * instead of whenever their backoff next fires.
+   */
+  async stop(
+    opts: { restart?: { reconnectAfterMs: number } } = {},
+  ): Promise<void> {
     clearInterval(this.pingTimer);
+    this.unsubscribeRevocations?.();
+    this.unsubscribeRevocations = undefined;
+    const bye: BridgeEvent = opts.restart
+      ? {
+          kind: "bye",
+          reason: "restart",
+          reconnectAfterMs: Math.max(
+            0,
+            Math.round(opts.restart.reconnectAfterMs),
+          ),
+        }
+      : { kind: "bye", reason: "shutdown" };
+    const frame = `data: ${JSON.stringify(bye)}\n\n`;
     for (const res of this.clients.keys()) {
       try {
+        res.write(frame);
         res.end();
       } catch {
         /* ignore */
@@ -279,7 +622,10 @@ export class BridgeServer {
     // slip the browser is asking for.
     const origin =
       typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-    const refusal = this.originGuard(req);
+    const refusal = this.originGuard(
+      req,
+      SAME_ORIGIN_FORM_ROUTES.has(`${method} ${path}`),
+    );
     if (refusal !== undefined) {
       res.writeHead(403, {
         ...this.corsHeaders(),
@@ -303,36 +649,43 @@ export class BridgeServer {
       return;
     }
 
-    const remote = req.socket.remoteAddress ?? "unknown";
-    if (this.authLockedOut(remote)) {
-      res.writeHead(429, {
-        ...this.jsonHeaders(),
-        "Retry-After": String(Math.ceil(AUTH_LOCKOUT_WINDOW_MS / 1000)),
-      });
-      res.end(
-        JSON.stringify({ ok: false, error: "Too many failed auth attempts" }),
-      );
-      return;
-    }
-
-    const auth = this.authState(req, url);
-    if (auth === "bad") this.recordAuthFailure(remote);
-    else if (auth === "ok") this.authFailures.delete(remote);
-
+    // Behind a same-host reverse proxy the socket peer is the proxy; the
+    // guard keys on the client it forwarded for (client-address.ts).
+    const remote = clientAddress(req);
     const key = `${method} ${path}` as BridgeRouteKey;
-    const route = this.routes.get(key);
-    const ctx: RouteContext = { req, res, url, auth };
+    const {
+      state: auth,
+      principal,
+      credentialId,
+    } = this.authState(req, url, QUERY_TOKEN_ROUTES.has(key));
+    const deviceCredential = principal?.kind === "device";
+    if (!(await this.admit(res, remote, auth, credentialId, deviceCredential)))
+      return;
 
-    if (route && BRIDGE_ROUTE_AUTH[key] === "public") {
+    const route = this.routes.get(key);
+    const ctx: RouteContext = { req, res, url, auth, principal };
+    const tier = route ? BRIDGE_ROUTE_AUTH[key] : undefined;
+
+    if (route && tier === "public") {
       await route(ctx);
       return;
     }
     // Unknown routes are 401 before they are 404: an unauthenticated caller
     // learns nothing about the route map.
-    if (auth !== "ok") {
-      return this.json(res, 401, { ok: false, error: "Unauthorized" });
+    if (auth !== "ok" || principal === null) {
+      return this.refuse(res, 401, "Unauthorized");
     }
-    if (!route) return this.json(res, 404, { ok: false, error: "Not found" });
+    if (!route || tier === undefined) {
+      return this.json(res, 404, { ok: false, error: "Not found" });
+    }
+    // Authenticated, but is this credential allowed HERE? The scope each
+    // route needs is declared in routes/table.ts.
+    if (!routeAllows(tier, principal)) {
+      return this.json(res, 403, {
+        ok: false,
+        error: `This credential lacks the ${describeTier(tier)} scope ${key} requires`,
+      });
+    }
 
     try {
       await route(ctx);
@@ -355,7 +708,10 @@ export class BridgeServer {
       corsHeaders: () => this.corsHeaders(),
       streamFile: (res, file) => this.streamFile(res, file),
       serveMedia: (res, id) => this.serveMedia(res, id),
-      openStream: (res, deviceId) => this.openStream(res, deviceId),
+      openStream: (res, deviceId, principal) =>
+        this.openStream(res, deviceId, principal),
+      credentials: this.opts.credentials,
+      endpoints: () => this.opts.endpoints,
       unknownProvision: (res) => this.unknownProvision(res),
     };
   }
@@ -379,6 +735,7 @@ export class BridgeServer {
     });
     const stream = createReadStream(file.path);
     stream.on("error", () => res.destroy());
+    releaseOnClose(res, stream);
     stream.pipe(res);
   }
 
@@ -393,10 +750,15 @@ export class BridgeServer {
       if (!info.isFile()) {
         return this.json(res, 404, { ok: false, error: "No such media" });
       }
+      const rawName =
+        this.handlers.mediaName?.(id) ??
+        basename(filePath).replace(/^\d+-[0-9a-z]+-/, "");
+      const filename = safeUploadName(rawName);
       res.writeHead(200, {
         ...this.corsHeaders(),
         "Content-Type": contentTypeFor(filePath),
         "Content-Length": String(info.size),
+        "Content-Disposition": `inline; filename="${filename}"`,
         "Cache-Control": "private, max-age=3600",
       });
       const stream = createReadStream(filePath);
@@ -404,13 +766,20 @@ export class BridgeServer {
         if (!res.headersSent) res.writeHead(500);
         res.end();
       });
+      releaseOnClose(res, stream);
       stream.pipe(res);
     } catch {
       return this.json(res, 404, { ok: false, error: "No such media" });
     }
   }
 
-  private openStream(res: ServerResponse, deviceId?: string): void {
+  private openStream(
+    res: ServerResponse,
+    deviceId: string | undefined,
+    principal: BridgePrincipal,
+  ): void {
+    // A device-only credential gets its own mesh traffic, not the chats.
+    const seesChats = hasScope(principal, "client");
     res.writeHead(200, {
       ...this.corsHeaders(),
       "Content-Type": "text/event-stream",
@@ -424,80 +793,165 @@ export class BridgeServer {
       `data: ${JSON.stringify({
         kind: "hello",
         status: this.handlers.status(),
-        chats: this.handlers.listChats(),
+        chats: seesChats ? this.handlers.listChats() : [],
       })}\n\n`,
     );
     // Replay any in-progress turn so a client that connected mid-turn (or
     // reconnected after a blip) sees the tool timeline immediately, not just
     // the tools that fire after it joined.
     try {
-      for (const event of this.handlers.liveTurnEvents()) {
+      for (const event of seesChats ? this.handlers.liveTurnEvents() : []) {
         res.write(`data: ${JSON.stringify(event)}\n\n`);
       }
     } catch (err) {
       logError("native", "Failed to replay live turn to new client", err);
     }
-    this.clients.set(res, deviceId);
+    this.clients.set(res, { deviceId, principal });
     logDebug(
       "native",
       `SSE client connected${deviceId ? ` as device ${deviceId}` : ""} (${this.clients.size} total)`,
     );
+    const lifetime = this.sseLifetimeTimer(res);
     res.on("close", () => {
+      clearTimeout(lifetime);
       this.clients.delete(res);
       logDebug("native", `SSE client left (${this.clients.size} total)`);
     });
+    if (deviceId !== undefined) {
+      if (this.claimers.size < MAX_REMEMBERED_CLAIMERS) {
+        this.claimers.add(deviceId);
+      }
+      this.notifyDeviceStream(deviceId);
+    }
+  }
+
+  /**
+   * Optional max lifetime for an event stream: ending it makes the client
+   * reconnect and present its token again. Off unless configured —
+   * clients do reconnect, but with their own backoff, and a device command
+   * sent in that gap is lost.
+   */
+  private sseLifetimeTimer(
+    res: ServerResponse,
+  ): ReturnType<typeof setTimeout> | undefined {
+    const max = this.opts.sseMaxLifetimeMs;
+    if (!max || max <= 0) return undefined;
+    // Jitter so a fleet that connected together doesn't reconnect together.
+    const ms = Math.round(max * (0.9 + Math.random() * 0.2));
+    const timer = setTimeout(() => {
+      logDebug("native", "bridge.sse event=max_lifetime reason=expired");
+      // Out of the fan-out before end(): a stream still flushing a backlog
+      // stays open until it drains, and a broadcast in that window is a
+      // write after end — an unhandled 'error' that takes the daemon down.
+      this.clients.delete(res);
+      res.end();
+    }, ms);
+    timer.unref?.();
+    return timer;
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
-  private authState(req: IncomingMessage, url: URL): AuthState {
-    if (!this.opts.token) return "ok";
+  /**
+   * Evaluate the presented credential. `queryToken` says whether this route
+   * also takes it as `?token=` (QUERY_TOKEN_ROUTES); elsewhere a query
+   * token is ignored, so the request reads as tokenless. A refused
+   * per-device credential reports the id it named, for the auth guard.
+   */
+  private authState(
+    req: IncomingMessage,
+    url: URL,
+    queryToken: boolean,
+  ): {
+    state: AuthState;
+    principal: BridgePrincipal | null;
+    credentialId: string | null;
+  } {
+    if (!this.opts.token) {
+      return { state: "ok", principal: { kind: "open" }, credentialId: null };
+    }
     const header = req.headers["authorization"];
     const fromHeader =
       typeof header === "string" && header.startsWith("Bearer ")
         ? header.slice("Bearer ".length)
         : null;
-    // EventSource can't set headers, so SSE clients pass ?token=… instead.
-    const candidate = fromHeader ?? url.searchParams.get("token");
-    if (candidate === null) return "anonymous";
-    return this.tokenMatches(candidate) ? "ok" : "bad";
+    const candidate =
+      fromHeader ?? (queryToken ? url.searchParams.get("token") : null);
+    if (candidate === null) {
+      return { state: "anonymous", principal: null, credentialId: null };
+    }
+    // The shared token or a per-device credential (credentials/principal.ts).
+    const principal = resolvePrincipal(
+      candidate,
+      req,
+      (c) => this.tokenMatches(c),
+      this.opts.credentials,
+    );
+    return principal
+      ? { state: "ok", principal, credentialId: null }
+      : {
+          state: "bad",
+          principal: null,
+          credentialId: presentedCredentialId(candidate),
+        };
   }
 
-  private authLockedOut(remote: string): boolean {
-    const entry = this.authFailures.get(remote);
-    if (!entry) return false;
-    if (Date.now() >= entry.resetAt) {
-      this.authFailures.delete(remote);
+  /**
+   * Apply the auth guard's verdict. Returns false once it has answered the
+   * request itself (429), true when routing should continue — after any
+   * backoff wait has elapsed.
+   */
+  private async admit(
+    res: ServerResponse,
+    remote: string,
+    auth: AuthState,
+    credentialId: string | null,
+    deviceCredential: boolean,
+  ): Promise<boolean> {
+    const verdict = this.authGuard.check(
+      remote,
+      auth,
+      credentialId,
+      deviceCredential,
+    );
+    if (verdict.kind === "reject") {
+      this.refuse(
+        res,
+        429,
+        verdict.reason === "lockout"
+          ? "Too many failed auth attempts"
+          : "Too many failed auth attempts; try again later",
+        verdict.retryAfterSec,
+      );
       return false;
     }
-    return entry.count >= AUTH_LOCKOUT_MAX_FAILURES;
+    if (verdict.kind === "delay" && !(await this.authGuard.hold(verdict.ms))) {
+      // Too many responses already held: refuse now rather than queue more.
+      this.refuse(res, 429, "Too many failed auth attempts", 1);
+      return false;
+    }
+    // The client may have hung up while we waited.
+    return !res.destroyed;
   }
 
-  private recordAuthFailure(remote: string): void {
-    const now = Date.now();
-    const entry = this.authFailures.get(remote);
-    if (!entry || now >= entry.resetAt) {
-      if (this.authFailures.size >= AUTH_LOCKOUT_MAX_TRACKED) {
-        for (const [ip, e] of this.authFailures) {
-          if (now >= e.resetAt) this.authFailures.delete(ip);
-        }
-        // Still saturated after pruning live entries — under that much churn
-        // dropping the newest attacker beats unbounded growth.
-        if (this.authFailures.size >= AUTH_LOCKOUT_MAX_TRACKED) return;
-      }
-      this.authFailures.set(remote, {
-        count: 1,
-        resetAt: now + AUTH_LOCKOUT_WINDOW_MS,
-      });
-      return;
-    }
-    entry.count++;
-    if (entry.count === AUTH_LOCKOUT_MAX_FAILURES) {
-      logWarn(
-        "native",
-        `Bridge auth lockout for ${remote} (${AUTH_LOCKOUT_MAX_FAILURES} wrong tokens in ${AUTH_LOCKOUT_WINDOW_MS / 60_000}m)`,
-      );
-    }
+  /**
+   * An auth refusal. `Connection: close` so an unauthenticated caller
+   * can't keep the socket, or dribble an unread request body into it.
+   */
+  private refuse(
+    res: ServerResponse,
+    code: 401 | 429,
+    error: string,
+    retryAfterSec?: number,
+  ): void {
+    res.writeHead(code, {
+      ...this.jsonHeaders(),
+      Connection: "close",
+      ...(retryAfterSec !== undefined
+        ? { "Retry-After": String(retryAfterSec) }
+        : {}),
+    });
+    res.end(JSON.stringify({ ok: false, error }));
   }
 
   /**
@@ -552,10 +1006,15 @@ export class BridgeServer {
    *
    * Returns an error string when the request must be refused.
    */
-  private originGuard(req: IncomingMessage): string | undefined {
+  private originGuard(
+    req: IncomingMessage,
+    sameOriginAllowed = false,
+  ): string | undefined {
     const origin = req.headers.origin;
     if (typeof origin === "string" && origin !== "" && origin !== "null") {
-      if (!this.isAllowedOrigin(origin)) {
+      const sameOrigin =
+        sameOriginAllowed && originHost(origin) === req.headers.host;
+      if (!sameOrigin && !this.isAllowedOrigin(origin)) {
         return `Origin ${origin} is not allowed. Add it to native.allowedOrigins to permit browser clients.`;
       }
     }

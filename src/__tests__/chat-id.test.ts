@@ -94,14 +94,14 @@ describe("isTerminalChatId", () => {
 
 describe("numericChatIdFor", () => {
   it("passes Telegram ids through as numbers, negative supergroups included", () => {
-    expect(numericChatIdFor("352042062")).toBe(352042062);
-    expect(numericChatIdFor("-1001426819337")).toBe(-1001426819337);
+    expect(numericChatIdFor("424242420")).toBe(424242420);
+    expect(numericChatIdFor("-1009876543210")).toBe(-1009876543210);
   });
 
   it("derives every other frontend's id the way that frontend does", () => {
     for (const id of [
       "d_1789500775292_df4e0n",
-      "wa_dm_353863715529",
+      "wa_dm_447700900103",
       "discord_1",
       "teams_chat_19:abc",
       "t_1",
@@ -116,13 +116,13 @@ describe("chatScope", () => {
     expect(chatScope("discord_guild_123_456")).toBe("group");
     expect(chatScope("discord_dm_123")).toBe("dm");
     expect(chatScope("wa_group_120363000@g.us")).toBe("group");
-    expect(chatScope("wa_dm_353863715529")).toBe("dm");
+    expect(chatScope("wa_dm_447700900103")).toBe("dm");
   });
 
   it("reads a Telegram id by sign — negative is a group/supergroup/channel", () => {
-    expect(chatScope("-1001426819337")).toBe("group");
+    expect(chatScope("-1009876543210")).toBe("group");
     expect(chatScope("-123456789")).toBe("group");
-    expect(chatScope("352042062")).toBe("dm");
+    expect(chatScope("424242420")).toBe("dm");
   });
 
   it("treats the local single-operator surfaces as DMs", () => {

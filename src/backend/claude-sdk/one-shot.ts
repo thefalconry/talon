@@ -17,11 +17,24 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { OneShotAgentParams, OneShotUsage } from "../../core/types.js";
 import { log, logWarn } from "../../util/log.js";
 import { ALLOWED_TOOLS_BACKGROUND } from "../../core/constants.js";
-import { EFFORT_MAP } from "./constants.js";
+import {
+  CLAUDE_RETENTION_SETTINGS,
+  EFFORT_MAP,
+  nativeSubagentDisallowedTools,
+} from "./constants.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  sdkEnvFor,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
 import { buildMcpServers, buildPluginMcpServers } from "./options.js";
 import { isBackgroundToolContext } from "../../core/agents/context.js";
 import { warnIfBelowCacheMinimum } from "../runtime/cache/cache-telemetry.js";
-import { emitAssistantText } from "../runtime/one-shot-hooks.js";
+import { emitAssistantText, emitSessionId } from "../runtime/one-shot-hooks.js";
+import {
+  isOtherLiveDaemon,
+  ownerFromEnviron,
+} from "../../core/daemon/pidfile.js";
 
 const DEFAULT_SUBPROCESS_KILL_GRACE_MS = 5 * 1000;
 
@@ -47,6 +60,12 @@ export type OneShotConfig = {
   claudeBinary?: string;
   /** MemPalace MCP config gate — only relevant for the dream context. */
   mempalace?: { pythonPath: string; palacePath: string };
+  /**
+   * Config `allowNativeSubagents`. Off (the default) adds Claude Code's own
+   * sub-agent tool to `disallowedTools` for every one-shot (heartbeat,
+   * dream, cron/query jobs, Talon sub-agents).
+   */
+  allowNativeSubagents?: boolean;
 };
 
 let oneShotConfig: OneShotConfig = {};
@@ -55,8 +74,16 @@ export function initClaudeOneShot(cfg: OneShotConfig): void {
   oneShotConfig = cfg;
 }
 
+function disallowedToolsOption(): { disallowedTools?: string[] } {
+  const disallowedTools = nativeSubagentDisallowedTools(
+    oneShotConfig.allowNativeSubagents,
+  );
+  return disallowedTools.length > 0 ? { disallowedTools } : {};
+}
+
 export async function runOneShotAgent(
   params: OneShotAgentParams,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
 ): Promise<OneShotUsage | void> {
   const {
     prompt,
@@ -68,6 +95,8 @@ export async function runOneShotAgent(
     abortController,
     appendLog,
     onAssistantText,
+    resumeSessionId,
+    onSessionId,
   } = params;
 
   // Reasoning effort is opt-in for background runs (config `heartbeatEffort`
@@ -79,24 +108,45 @@ export async function runOneShotAgent(
   const thinkingConfig = reasoningEffort
     ? EFFORT_MAP[reasoningEffort]
     : undefined;
+  // A sub-agent's private TMPDIR (and any other per-run vars) layered over
+  // the daemon's environment — the SDK replaces, not merges, `env` — with
+  // the account's CLAUDE_CONFIG_DIR on top.
+  const env = sdkEnvFor(account, params.env);
 
   const options = {
     model,
     systemPrompt,
     ...thinkingConfig,
     cwd: workspace,
+    ...(env ? { env } : {}),
     permissionMode: "bypassPermissions" as const,
     allowDangerouslySkipPermissions: true,
     abortController,
     ...(oneShotConfig.claudeBinary
       ? { pathToClaudeCodeExecutable: oneShotConfig.claudeBinary }
       : {}),
+    // Keep session transcripts: interrupted sub-agents resume from them.
+    settings: { ...CLAUDE_RETENTION_SETTINGS },
     mcpServers: assembleMcpServers(contextLabel),
     // Whitelist of SDK built-in tools for background contexts (heartbeat,
     // dream). Same as chat minus `Agent` — nested sub-agent dispatch from
     // inside an unattended pass complicates lifecycle tracking.
     tools: [...ALLOWED_TOOLS_BACKGROUND],
+    // And an explicit deny for Claude Code's own sub-agent tool, which the
+    // whitelist already omits: `disallowedTools` also blocks it when the
+    // harness would dispatch it internally.
+    ...disallowedToolsOption(),
+    // A sub-agent interrupted by a daemon restart continues its own SDK
+    // session: the transcript (brief, tool calls, results) is intact on disk
+    // and the prompt below is only the "you were interrupted" note.
+    ...(resumeSessionId ? { resume: resumeSessionId } : {}),
   };
+  if (resumeSessionId) {
+    log(
+      "agent",
+      `[${contextLabel}] Claude one-shot resuming session ${resumeSessionId}`,
+    );
+  }
 
   if (reasoningEffort && !thinkingConfig) {
     // `minimal` / `xhigh` are Codex-side vocabulary with no Claude
@@ -128,7 +178,16 @@ export async function runOneShotAgent(
   // The final `result` message carries the run's total token usage — the
   // settlement figure the task table records.
   let usage: OneShotUsage | undefined;
+  let sessionReported: string | undefined;
   for await (const msg of qi) {
+    // Every SDK message carries the session id; report it the first time it
+    // is seen (and again only if it ever changes — a resumed session can be
+    // forked to a new id).
+    const sid = (msg as { session_id?: unknown }).session_id;
+    if (typeof sid === "string" && sid && sid !== sessionReported) {
+      sessionReported = sid;
+      emitSessionId(onSessionId, sid);
+    }
     await formatAndAppendMessage(appendLog, msg, onAssistantText);
     if (msg.type === "result") {
       const u = msg.usage;
@@ -279,6 +338,37 @@ async function formatAndAppendMessage(
  * spawner (us) and contains the env vars Talon set when launching the SDK
  * subprocess via MCP launcher. SIGTERM with a short grace, then SIGKILL.
  */
+/**
+ * Decide whether a `/proc` entry is a run orphan this sweep may kill.
+ *
+ * Carrying the chat id is necessary but NOT sufficient. Every chat-scoped
+ * child Talon spawns inherits `TALON_CHAT_ID` — including trigger watchers
+ * (`core/background/triggers/spawn.ts` sets it alongside `TALON_TRIGGER_ID`)
+ * and their descendants, which are long-lived by design and belong to no run.
+ * Matching on the chat id alone made every orphan sweep kill that chat's
+ * triggers: the warden respawned them, the next sweep killed them again, and
+ * the only visible symptom was a trigger stuck in "errored" with no output.
+ *
+ * Three independent guards, because this function issues SIGKILL:
+ *  - refuse anything tagged `TALON_TRIGGER_ID` (a trigger, or its child);
+ *  - refuse anything spawned by another daemon that is still running
+ *    (see core/daemon/pidfile.ts). Its "orphans" are that daemon's live runs;
+ *  - require the argv to actually be the `claude` SDK binary, which is the
+ *    only thing this sweep was ever meant to reap.
+ */
+export function isEvictableOrphan(
+  envEntries: string[],
+  argv: string[],
+  target: string,
+): boolean {
+  if (!envEntries.includes(target)) return false;
+  if (envEntries.some((entry) => entry.startsWith("TALON_TRIGGER_ID="))) {
+    return false;
+  }
+  if (isOtherLiveDaemon(ownerFromEnviron(envEntries))) return false;
+  return argv.some((arg) => arg === "claude" || arg.endsWith("/claude"));
+}
+
 export async function evictOrphanSubprocesses(contextLabel: string): Promise<{
   found: number;
   termed: number;
@@ -306,12 +396,14 @@ export async function evictOrphanSubprocesses(contextLabel: string): Promise<{
     if (!Number.isInteger(pid) || pid === myPid) continue;
     try {
       const environRaw = await readFile(`/proc/${pid}/environ`, "utf-8");
+      const argvRaw = await readFile(`/proc/${pid}/cmdline`, "utf-8");
       // /proc/<pid>/environ is NUL-delimited. Split on \0 and match exact
       // entries — a raw .includes() can false-positive on other vars whose
       // value happens to contain the substring. Since this code can SIGKILL,
       // err on the side of strict matching. (Copilot review on #144.)
-      const envEntries = environRaw.split("\0");
-      if (envEntries.includes(target)) {
+      if (
+        isEvictableOrphan(environRaw.split("\0"), argvRaw.split("\0"), target)
+      ) {
         matched.push(pid);
       }
     } catch {

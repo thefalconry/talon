@@ -462,7 +462,10 @@ export function renderUsageMessage(
     if (entry.plan.resetsAvailable) {
       const n = entry.plan.resetsAvailable;
       const resets = `usage limit reset${n === 1 ? "" : "s"} available`;
-      lines.push(`  • You have ${fmt.bold(String(n))} ${resets}`);
+      const by = entry.plan.resetsExpireLabel
+        ? ` ${fmt.escape(`(use by ${entry.plan.resetsExpireLabel})`)}`
+        : "";
+      lines.push(`  • You have ${fmt.bold(String(n))} ${resets}${by}`);
     }
     for (const w of entry.plan.windows) {
       const reset = w.resetLabel ? ` reset ${w.resetLabel}` : "";

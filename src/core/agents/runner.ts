@@ -4,8 +4,8 @@
  *
  * The shape is the heartbeat / cron-job shape, because a sub-agent *is* one
  * of those: acquire a backend, resolve a model, open a run log, register a
- * task, and hand `runOneShotAgent` to `runIsolatedAgent` for the hard
- * timeout → abort → grace → eviction discipline. Nothing here is
+ * task, and hand `runOneShotAgent` to `runIsolatedAgent` for the (optional)
+ * hard timeout → abort → grace → eviction discipline. Nothing here is
  * backend-specific, which is the whole point: sub-agents work on Claude,
  * Codex, Kilo, OpenCode and any future backend with a background capability.
  *
@@ -24,17 +24,34 @@
  * `spawnAgent` returns as soon as the run is under way: the caller (a chat
  * turn or another agent) keeps working and hears back through the wake turn
  * or its mailbox.
+ *
+ *   - **Restarts are not deaths.** Every agent is mirrored to the `agents`
+ *     table (see the registry's `persist` hook). A daemon shutdown parks the
+ *     live ones (`interruptAgentsForRestart`) before it tears the backends
+ *     down, so the abort that follows is not recorded as a kill and the
+ *     parent is not told the agent died. On the next boot
+ *     `resumeAgentsAfterRestart` brings each one back under its original id:
+ *     on a backend that can resume (Claude SDK session, Codex thread) it
+ *     continues its own conversation with a short "you were interrupted"
+ *     note; elsewhere it is re-briefed with the tail of its previous run log.
  */
 
+import { readFile } from "node:fs/promises";
 import { dirs } from "../../util/paths.js";
 import { log, logError, logWarn } from "../../util/log.js";
 import {
   acquireBackendInstance,
   getBackendIdForChat,
+  getPoolConfig,
   isModelValidForBackend,
+  listAvailableBackends,
 } from "../engine/backend-controller/index.js";
 import {
   chooseBackend,
+  getBackendHeadroom,
+  type BackendHeadroom,
+  recordBackendRunFailure,
+  recordBackendRunSuccess,
   recordBackendRunUsage,
   taskClassForEffort,
 } from "../engine/backend-router/index.js";
@@ -52,6 +69,7 @@ import {
 import { openRunLog } from "../background/run-log.js";
 import { agentContextLabel } from "./context.js";
 import {
+  deliverMessage,
   deliverSettlement,
   initAgentDelivery,
   type AgentDeliveryDeps,
@@ -59,28 +77,53 @@ import {
 import {
   agentLogHeader,
   agentLogPath,
+  agentResumeLogHeader,
   buildAgentPrompt,
   buildAgentSystemPrompt,
+  buildRebriefPrompt,
+  buildResumePrompt,
+  buildStallPing,
+  buildStallWarning,
 } from "./prompt.js";
+import { closeTrail, openTrail, type RunTrail } from "./trail.js";
+import { startWatchdog, type WatchdogHandle } from "./watchdog.js";
+import * as agentsRepo from "../../storage/agents/repo.js";
+import type { PersistedAgent } from "../../storage/agents/repo.js";
 import { agentRegistry } from "./registry.js";
+import { closeScratch, openScratch, scratchEnv } from "./scratch.js";
 import type {
   AgentCaps,
   AgentParent,
   AgentRecord,
   AgentSpawnOutcome,
   AgentSpawnSpec,
+  AgentTrail,
 } from "./types.js";
 
-/** Defaults for `config.agents`, applied when the block is absent. */
+/**
+ * Defaults for `config.agents`, applied when the block is absent. No hard
+ * timeout: the no-progress watchdog ends a run that has gone quiet, and a
+ * run that is still working is left to finish.
+ */
 export const DEFAULT_AGENT_CAPS: AgentCaps = {
   maxConcurrent: 6,
   maxDepth: 2,
-  defaultTimeoutMs: 15 * 60 * 1000,
+  stallTimeoutMs: 15 * 60 * 1000,
+  minHeadroomPct: 25,
 };
 
-/** Floor and ceiling the tool boundary clamps a requested `timeout_s` into. */
+/** Floor the tool boundary clamps a requested `timeout_s` up to. */
 const MIN_TIMEOUT_MS = 30_000;
-const MAX_TIMEOUT_MS = 60 * 60 * 1000;
+
+/** Raised to abort a run the no-progress watchdog gave up on. */
+class AgentStalledError extends Error {
+  constructor(idleMs: number) {
+    super(
+      `stalled: no tool call or output for ${Math.round(idleMs / 60_000)} min`,
+    );
+    this.name = "AgentStalledError";
+  }
+}
 
 const capsHolder: { caps: AgentCaps } = { caps: DEFAULT_AGENT_CAPS };
 
@@ -94,7 +137,13 @@ export function initAgents(
     "agents",
     `Initialized — maxConcurrent=${capsHolder.caps.maxConcurrent} ` +
       `maxDepth=${capsHolder.caps.maxDepth} ` +
-      `timeout=${Math.round(capsHolder.caps.defaultTimeoutMs / 1000)}s`,
+      `timeout=${describeTimeout(capsHolder.caps.defaultTimeoutMs)} ` +
+      `ceiling=${describeTimeout(capsHolder.caps.maxTimeoutMs)} ` +
+      `stall=${describeTimeout(capsHolder.caps.stallTimeoutMs || undefined)} ` +
+      `minHeadroom=${capsHolder.caps.minHeadroomPct}%` +
+      (capsHolder.caps.allowedBackends?.length
+        ? ` allowedBackends=${capsHolder.caps.allowedBackends.join(",")}`
+        : ""),
   );
 }
 
@@ -103,14 +152,38 @@ export function getAgentCaps(): AgentCaps {
   return capsHolder.caps;
 }
 
+/** "15m" / "90s" / "none" — for logs and tool text. */
+export function describeTimeout(ms: number | undefined): string {
+  if (ms === undefined || !(ms > 0)) return "none";
+  return ms % 60_000 === 0 ? `${ms / 60_000}m` : `${Math.round(ms / 1000)}s`;
+}
+
 /**
- * Clamp a model-supplied timeout into the supported window, or fall back to
- * the configured default. Applied at the tool boundary — `spawnAgent` itself
- * honours whatever it is handed, so the runner has one rule and not two.
+ * The hard timeout a run gets: the requested one, else
+ * `agents.defaultTimeoutMs`, either capped by `agents.maxTimeoutMs`; with
+ * none of those set, `undefined` — no hard timeout. Applied by the runner,
+ * so a resumed run follows the same rule as a fresh one.
  */
-export function clampTimeout(requestedMs: number | undefined): number {
-  if (requestedMs === undefined) return capsHolder.caps.defaultTimeoutMs;
-  return Math.min(MAX_TIMEOUT_MS, Math.max(MIN_TIMEOUT_MS, requestedMs));
+function effectiveTimeout(requestedMs: number | undefined): number | undefined {
+  const { defaultTimeoutMs, maxTimeoutMs } = capsHolder.caps;
+  const base = requestedMs ?? defaultTimeoutMs;
+  if (base === undefined) return maxTimeoutMs;
+  return maxTimeoutMs !== undefined ? Math.min(maxTimeoutMs, base) : base;
+}
+
+/**
+ * The tool boundary's rule: a model-supplied timeout is floored at 30s,
+ * then resolved like any other (`effectiveTimeout`). Returns `undefined`
+ * for "no hard timeout".
+ */
+export function clampTimeout(
+  requestedMs: number | undefined,
+): number | undefined {
+  return effectiveTimeout(
+    requestedMs !== undefined && Number.isFinite(requestedMs)
+      ? Math.max(MIN_TIMEOUT_MS, requestedMs)
+      : undefined,
+  );
 }
 
 /** The backend an agent inherits when the caller didn't pick one. */
@@ -119,19 +192,39 @@ function inheritedBackendId(parent: AgentParent): string | null {
   return agentRegistry.get(parent.agentId)?.backendId ?? null;
 }
 
+/** Where a spawn lands: backend, the model it inherits, and why. */
+interface SpawnTarget {
+  readonly backendId: string | null;
+  /** The parent agent's model, inherited by an unpinned child. */
+  readonly inheritedModel?: string;
+  readonly routing?: string;
+  /** The router's reading of the chosen backend, when it took one. */
+  readonly headroom?: BackendHeadroom;
+}
+
 /**
  * Which backend this agent runs on, and why.
  *
  * An explicit backend (or model — a model id is backend-specific, so naming
- * one pins its backend) is honoured as written. With neither, the run is a
- * routing decision: sub-agents are isolated one-shots with no session to
- * keep warm, so they are the cheapest work to move onto whichever
- * subscription has room.
+ * one pins its backend) is honoured as written. A child of another agent
+ * with neither inherits its parent's backend *and* model: a tree of agents
+ * stays on the backend its root was put on, so a parent that chose (or was
+ * told to use) a backend does not see its children wander off to another
+ * subscription. A top-level spawn with neither is a routing decision:
+ * sub-agents are isolated one-shots with no session to keep warm, so they
+ * are the cheapest work to move onto whichever subscription has room.
  */
-async function resolveSpawnBackend(
-  spec: AgentSpawnSpec,
-): Promise<{ backendId: string | null; routing?: string }> {
+async function resolveSpawnBackend(spec: AgentSpawnSpec): Promise<SpawnTarget> {
   if (spec.backendId) return { backendId: spec.backendId };
+  if (spec.parent.kind === "agent" && !spec.model) {
+    const parent = agentRegistry.get(spec.parent.agentId);
+    if (parent) {
+      return {
+        backendId: parent.backendId,
+        ...(parent.model ? { inheritedModel: parent.model } : {}),
+      };
+    }
+  }
   const inherited = inheritedBackendId(spec.parent);
   if (!inherited) return { backendId: null };
   const taskClass = taskClassForEffort(spec.reasoningEffort);
@@ -148,10 +241,95 @@ async function resolveSpawnBackend(
         }
       : {}),
   });
+  // A routed pick outside the allowlist falls back to the inherited
+  // backend rather than refusing a spawn the caller never pinned.
+  if (
+    decision.routed &&
+    !isBackendAllowed(decision.backendId) &&
+    isBackendAllowed(inherited)
+  ) {
+    return { backendId: inherited };
+  }
   return {
     backendId: decision.backendId,
     ...(decision.routed ? { routing: decision.reason } : {}),
+    ...(decision.headroom?.id === decision.backendId
+      ? { headroom: decision.headroom }
+      : {}),
   };
+}
+
+/**
+ * The headroom reading for the backend a spawn will run on: the router's own
+ * when it took one for this backend, else a (cached) fresh read. Never
+ * throws — a failed read is "unmeasured", which the guard allows.
+ */
+async function spawnHeadroom(
+  backendId: string,
+  routed: BackendHeadroom | undefined,
+): Promise<BackendHeadroom | null> {
+  if (routed && routed.id === backendId) return routed;
+  try {
+    const config = getPoolConfig() ?? undefined;
+    const label =
+      listAvailableBackends(config).find(({ id }) => id === backendId)?.label ??
+      backendId;
+    return await getBackendHeadroom(backendId, label, config);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The headroom guard: a tool error when the target backend's measured
+ * headroom is under `agents.minHeadroomPct`, else null. Unmeasured backends
+ * (no plan API, no local budget) pass — there is nothing to judge them by.
+ * A backend flagged unavailable (rejected credentials, open run breaker)
+ * counts as measured at 0%.
+ *
+ * Deliberately applied after routing AND to pinned backends/models: a model
+ * that names `model: "opus"` on every spawn would otherwise walk straight
+ * past a router that already knows the plan is nearly spent.
+ */
+function headroomRefusal(
+  reading: BackendHeadroom | null,
+  minHeadroomPct: number,
+): string | null {
+  if (!(minHeadroomPct > 0) || !reading) return null;
+  if (reading.source === "none" && !reading.unavailable) return null;
+  if (reading.headroom * 100 >= minHeadroomPct) return null;
+  const pct = Math.round(reading.headroom * 100);
+  const window = reading.limiting;
+  const why = reading.unavailable
+    ? `unavailable: ${reading.unavailable}`
+    : window
+      ? `${window.label} ${Math.round(window.percent)}% used`
+      : "";
+  const reset = window?.resetsAt ? ` It resets at ${window.resetsAt}.` : "";
+  return (
+    `Refusing to spawn: backend "${reading.id}" has ${pct}% headroom left` +
+    (why ? ` (${why})` : "") +
+    `, below the ${minHeadroomPct}% floor (agents.minHeadroomPct).${reset} ` +
+    `A sub-agent started now is likely to hit the plan limit and return ` +
+    `nothing. Do the work yourself, pick a backend with room (plan_usage ` +
+    `shows them), wait for the reset, or pass force: true to spawn anyway.`
+  );
+}
+
+/** Whether `agents.allowedBackends` (when set) lets an agent run here. */
+function isBackendAllowed(backendId: string): boolean {
+  const allowed = capsHolder.caps.allowedBackends;
+  return !allowed || allowed.length === 0 || allowed.includes(backendId);
+}
+
+/** The tool error for a backend outside `agents.allowedBackends`. */
+function disallowedBackendError(backendId: string): string {
+  const allowed = capsHolder.caps.allowedBackends ?? [];
+  return (
+    `Backend "${backendId}" is not allowed for sub-agents ` +
+    `(agents.allowedBackends: ${allowed.join(", ")}). Pass one of those ` +
+    `as backend, or leave it unset to inherit.`
+  );
 }
 
 /** The chat a run's task belongs to, for `talon ps`. */
@@ -244,6 +422,21 @@ export async function spawnAgent(
         "Could not resolve a backend for this agent — pass one explicitly.",
     };
   }
+  if (!isBackendAllowed(backendId)) {
+    return { ok: false, error: disallowedBackendError(backendId) };
+  }
+  const minHeadroomPct = capsHolder.caps.minHeadroomPct;
+  if (!spec.force && minHeadroomPct > 0) {
+    const refusal = headroomRefusal(
+      await spawnHeadroom(backendId, routed.headroom),
+      minHeadroomPct,
+    );
+    if (refusal) {
+      log("agents", `spawn "${spec.label}" refused — ${refusal}`);
+      return { ok: false, error: refusal };
+    }
+  }
+  const model = spec.model ?? routed.inheritedModel;
 
   // Register first: the slot and the depth are claimed synchronously, so two
   // concurrent spawns can never both slip past maxConcurrent while awaiting
@@ -257,6 +450,10 @@ export async function spawnAgent(
       ...(spec.reasoningEffort
         ? { reasoningEffort: spec.reasoningEffort }
         : {}),
+      ...(spec.model ? { requestedModel: spec.model } : {}),
+      ...(spec.timeoutMs !== undefined ? { timeoutMs: spec.timeoutMs } : {}),
+      cwd: dirs.workspace,
+      ...(spec.preflight ? { preflight: true } : {}),
     },
     capsHolder.caps,
   );
@@ -274,7 +471,7 @@ export async function spawnAgent(
     };
   }
 
-  const resolved = await resolveRun(acquired.backend, backendId, spec.model);
+  const resolved = await resolveRun(acquired.backend, backendId, model);
   if (!resolved.ok) {
     agentRegistry.discard(record.id);
     await acquired.release();
@@ -293,6 +490,16 @@ export async function spawnAgent(
   };
 }
 
+/**
+ * How a restarted run picks up. `sessionId` set = continue that backend
+ * conversation; unset = a fresh conversation re-briefed with `prompt`.
+ */
+interface ResumePlan {
+  readonly prompt: string;
+  readonly sessionId?: string;
+  readonly interruptedAt: number;
+}
+
 /** Build the one-shot params for a run, wired to its log and text capture. */
 async function buildRunParams(
   record: AgentRecord,
@@ -300,20 +507,41 @@ async function buildRunParams(
   model: string,
   abortController: AbortController,
   capture: { last: string },
+  trail: RunTrail,
+  scratchDir: string | undefined,
+  resume?: ResumePlan,
 ): Promise<OneShotAgentParams> {
-  const appendLog = await openRunLog(
+  const writeLog = await openRunLog(
     agentLogPath(record.id),
-    agentLogHeader(record, model),
+    resume
+      ? agentResumeLogHeader(
+          record,
+          model,
+          resume.interruptedAt,
+          resume.sessionId,
+        )
+      : agentLogHeader(record, model),
   );
+  const id = record.id;
+  const appendLog = (text: string): Promise<void> => {
+    trail.onLog(text);
+    return writeLog(text);
+  };
   return {
-    prompt: buildAgentPrompt(record.brief),
+    prompt: resume
+      ? resume.prompt
+      : buildAgentPrompt(record.brief, {
+          preflight: spec.preflight === true,
+        }),
     systemPrompt: buildAgentSystemPrompt({
       agentId: record.id,
       label: record.label,
       parent: record.parent,
       depth: record.depth,
       maxDepth: capsHolder.caps.maxDepth,
+      ...(scratchDir ? { scratchDir } : {}),
     }),
+    ...(scratchDir ? { env: scratchEnv(scratchDir) } : {}),
     workspace: dirs.workspace,
     model,
     contextLabel: agentContextLabel(record.id),
@@ -322,7 +550,12 @@ async function buildRunParams(
     onAssistantText: (text) => {
       const trimmed = text.trim();
       if (trimmed) capture.last = trimmed;
+      trail.onAssistantText(text);
     },
+    // Persisted the moment the backend reports it, so a restart at any
+    // point after the first message can resume the conversation.
+    onSessionId: (sessionId) => agentRegistry.setSessionId(id, sessionId),
+    ...(resume?.sessionId ? { resumeSessionId: resume.sessionId } : {}),
     ...(spec.reasoningEffort ? { reasoningEffort: spec.reasoningEffort } : {}),
   };
 }
@@ -333,11 +566,13 @@ function settleSuccess(
   task: TaskHandle,
   lastText: string,
   usage: TaskUsage | undefined,
+  trail: AgentTrail,
 ): AgentRecord | null {
   if (agentRegistry.hasReported(id)) {
     task.succeed(usage);
     return agentRegistry.settle(id, {
       state: "done",
+      trail,
       ...(usage ? { usage } : {}),
     });
   }
@@ -346,6 +581,7 @@ function settleSuccess(
     return agentRegistry.settle(id, {
       state: "done",
       result: { summary: lastText },
+      trail,
       ...(usage ? { usage } : {}),
     });
   }
@@ -355,24 +591,82 @@ function settleSuccess(
   return agentRegistry.settle(id, {
     state: "failed",
     error,
+    trail,
     ...(usage ? { usage } : {}),
   });
 }
 
-/** Settle a run that threw: timeout, kill, or a genuine failure. */
+/**
+ * Settle a run that threw: timeout, stall, kill, or a genuine failure.
+ * `stalled` is the watchdog's own abort reason, checked first because a
+ * backend that honours the abort rejects with its own error.
+ */
 function settleFailure(
   id: string,
   task: TaskHandle,
   err: unknown,
+  trail: AgentTrail,
+  stalled?: AgentStalledError,
 ): AgentRecord | null {
   const state =
-    err instanceof IsolatedAgentTimeoutError
+    stalled || err instanceof IsolatedAgentTimeoutError
       ? "timed_out"
       : agentRegistry.killRequested(id)
         ? "killed"
         : "failed";
-  task.fail(err);
-  return agentRegistry.settle(id, { state, error: errText(err) });
+  task.fail(stalled ?? err);
+  return agentRegistry.settle(id, {
+    state,
+    error: errText(stalled ?? err),
+    trail,
+  });
+}
+
+/**
+ * Start the no-progress watchdog for one run (see `watchdog.ts`). Its kill
+ * aborts the run with an `AgentStalledError` recorded in `watch.stalled`,
+ * which the settle path reads to classify the run `timed_out`.
+ */
+function watchRun(
+  id: string,
+  trail: RunTrail,
+  abortController: AbortController,
+): { watch: { stalled?: AgentStalledError }; watchdog: WatchdogHandle } {
+  const watch: { stalled?: AgentStalledError } = {};
+  const watchdog = startWatchdog(capsHolder.caps.stallTimeoutMs, {
+    lastActivityAt: () => trail.lastActivityAt,
+    pingAgent: (idleMs) => {
+      agentRegistry.push(id, {
+        from: "watchdog",
+        text: buildStallPing(idleMs, capsHolder.caps.stallTimeoutMs),
+        at: Date.now(),
+      });
+      logWarn(
+        "agents",
+        `${id} quiet for ${Math.round(idleMs / 1000)}s — pinged`,
+      );
+    },
+    warnParent: (idleMs, killInMs) => {
+      const current = agentRegistry.get(id);
+      if (!current) return;
+      void deliverMessage(
+        current,
+        buildStallWarning(current, idleMs, killInMs),
+      ).catch((err: unknown) =>
+        logError("agents", `stall warning delivery failed for ${id}`, err),
+      );
+    },
+    kill: (idleMs) => {
+      watch.stalled = new AgentStalledError(idleMs);
+      logWarn("agents", `${id}: ${watch.stalled.message} — aborting`);
+      try {
+        abortController.abort(watch.stalled);
+      } catch {
+        /* the settle path below still runs */
+      }
+    },
+  });
+  return { watch, watchdog };
 }
 
 /**
@@ -385,13 +679,16 @@ async function runAgent(
   spec: AgentSpawnSpec,
   resolved: { model: string; background: BackgroundRunner },
   acquired: Awaited<ReturnType<typeof acquireBackendInstance>>,
+  resume?: ResumePlan,
 ): Promise<void> {
   const { model, background } = resolved;
   const { release } = acquired;
   const id = record.id;
   const abortController = new AbortController();
   const capture = { last: "" };
-  const timeoutMs = spec.timeoutMs ?? capsHolder.caps.defaultTimeoutMs;
+  const timeoutMs = effectiveTimeout(spec.timeoutMs);
+  const trail = openTrail(id);
+  const { watch, watchdog } = watchRun(id, trail, abortController);
 
   // Registered as queued, bound, then started — so a kill arriving in the
   // gap between the task existing and the abort handle being published still
@@ -409,14 +706,20 @@ async function runAgent(
 
   let settled: AgentRecord | null = null;
   try {
+    const scratchDir = await openScratch(id);
     const params = await buildRunParams(
       record,
       spec,
       model,
       abortController,
       capture,
+      trail,
+      scratchDir,
+      resume,
     );
-    if (abortController.signal.aborted) {
+    if (agentRegistry.isInterrupted(id)) {
+      settled = null;
+    } else if (abortController.signal.aborted) {
       // A kill that lands during startup — while the backend is being
       // acquired or the log opened — must not be lost. Handing an
       // already-aborted signal to a backend relies on it checking, and not
@@ -425,33 +728,77 @@ async function runAgent(
         id,
         task,
         new Error("aborted before the run started"),
+        trail.snapshot(),
       );
     } else {
       const usage = await runIsolatedAgent({
         background,
         params,
-        timeoutMs,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         logCategory: "agents",
         // Safe to sweep: the context label is unique to this agent, so no
         // other context's subprocesses share the tag.
         evictLabel: agentContextLabel(id),
       });
       recordBackendRunUsage(record.backendId, usage ?? undefined);
-      settled = settleSuccess(id, task, capture.last, usage ?? undefined);
+      // A backend may swallow the shutdown abort and return normally — the
+      // run still did not finish, so it must not settle as done/failed, and
+      // it says nothing about the backend's health either way.
+      if (agentRegistry.isInterrupted(id)) {
+        settled = null;
+      } else {
+        if (watch.stalled) {
+          // The backend swallowed the watchdog's abort and returned.
+          settled = settleFailure(
+            id,
+            task,
+            watch.stalled,
+            trail.snapshot(),
+            watch.stalled,
+          );
+        } else {
+          recordBackendRunSuccess(record.backendId);
+          settled = settleSuccess(
+            id,
+            task,
+            capture.last,
+            usage ?? undefined,
+            trail.snapshot(),
+          );
+        }
+      }
     }
   } catch (err) {
-    settled = settleFailure(id, task, err);
+    if (agentRegistry.isInterrupted(id)) {
+      settled = null;
+    } else {
+      if (!watch.stalled) recordBackendRunFailure(record.backendId, err);
+      settled = settleFailure(id, task, err, trail.snapshot(), watch.stalled);
+    }
   } finally {
+    watchdog.stop();
+    closeTrail(id);
     await release().catch((err: unknown) =>
       logError("agents", `failed to release backend for ${id}`, err),
     );
   }
 
+  if (agentRegistry.isInterrupted(id)) {
+    // Parked by a daemon shutdown: the persisted row stays `running` for
+    // the next boot to resume. No settlement, no delivery, no reaping — the
+    // parent is not told its agent died, because it didn't.
+    task.fail(new Error("interrupted by daemon shutdown — will resume"));
+    agentRegistry.releaseInterrupted(id);
+    log("agents", `${id} "${record.label}" interrupted by shutdown — parked`);
+    return;
+  }
   if (!settled) return;
+  // Removed on success; kept on failure for whoever picks the work up.
+  await closeScratch(id, settled.state);
   log(
     "agents",
     `${id} "${settled.label}" → ${settled.state} ` +
-      `(${settled.backendId}/${model}, ${timeoutMs}ms cap)`,
+      `(${settled.backendId}/${model}, timeout ${describeTimeout(timeoutMs)})`,
   );
   reapChildren(settled);
   await deliverSettlement(settled).catch((err: unknown) =>
@@ -486,11 +833,267 @@ export function killAgent(agentId: string): boolean {
 }
 
 /**
+ * Park every live agent for the next boot. Called FIRST in a graceful
+ * shutdown — before the frontends and the backend pool go down, since
+ * tearing a backend down aborts the runs on it and an unparked agent would
+ * record that abort as its death. Idempotent.
+ */
+export function interruptAgentsForRestart(): number {
+  const parked = agentRegistry.interruptAll();
+  if (parked > 0) {
+    log("agents", `Shutdown: parked ${parked} running agent(s) for resume`);
+  }
+  return parked;
+}
+
+/**
  * Abort every live agent — the shutdown lever, alongside heartbeat's and
- * cron's. Returns how many kills were requested.
+ * cron's. Agents are parked first (a no-op if the shutdown already did), so
+ * this abort ends the process's hold on them without ending the agents:
+ * the next boot resumes them. Returns how many aborts were requested.
  */
 export function shutdownAgents(): number {
+  interruptAgentsForRestart();
   const killed = agentRegistry.killAll();
   if (killed > 0) log("agents", `Shutdown: aborted ${killed} running agent(s)`);
   return killed;
+}
+
+// ── Resume after restart ─────────────────────────────────────────────────────
+
+/** A restart may resume one agent at most this many times. */
+export const MAX_AGENT_RESUMES = 3;
+/** An agent interrupted longer ago than this is not resumed. */
+const AGENT_RESUME_STALE_MS = 24 * 60 * 60 * 1000;
+/** A resumed run always gets at least this much wall-clock. */
+const AGENT_RESUME_MIN_TIMEOUT_MS = 10 * 60 * 1000;
+/** Settled rows are kept this long for inspection, then pruned at boot. */
+const SETTLED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** How much of the previous run log a re-briefed agent is shown. */
+const REBRIEF_LOG_TAIL_CHARS = 12_000;
+
+/** The last `max` characters of an agent's previous run log, if any. */
+async function previousLogTail(agentId: string, max: number): Promise<string> {
+  try {
+    const text = await readFile(agentLogPath(agentId), "utf-8");
+    return text.length > max ? `…${text.slice(text.length - max)}` : text;
+  } catch {
+    return "";
+  }
+}
+
+/** Settle a restored agent without running it, and tell its parent. */
+async function settleRestored(
+  record: AgentRecord,
+  patch: Parameters<typeof agentRegistry.settle>[1],
+): Promise<void> {
+  const settled = agentRegistry.settle(record.id, patch);
+  if (!settled) return;
+  await closeScratch(record.id, settled.state);
+  log(
+    "agents",
+    `${record.id} "${record.label}" → ${settled.state} (after restart)`,
+  );
+  reapChildren(settled);
+  await deliverSettlement(settled).catch((err: unknown) =>
+    logError("agents", `delivery failed for ${record.id}`, err),
+  );
+}
+
+/** Mark a row that cannot even be restored (its parent agent is gone). */
+function abandonRow(saved: PersistedAgent, error: string): void {
+  try {
+    agentsRepo.upsert({
+      ...saved,
+      state: "failed",
+      error,
+      endedAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    logError("agents", `could not mark ${saved.id} abandoned`, err);
+  }
+}
+
+/**
+ * Resolve the model a resumed run uses: the one it ran on, else the one it
+ * asked for, else the backend default — a model withdrawn across the
+ * restart must not strand the agent.
+ */
+async function resolveResumeRun(
+  backend: Backend,
+  backendId: string,
+  candidates: ReadonlyArray<string | undefined>,
+): Promise<Awaited<ReturnType<typeof resolveRun>>> {
+  let last: Awaited<ReturnType<typeof resolveRun>> = {
+    ok: false,
+    error: "no model",
+  };
+  const tried = new Set<string | undefined>();
+  for (const candidate of [...candidates, undefined]) {
+    if (tried.has(candidate)) continue;
+    tried.add(candidate);
+    last = await resolveRun(backend, backendId, candidate);
+    if (last.ok) return last;
+  }
+  return last;
+}
+
+/** Bring one interrupted agent back. Never throws. */
+async function resumeOne(saved: PersistedAgent, now: number): Promise<void> {
+  // A crash leaves no interruption stamp: charge the run up to its last
+  // persisted write, which is as close as anyone can know.
+  const interruptedAt = saved.interruptedAt ?? saved.updatedAt;
+  const elapsedMs =
+    saved.interruptedAt === undefined && saved.startedAt !== undefined
+      ? saved.elapsedMs + Math.max(0, saved.updatedAt - saved.startedAt)
+      : saved.elapsedMs;
+
+  // Already back (a second resume pass in the same process) — leave it be.
+  if (agentRegistry.isLive(saved.id)) return;
+  const record = agentRegistry.restore({ ...saved, elapsedMs, interruptedAt });
+  if (!record) {
+    abandonRow(
+      saved,
+      "interrupted by a daemon restart; its parent agent did not survive it",
+    );
+    logWarn("agents", `${saved.id}: parent gone after restart — abandoned`);
+    return;
+  }
+
+  if (saved.reported) {
+    // It finished its job (report_result landed) and was only waiting to
+    // wind down — deliver what it said instead of running it again.
+    await settleRestored(record, { state: "done" });
+    return;
+  }
+  if (saved.resumeCount >= MAX_AGENT_RESUMES) {
+    await settleRestored(record, {
+      state: "failed",
+      error:
+        `interrupted by ${saved.resumeCount + 1} daemon restarts; not ` +
+        `resumed again. Its run log is ${agentLogPath(saved.id)}.`,
+    });
+    return;
+  }
+  if (now - interruptedAt > AGENT_RESUME_STALE_MS) {
+    await settleRestored(record, {
+      state: "failed",
+      error:
+        `interrupted by a daemon restart at ${new Date(interruptedAt).toISOString()} ` +
+        `and the daemon was down too long to resume it. Its run log is ` +
+        `${agentLogPath(saved.id)}.`,
+    });
+    return;
+  }
+
+  const backendId = saved.backendId;
+  let acquired: Awaited<ReturnType<typeof acquireBackendInstance>>;
+  try {
+    acquired = await acquireBackendInstance(backendId);
+  } catch (err) {
+    await settleRestored(record, {
+      state: "failed",
+      error:
+        `interrupted by a daemon restart, and its backend "${backendId}" ` +
+        `is unavailable after it: ${errText(err)}`,
+    });
+    return;
+  }
+  const resolved = await resolveResumeRun(acquired.backend, backendId, [
+    saved.model,
+    saved.requestedModel,
+  ]);
+  if (!resolved.ok) {
+    await acquired.release().catch(() => {});
+    await settleRestored(record, {
+      state: "failed",
+      error: `interrupted by a daemon restart and could not resume: ${resolved.error}`,
+    });
+    return;
+  }
+
+  const canResume =
+    resolved.background.supportsResume === true &&
+    saved.sessionId !== undefined;
+  const minutes = Math.round(elapsedMs / 60_000);
+  const plan: ResumePlan = canResume
+    ? {
+        prompt: buildResumePrompt({ interruptedAt, elapsedMinutes: minutes }),
+        sessionId: saved.sessionId!,
+        interruptedAt,
+      }
+    : {
+        prompt: buildRebriefPrompt({
+          brief: saved.brief,
+          preflight: saved.preflight === true,
+          interruptedAt,
+          elapsedMinutes: minutes,
+          logPath: agentLogPath(saved.id),
+          logTail: await previousLogTail(saved.id, REBRIEF_LOG_TAIL_CHARS),
+        }),
+        interruptedAt,
+      };
+
+  // An uncapped run stays uncapped; a capped one gets what it had left.
+  const cap = effectiveTimeout(saved.timeoutMs);
+  const timeoutMs =
+    cap === undefined
+      ? undefined
+      : Math.max(AGENT_RESUME_MIN_TIMEOUT_MS, cap - elapsedMs);
+  const spec: AgentSpawnSpec = {
+    brief: saved.brief,
+    label: saved.label,
+    parent: record.parent,
+    backendId,
+    ...(saved.requestedModel ? { model: saved.requestedModel } : {}),
+    ...(record.reasoningEffort
+      ? { reasoningEffort: record.reasoningEffort }
+      : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(saved.preflight ? { preflight: true } : {}),
+  };
+  agentRegistry.markResumed(record.id);
+  log(
+    "agents",
+    `${record.id} "${record.label}" resuming after restart ` +
+      `(${canResume ? `session ${saved.sessionId}` : "re-briefed"}, ` +
+      `${backendId}/${resolved.model}, timeout ${describeTimeout(timeoutMs)}, ` +
+      `resume #${saved.resumeCount + 1})`,
+  );
+  void runAgent(record, spec, resolved, acquired, plan);
+}
+
+/**
+ * Boot-time: respawn every agent the previous process left running. Call
+ * once, after the dispatcher, backend pool and frontends are up (a resumed
+ * agent reaches its tools and its parent through them). Parents come back
+ * before their children, so a child re-attaches to its live parent.
+ * Returns how many rows were considered.
+ */
+export async function resumeAgentsAfterRestart(): Promise<number> {
+  const now = Date.now();
+  try {
+    const pruned = agentsRepo.pruneSettled(now - SETTLED_RETENTION_MS);
+    if (pruned > 0) log("agents", `Pruned ${pruned} settled agent row(s)`);
+  } catch (err) {
+    logError("agents", "prune of settled agent rows failed", err);
+  }
+  let rows: PersistedAgent[];
+  try {
+    rows = agentsRepo.listInterrupted();
+  } catch (err) {
+    logError("agents", "could not read interrupted agents", err);
+    return 0;
+  }
+  if (rows.length === 0) return 0;
+  log("agents", `Resuming ${rows.length} agent(s) interrupted by the restart`);
+  for (const saved of rows) {
+    try {
+      await resumeOne(saved, now);
+    } catch (err) {
+      logError("agents", `resume of ${saved.id} failed`, err);
+    }
+  }
+  return rows.length;
 }

@@ -35,6 +35,7 @@ import {
   snapshotDir,
 } from "../core/backup/store.js";
 import { resolveBackupSettings } from "../core/backup/plan.js";
+import type { BackupTarget } from "../core/backup/targets.js";
 
 const SETTINGS = resolveBackupSettings({ includePalace: false });
 const copyDatabase = (dest: string) =>
@@ -190,7 +191,7 @@ describe("restoreSnapshot", () => {
       "snapshot",
     );
     expect(existsSync(join(root, "data", "talon.db-wal"))).toBe(false);
-    // Traces are excluded from a snapshot, so a restore leaves them alone.
+    // Traces travel in the sessions part and come back with it.
     expect(
       readFileSync(join(root, "data", "traces", "chat.jsonl"), "utf8"),
     ).toBe("trace kept");
@@ -205,6 +206,31 @@ describe("restoreSnapshot", () => {
     expect(
       existsSync(join(snapshotDir(snapshot.id, root), "restore-staging")),
     ).toBe(false);
+  });
+
+  it("restores the palace from its own part", async () => {
+    const root = home();
+    mkdirSync(join(root, "workspace", "palace", "wing"), { recursive: true });
+    writeFileSync(join(root, "workspace", "palace", "wing", "a.json"), "room");
+    const snapshot = await buildSnapshot({
+      kind: "backup",
+      settings: resolveBackupSettings({ includePalace: true }),
+      home: root,
+      copyDatabase,
+    });
+    rmSync(join(root, "workspace", "palace"), { recursive: true });
+    const report = await restoreSnapshot({
+      id: snapshot.id,
+      settings: SETTINGS,
+      home: root,
+      skipCheckpoint: true,
+    });
+    // The palace is excluded from the state part; its own root must not
+    // be filtered by that rule on the way back in.
+    expect(
+      readFileSync(join(root, "workspace", "palace", "wing", "a.json"), "utf8"),
+    ).toBe("room");
+    expect(report.written["workspace/palace"]).toBe(1);
   });
 
   it("refuses an id it has never seen", async () => {
@@ -245,5 +271,63 @@ describe("restoreSnapshot", () => {
     expect(readFileSync(join(root, "data", "talon.db"), "utf8")).toContain(
       "snapshot",
     );
+  });
+});
+
+describe("restoring parts fetched from a target", () => {
+  /** A target whose only working call is `download`. */
+  function downloadingTarget(download: BackupTarget["download"]): BackupTarget {
+    const unused = () => Promise.reject(new Error("not used"));
+    return {
+      id: "drive",
+      name: "Drive",
+      ready: true,
+      upload: unused,
+      uploadManifest: unused,
+      list: unused,
+      remove: unused,
+      download,
+    };
+  }
+
+  it("refetches a part whose earlier download was cut short", async () => {
+    const root = home();
+    const manifest = await buildSnapshot({
+      kind: "backup",
+      settings: SETTINGS,
+      home: root,
+      copyDatabase,
+    });
+    const state = partPath(manifest.id, "state.tar.zst", root);
+    const bytes = readFileSync(state);
+    rmSync(state);
+    const restore = (target: BackupTarget) =>
+      restoreSnapshot({
+        id: manifest.id,
+        settings: SETTINGS,
+        home: root,
+        target,
+        skipCheckpoint: true,
+        allowUnauthenticated: true,
+      });
+
+    await expect(
+      restore(
+        downloadingTarget(async (_id, _part, dest) => {
+          writeFileSync(dest, bytes.subarray(0, bytes.length >> 1));
+          throw new Error("connection reset");
+        }),
+      ),
+    ).rejects.toThrow(/connection reset/);
+
+    writeFileSync(join(root, "workspace", "memory", "memory.md"), "drifted");
+    await restore(
+      downloadingTarget(async (_id, _part, dest) => {
+        writeFileSync(dest, bytes);
+      }),
+    );
+    expect(
+      readFileSync(join(root, "workspace", "memory", "memory.md"), "utf8"),
+    ).toBe("original memory");
   });
 });

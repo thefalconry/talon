@@ -9,8 +9,8 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Frontends](https://img.shields.io/badge/frontends-Telegram_%7C_WhatsApp_%7C_Discord_%7C_Teams_%7C_Terminal_%7C_App-25D366)](#frontends)
 [![Backends](https://img.shields.io/badge/backends-Claude_%7C_Kilo_%7C_OpenCode_%7C_Codex_%7C_Antigravity_%7C_OpenAI_Agents-D97706)](#backends)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/dylanneve1/talon/actions/workflows/ci.yml/badge.svg)](https://github.com/dylanneve1/talon/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![CI](https://github.com/thefalconry/talon/actions/workflows/ci.yml/badge.svg)](https://github.com/thefalconry/talon/actions/workflows/ci.yml)
 
 Multi-platform agentic AI harness. Runs on **Telegram**, **WhatsApp**, **Discord**, **Microsoft Teams**, the **Terminal**, and a **cross-platform Desktop/Mobile companion app** (Flutter), with a pluggable backend (**Claude Agent SDK**, **Kilo**, **OpenCode**, **Codex**, **Antigravity**, or **OpenAI Agents**) and full tool access through MCP.
 
@@ -39,7 +39,7 @@ Multi-platform agentic AI harness. Runs on **Telegram**, **WhatsApp**, **Discord
 ## Quick Start
 
 ```bash
-git clone https://github.com/dylanneve1/talon.git && cd talon
+git clone https://github.com/thefalconry/talon.git && cd talon
 npm install
 
 # Interactive setup (select frontend, configure tokens, pick model)
@@ -73,10 +73,13 @@ modules are embedded in the binary.
 
 ```bash
 # Homebrew (macOS / Linux)
-brew install dylanneve1/talon/talon
+brew install thefalconry/talon/talon
 
 # Debian / Ubuntu — download the .deb for your arch from the release, then:
 sudo apt install ./talon_<version>_amd64.deb     # or _arm64.deb
+
+# Fedora / RHEL — download the .rpm for your arch from the release, then:
+sudo dnf install ./talon-<version>-1.x86_64.rpm  # or .aarch64.rpm
 
 # Direct download — grab talon-<os>-<arch> from the release, verify, run:
 chmod +x talon-linux-x64 && ./talon-linux-x64 --version
@@ -85,7 +88,13 @@ xattr -d com.apple.quarantine ./talon-darwin-arm64
 ```
 
 Verify a direct download against the release `SHA256SUMS`:
-`sha256sum -c SHA256SUMS --ignore-missing`.
+`sha256sum -c SHA256SUMS --ignore-missing`, and its build provenance with
+`gh attestation verify talon-linux-x64 --repo thefalconry/talon` (see
+[SECURITY.md](SECURITY.md#verifying-a-release)).
+
+**Server only, no Telegram?** Run the daemon with just the client bridge,
+reached by the companion app and talon-node: see
+[docs/server-install.md](docs/server-install.md).
 
 > The binary runs the full interactive/agent CLI (`setup`, `start`, `chat`,
 > `doctor`, …) and supervises MCP children like any other install shape. The one
@@ -196,7 +205,7 @@ The WhatsApp frontend drives a real WhatsApp account over Baileys multi-device �
     // The bot account's own number, E.164 digits, no "+". Omit for QR pairing.
     "pairingNumber": "353871234567",
     // Who may DM it — bare numbers or full JIDs. Empty disables DMs.
-    "allowedJids": ["353834733284"],
+    "allowedJids": ["447700900102"],
     // Which groups it serves: "listed" | "with-allowed-user" | "all"
     "groupPolicy": "with-allowed-user",
     // In groups: reply only when mentioned/quoted, or to everything
@@ -249,6 +258,7 @@ The `native` frontend turns the daemon into a **client bridge** — a versioned 
 - **Local (desktop):** the app connects to a Talon on the same machine and launches one if needed (`TALON_FRONTEND_OVERRIDE=desktop`).
 - **Remote (mobile/LAN):** point the app at `host:port` + token; the bridge requires `Authorization: Bearer …` (or `?token=` on the SSE stream) whenever a token is set.
 - **Encryption:** off-loopback binds serve **HTTPS by default** with a persistent self-signed certificate (`~/.talon/keys/`); the companion pins its SHA-256 fingerprint on first connect and refuses any change afterwards. The daemon logs the fingerprint at startup and `/health` advertises it. Opt out (or in, on loopback) with `"tls": false` / `true` in the `native` section.
+- **From anywhere, certificate-only (Immich-style):** put your reverse proxy (Caddy, nginx, Traefik, Cloudflare Tunnel) in front with client-certificate auth; import the `.p12` in the companion, which also switches to your home-network address whenever it answers. Talon still authenticates with its token — see [docs/mtls.md](docs/mtls.md).
 
 The app **keeps itself up to date** — it watches this repo's releases and installs the next one itself (silently on a rooted/Shizuku phone, swap-and-relaunch on desktop; see [docs/companion-updates.md](docs/companion-updates.md)). It provides multi-chat history, live streaming with reasoning + tool-call visibility, per-chat model/effort/reset, and **settings sync** — read and change the daemon's own config (default model, display name, timezone, pulse/heartbeat/dream) and restart it. See [apps/companion/README.md](apps/companion/README.md).
 
@@ -264,6 +274,7 @@ daemon (plugins) or apply on the next session (skills):
 talon plugin install @scope/my-talon-plugin        # npm → module plugin
 talon plugin install some-mcp-server --mcp         # npm → standalone MCP server (npx)
 talon plugin install owner/repo                    # git → module plugin
+talon plugin install owner/repo#<sha>              # …at that commit (or --commit <sha>)
 talon plugin list                                  # built-ins + configured entries
 talon plugin disable github                        # also toggles built-ins
 talon plugin remove my-talon-plugin
@@ -277,7 +288,10 @@ talon skill remove pdf
 ```
 
 Module plugins install under `~/.talon/plugins/`; standalone MCP servers are
-registered as `npx` entries in `config.json`. Disabling keeps the entry (or a
+registered as `npx` entries in `config.json`. A git source can be pinned to a
+commit with `#<sha>` or `--commit <sha>` (7-64 hex digits): Talon checks that
+commit out and verifies HEAD before installing. Either way the install
+folder's `.talon-install.json` records the repo and the exact commit. Disabling keeps the entry (or a
 `.disabled` marker in the skill folder) so enabling restores it unchanged.
 
 ## Built-in Plugins
@@ -454,6 +468,8 @@ talon kill      Abort a killable task by id
 talon events    Tail the event bus (-f follows, --history [N] reads the journal)
 talon plugin    Manage plugins (install / enable / disable / remove)
 talon skill     Manage skills (install / enable / disable / remove)
+talon history   Chat history kept by Talon (show / hidden / purge — docs/chat-history.md)
+talon accounts  Claude accounts (list / add / remove / login — docs/claude-accounts.md)
 talon config    View or edit configuration
 talon logs      Tail structured log file
 talon doctor    Validate environment and dependencies
@@ -473,33 +489,66 @@ Config file: `~/.talon/config.json`
 | `model`                    | `"default"`  | Default model. Interpretation depends on the active backend.                                                            |
 | `agyBinary`                | ---          | Path to the Antigravity `agy` executable. `AGY_BINARY` overrides it. |
 | `codexApiKey`              | ---          | Codex-only OpenAI API key. Prefer this over `openaiApiKey` for Codex API-key auth. `codex login` takes precedence over shared `openaiApiKey`. |
+| `codexChatGptDefaultModel` | ---          | Model a ChatGPT-login Codex session falls back to when a model is rejected or none is set. Default: the Codex CLI's own default for the account (from `~/.codex/models_cache.json`). `TALON_CODEX_CHATGPT_MODEL` overrides it. |
 | `concurrency`              | `1`          | Max concurrent AI queries (1--20)                                                                                       |
 | `pulse`                    | `true`       | Periodic group engagement                                                                                               |
 | `heartbeat`                | `false`      | Background maintenance agent                                                                                            |
 | `heartbeatIntervalMinutes` | `60`         | Heartbeat interval                                                                                                      |
 | `heartbeatModel`           | ---          | Model for the heartbeat agent (falls back to `model`)                                                                   |
 | `heartbeatEffort`          | ---          | Reasoning effort for the heartbeat agent: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Unset = the model's own default |
+| `alerts`                   | on           | Operator alerts to the admin chat — full disk, crash, error spike, dead frontend — once per fault per cooldown, plus a recovery notice: `{ "enabled": true, "cooldownMinutes": 30 }`. Active alerts also show in `talon status` |
 | `router`                   | ---          | Plan-aware routing for background work: `{ "enabled": true, "ceilingPercent": 85 }`. Unpinned sub-agents, cron `query` jobs and heartbeats run on whichever backend has the most plan headroom, skipping any whose tightest window is at or above the ceiling. `enabled: false` restores inherit-the-caller's-backend ([Backends](docs/backends.md)) |
-| `backendBudgets`           | ---          | Soft token budgets for backends with no usage API, e.g. `{ "agy": { "tokensPer5h": 2000000, "tokensPerDay": 8000000 } }`. Talon's own rolling ledger is measured against these so such a backend still has a headroom signal — and it is what opts an idle backend into routing |
+| `backendBudgets`           | ---          | Soft token budgets for backends with no usage API, e.g. `{ "openai-agents": { "tokensPer5h": 2000000, "tokensPerDay": 8000000 } }`. Talon's own rolling ledger is measured against these so such a backend still has a headroom signal — and it is what opts an idle backend into routing. `agy` reports its real quota windows (via `agy -p /usage`); a budget there is only a fallback for when that read fails |
 | `dreamModel`               | ---          | Model for dream / memory consolidation (falls back to `model`)                                                          |
 | `dreamEffort`              | ---          | Reasoning effort for the dream agent — same levels as `heartbeatEffort`                                                 |
 | `braveApiKey`              | ---          | Brave Search API key                                                                                                    |
+| `fetchUrl`                 | ---          | `fetch_url` reaches every address by default, LAN and loopback included. `{ "allowPrivateNetworks": false }` opts into the SSRF guard (refuses private, loopback, link-local and metadata addresses on every redirect hop) — worth it on a cloud VM |
 | `timezone`                 | ---          | IANA timezone (e.g. `"Europe/London"`)                                                                                  |
 | `plugins`                  | `[]`         | External plugin packages                                                                                                |
 | `disabledToolTags`         | ---          | Hide whole tool groups from the model (e.g. `["stickers", "web"]`) — each registered tool costs context tokens per session |
 | `disabledTools`            | ---          | Hide individual tools by name (`end_turn` cannot be disabled)                                                           |
 | `adminUserId`              | ---          | Telegram user ID for `/admin` commands                                                                                  |
 | `allowedUsers`             | ---          | Whitelist of Telegram user IDs                                                                                          |
+| `allowedGroups`            | ---          | Telegram group IDs the bot serves. Unset: groups the admin is in are still admitted (legacy, warned at startup)          |
+| `operatorIds`              | ---          | Extra operator identities (`"123"`, `"wa_dm_<number>"`, `"discord:<id>"`, `"teams:<id>"`) — only operators get the full tool set |
+| `guestDmScope`             | on           | Conversation-only tools for non-operator senders. Always applied in groups; `enabled: false` exempts DMs (legacy)       |
 | `apiId` / `apiHash`        | ---          | Telegram API credentials for full message history                                                                       |
 | `whatsapp`                 | ---          | WhatsApp frontend: pairing, allowlists, group policy ([above](#whatsapp))                                               |
 | `discord`                  | ---          | Discord frontend: bot token, application ID, guild / channel allowlists                                                 |
-| `native`                   | ---          | Client bridge: host, port, token, TLS ([above](#desktop--mobile-app))                                                   |
+| `native`                   | ---          | Client bridge: host, port, token, TLS ([above](#desktop--mobile-app)). `companionScopes` (default all three) narrows what a paired companion's credential may do ([docs/mesh-credentials.md](docs/mesh-credentials.md)) |
 | `nativeTools`              | `false`      | Swap the SDK's built-in Read/Write/Edit/Bash/Glob/Grep for Talon's own — these also route to a teleported device        |
 | `fuse`                     | `"auto"`     | Mount the `talon://` namespace with FUSE live views; falls back to a symlink farm where the host can't                  |
 | `github`                   | ---          | GitHub plugin config (see above)                                                                                        |
 | `memory`                   | ---          | Long-term memory backend selection: `mempalace` or `mem0` (see above)                                                   |
 | `mempalace`                | ---          | Legacy MemPalace plugin config (prefer `memory`)                                                                        |
 | `playwright`               | ---          | Playwright plugin config (see above)                                                                                    |
+| `triggers`                 | ---          | Per-chat trigger caps, e.g. `{ "maxActivePerChat": 5, "maxPersistentPerChat": 3 }` ([Scaling limits](#scaling-limits)) |
+| `agents`                   | ---          | Sub-agent caps: `{ "maxConcurrent": 6, "maxDepth": 2, "defaultTimeoutMs": 900000 }` ([docs/agents.md](docs/agents.md)) |
+
+### Scaling limits
+
+Two caps bound how much background work Talon keeps alive. Both keep their
+historical defaults and are raised in `~/.talon/config.json`; the error a
+capped tool returns names the key to raise.
+
+| Key                             | Default | Bounds | What it caps                                                 |
+| ------------------------------- | ------- | ------ | ------------------------------------------------------------ |
+| `triggers.maxActivePerChat`     | `5`     | 1–50   | Active (running or pending) triggers per chat                |
+| `triggers.maxPersistentPerChat` | unset   | 1–50   | Optional separate budget for persistent triggers (see below) |
+| `agents.maxConcurrent`          | `6`     | 1–64   | Live sub-agents daemon-wide, children included               |
+
+With `maxPersistentPerChat` unset, persistent and ad-hoc triggers share
+`maxActivePerChat`, exactly as before. Set it and the two draw from separate
+budgets: persistent triggers count only against `maxPersistentPerChat`, and
+`maxActivePerChat` then bounds ad-hoc (non-persistent) triggers only — so a
+chat running long-lived watchers still has room for a short CI wait. Caps are
+checked at `trigger_create`; lowering one never kills a trigger already
+running, and persistent triggers resumed after a restart are not re-checked.
+
+```json
+"triggers": { "maxActivePerChat": 5, "maxPersistentPerChat": 6 },
+"agents": { "maxConcurrent": 12 }
+```
 
 ### Background reasoning effort
 
@@ -529,7 +578,7 @@ Commands: `/model`, `/effort`, `/context`, `/status`, `/reset`, `/rename`, `/res
 
 ## Production
 
-**Docker:** the image runs the daemon on Bun (`bun src/index.ts`); `~/.talon` and `~/.claude` are bind-mounted from the host into the container's `HOME=/home/bun`.
+**Docker:** the image runs the daemon on Bun (`bun src/index.ts`); `~/.talon` and `~/.claude` are bind-mounted from the host into the container's `HOME=/home/bun`. Prebuilt images are on GHCR (`ghcr.io/thefalconry/talon:latest`), and a first boot can be configured entirely from `TALON_*` environment variables — see **[docs/docker.md](docs/docker.md)** for the quick install, and **[docs/truenas.md](docs/truenas.md)** for a step-by-step TrueNAS SCALE install.
 
 ```bash
 docker compose up -d
@@ -537,9 +586,11 @@ docker compose up -d
 
 A Node 24 + tsx image is kept as a fallback for one release cycle: `docker build --build-arg RUNTIME=node -t talon .` (or set `build.args.RUNTIME` in `docker-compose.yml`). Mount paths are the same for both. See [`packaging/README.md`](packaging/README.md#docker-image) for the build's details.
 
+The image is also ready for the **Antigravity (`agy`) backend**: add `-f docker-compose.agy.yml` to mount `~/.gemini` and the `agy` binary (or bake the binary in with `AGY_DOWNLOAD_URL` + `AGY_SHA256`). See [docs/docker.md](docs/docker.md#antigravity-agy-backend).
+
 **Systemd:** unit file at `packaging/systemd/talon.service` — copy to `/etc/systemd/system/`, set `User=` and `WorkingDirectory=`, then `systemctl enable --now talon`.
 
-**Health endpoint:** `GET http://localhost:19876/health` returns JSON with uptime, memory, queue depth, active sessions, and last activity timestamp.
+**Health endpoint:** `GET http://localhost:19876/health` returns the daemon's identity (`app`, `mode`, `pid`, `port`, `startedAt`, `ok`). With the gateway token (`Authorization: Bearer $(cat ~/.talon/keys/gateway-token)`) it also returns uptime, memory, queue depth, active sessions, and last activity timestamp. Every other gateway route requires that token.
 
 **Logging:** Structured JSON via pino to `~/.talon/talon.log`. Rotated on startup when the file exceeds 10MB.
 
@@ -570,4 +621,8 @@ smoke-tests the CLI and the MCP supervisor from it.
 
 ## License
 
-MIT
+Apache License 2.0 — see [LICENSE](LICENSE).
+
+Releases up to and including v5.18.1 were published under the MIT License,
+kept at [LICENSE-MIT](LICENSE-MIT). That grant is irrevocable for those
+versions and still covers the contributions made under it — see [NOTICE](NOTICE).

@@ -18,7 +18,15 @@ vi.mock("../util/log.js", () => ({
   logDebug: vi.fn(),
 }));
 
+// Pass-through, so a test can reach the read stream the route opened.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, createReadStream: vi.fn(actual.createReadStream) };
+});
+
+import { createReadStream, type ReadStream } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildBridgeHandlers } from "../frontend/native/surface/handlers.js";
@@ -88,6 +96,29 @@ describe("GET /media", () => {
   it("404s an id that resolves to a directory rather than a file", async () => {
     const id = registerMedia(harness.runtime, dir);
     expect((await get(`/media?id=${id}`)).status).toBe(404);
+  });
+
+  it("closes the file when the client hangs up mid-download", async () => {
+    const path = join(dir, "large.png");
+    await writeFile(path, Buffer.alloc(16 * 1024 * 1024));
+    const id = registerMedia(harness.runtime, path);
+    vi.mocked(createReadStream).mockClear();
+
+    const sock = connect(port, "127.0.0.1");
+    sock.on("error", () => {});
+    await new Promise<void>((resolve) => sock.once("connect", resolve));
+    sock.write(
+      `GET /media?id=${id} HTTP/1.1\r\nHost: 127.0.0.1\r\n` +
+        `Authorization: Bearer ${TOKEN}\r\n\r\n`,
+    );
+    await new Promise<void>((resolve) => sock.once("data", () => resolve()));
+    sock.destroy();
+
+    const stream = vi.mocked(createReadStream).mock.results[0]!
+      .value as ReadStream;
+    await vi.waitFor(() => expect(stream.destroyed).toBe(true), {
+      timeout: 2_000,
+    });
   });
 
   it("404s an id whose file has since been deleted", async () => {

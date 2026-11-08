@@ -1,12 +1,6 @@
 /**
  * MCP hub — daemon-hosted MCP over streamable HTTP, one endpoint for
- * every backend.
- *
- * Motivation: every backend used to spawn its own stdio copy of every
- * MCP server per chat (claude-sdk/codex per turn; openai-agents and
- * kilo/opencode per chat, held indefinitely) — two processes per server
- * per chat once the supervisor wrap is counted. Memory grew linearly
- * with chats. The hub inverts the ownership: the daemon hosts
+ * every backend. The daemon hosts
  *
  *   /mcp/talon/<frontend>/<chatId>   Talon's own tools, IN-PROCESS
  *                                    (zero subprocesses; chat binding
@@ -20,16 +14,20 @@
  * (claude-sdk `type:"http"`, openai-agents `MCPServerStreamableHttp`,
  * codex `mcp_servers.<name>.url`, kilo/opencode `type:"remote"`).
  *
- * What stays exactly as before:
+ * Invariants:
  *   - per-chat tool isolation (binding is per-session from the URL)
- *   - plugin semantics (chat-scoped children keep TALON_CHAT_ID env)
+ *   - chat-scoped plugin children keep TALON_CHAT_ID in their env
  *   - tool-surface trimming (disabledTools / disabledToolTags)
- *   - plugin reloading (reload closes children; next request respawns
- *     from the current registry — see reloadHubChildren)
- *   - orphan cleanup (children still run under the supervisor wrap)
+ *   - plugin reload retires children; the next request respawns from
+ *     the current registry (see reloadHubChildren)
+ *   - children are orphan-guarded (one reaper per daemon, falling back
+ *     to the per-child supervisor wrap — see child-guard.ts)
+ *   - a session's tools/list does not spawn its chat's child when any
+ *     chat already listed that server (see listChildTools)
  *
- * Endpoints live on the gateway HTTP server (127.0.0.1-bound, same
- * trust boundary as /action).
+ * Endpoints live on the gateway HTTP server (127.0.0.1-bound, behind the
+ * same token and Host/Origin guard as /action — see engine/gateway-auth.ts;
+ * every backend's hub entry carries the token as a bearer header).
  */
 
 import { randomUUID } from "node:crypto";
@@ -38,7 +36,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { getPluginMcpServers } from "../plugin/index.js";
-import { wrapMcpServer } from "./launcher.js";
+import { enableChildGuard, stopChildGuard } from "./child-guard.js";
 import { log, logError } from "../../util/log.js";
 import { buildTalonToolServer, VALID_TOOL_FRONTENDS } from "./talon-server.js";
 import { buildProxyServer } from "./proxy-server.js";
@@ -47,12 +45,19 @@ import {
   closeAllChildren,
   formatChildExit,
   getLastChildExit,
+  listChildTools,
   retireAllChildren,
   startChildReaper,
   stopChildReaper,
   type ChildSpec,
 } from "./children.js";
 import type { ToolFrontend } from "../tools/types.js";
+import {
+  initGuestDmScope,
+  isGuestPluginAllowed,
+  isGuestTurn,
+  type GuestDmScopeConfig,
+} from "./guest-scope.js";
 
 export const HUB_PATH_PREFIX = "/mcp/";
 
@@ -64,6 +69,18 @@ export type HubConfig = {
   braveApiKey?: string;
   /** Surface the native tool set (bash/read/write/… + teleport). */
   nativeTools?: boolean;
+  /** Conversation-only tool surface for non-operator senders. */
+  guestDmScope?: GuestDmScopeConfig;
+  /** Operator's Telegram id — their messages keep the full surface. */
+  adminUserId?: number;
+  /** Further operator sender keys (see guest-scope.ts). */
+  operatorIds?: readonly string[];
+  /**
+   * Orphan-guard hub children with the reaper (child-guard.ts). Set by the
+   * daemon bootstrap, whose entrypoint dispatches `_mcp-reaper`; left off
+   * by embedders/tests that drive the hub from an entry that doesn't.
+   */
+  guardChildren?: boolean;
 };
 
 let hubConfig: HubConfig = {};
@@ -71,6 +88,8 @@ let hubConfig: HubConfig = {};
 /** Set at bootstrap; safe to call again on config reload. */
 export function initHub(config: HubConfig): void {
   hubConfig = config;
+  initGuestDmScope(config.guestDmScope, config.adminUserId, config.operatorIds);
+  if (config.guardChildren) enableChildGuard();
   startChildReaper();
 }
 
@@ -98,8 +117,7 @@ export function pluginHubUrl(
  * Names of every hub-served plugin server — what backends enumerate to
  * build their per-chat URL maps. Registry-backed, so it reflects plugin
  * reloads immediately. (brave-search is served by the hub too, but each
- * backend adds it explicitly alongside its frontend tools, matching the
- * pre-hub structure.)
+ * backend adds it explicitly alongside its frontend tools.)
  */
 export function hubPluginServerNames(only?: string[]): string[] {
   // Specs are built with placeholder identity — only the names matter.
@@ -117,11 +135,10 @@ export async function listHubPluginToolNames(
   chatId: string,
   bridgeUrl: string,
 ): Promise<string[]> {
-  const child = await acquireChild(childKey(serverName, chatId), () =>
+  const tools = await listChildTools(childKey(serverName, chatId), () =>
     pluginSpec(serverName, chatId, bridgeUrl),
   );
-  child.touch();
-  return (await child.listTools()).map((tool) => tool.name);
+  return tools.map((tool) => tool.name);
 }
 
 /** Stderr lines quoted in a registration-failure warning (full tail is in the exit log line). */
@@ -175,15 +192,16 @@ function parseHubPath(rawUrl: string): HubTarget | null {
   return null;
 }
 
-function braveSpec(): ChildSpec {
-  return wrapMcpServer({
+function braveSpec(bridgeUrl: string): ChildSpec {
+  return {
     command: resolve(
       import.meta.dirname ?? ".",
       "../../../node_modules/.bin/brave-search-mcp-server",
     ),
     args: [],
     env: { BRAVE_API_KEY: hubConfig.braveApiKey ?? "" },
-  });
+    bridgeUrl,
+  };
 }
 
 /**
@@ -196,11 +214,16 @@ function pluginSpec(
   chatId: string,
   bridgeUrl: string,
 ): ChildSpec {
-  if (serverName === "brave-search") return braveSpec();
+  if (serverName === "brave-search") return braveSpec(bridgeUrl);
   const specs = getPluginMcpServers(bridgeUrl, chatId);
   const spec = specs[serverName];
   if (!spec) throw new Error(`Unknown hub plugin server: ${serverName}`);
-  return { command: spec.command, args: [...spec.args], env: spec.env };
+  return {
+    command: spec.command,
+    args: [...spec.args],
+    env: spec.env,
+    bridgeUrl,
+  };
 }
 
 /** Test-only: expose the spec resolution for the pass-through contract. */
@@ -215,13 +238,25 @@ function buildServerFor(target: HubTarget, bridgeUrl: string) {
       disabledTools: hubConfig.disabledTools,
       disabledToolTags: hubConfig.disabledToolTags,
       includeNativeTools: hubConfig.nativeTools,
+      guest: isGuestTurn(target.chatId),
     });
   }
-  return buildProxyServer(target.serverName, () =>
-    acquireChild(childKey(target.serverName, target.chatId), () =>
-      pluginSpec(target.serverName, target.chatId, bridgeUrl),
-    ),
-  );
+  // Re-checked per request: a session opened during an operator turn must
+  // not serve a later guest turn in the same chat.
+  const key = childKey(target.serverName, target.chatId);
+  const spec = () => pluginSpec(target.serverName, target.chatId, bridgeUrl);
+  const denied = () =>
+    guestPluginDenied(target)
+      ? Promise.reject(new Error("Not available in this chat"))
+      : null;
+  return buildProxyServer(target.serverName, {
+    listTools: () => denied() ?? listChildTools(key, spec),
+    getChild: () => denied() ?? acquireChild(key, spec),
+  });
+}
+
+function guestPluginDenied(target: { serverName: string; chatId: string }) {
+  return isGuestTurn(target.chatId) && !isGuestPluginAllowed(target.serverName);
 }
 
 // ── Session registry ────────────────────────────────────────────────────────
@@ -229,6 +264,8 @@ function buildServerFor(target: HubTarget, bridgeUrl: string) {
 type SessionEntry = {
   transport: StreamableHTTPServerTransport;
   lastSeen: number;
+  /** Requests still open on this session, SSE streams included. */
+  open: number;
 };
 
 const sessions = new Map<string, SessionEntry>();
@@ -236,7 +273,11 @@ const sessions = new Map<string, SessionEntry>();
 /**
  * Sessions whose client vanished without a DELETE (crashed subprocess,
  * kill -9) are closed after this idle window. Every well-behaved client
- * terminates explicitly, so this only catches stragglers.
+ * terminates explicitly, so this only catches stragglers. A session with
+ * a request still open is never idle: a client that holds its event
+ * stream between turns (openai-agents keeps one per chat for good) is
+ * alive however quiet the chat, and it does not re-initialize on a 404.
+ * The idle clock restarts when its last open request ends.
  */
 const SESSION_IDLE_MS = 30 * 60_000;
 const SESSION_REAP_INTERVAL_MS = 5 * 60_000;
@@ -247,7 +288,7 @@ function startSessionReaper(): void {
   sessionReaper = setInterval(() => {
     const cutoff = Date.now() - SESSION_IDLE_MS;
     for (const [id, entry] of sessions) {
-      if (entry.lastSeen >= cutoff) continue;
+      if (entry.open > 0 || entry.lastSeen >= cutoff) continue;
       sessions.delete(id);
       entry.transport.close().catch(() => {});
       log("gateway", `hub session reaped (idle): ${id.slice(0, 8)}…`);
@@ -281,6 +322,12 @@ function jsonRpcError(
   );
 }
 
+/** `Host` values a loopback client of the gateway at `bridgeUrl` sends. */
+function loopbackHosts(bridgeUrl: string): string[] {
+  const { port } = new URL(bridgeUrl);
+  return ["127.0.0.1", "localhost", "[::1]"].map((name) => `${name}:${port}`);
+}
+
 /**
  * Handle one request under /mcp/. `bridgeUrl` is the gateway's own base
  * URL (the gateway knows its bound port; the hub does not).
@@ -300,6 +347,11 @@ export async function handleHubRequest(
         return;
       }
       entry.lastSeen = Date.now();
+      entry.open++;
+      res.once("close", () => {
+        entry.open--;
+        entry.lastSeen = Date.now();
+      });
       await entry.transport.handleRequest(req, res);
       return;
     }
@@ -327,11 +379,19 @@ export async function handleHubRequest(
       return;
     }
 
+    if (target.kind === "plugin" && guestPluginDenied(target)) {
+      jsonRpcError(res, 403, "Not available in this chat");
+      return;
+    }
+
     const server = buildServerFor(target, bridgeUrl);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
+      // Defence in depth behind the gateway's own Host/Origin guard.
+      enableDnsRebindingProtection: true,
+      allowedHosts: loopbackHosts(bridgeUrl),
       onsessioninitialized: (id) => {
-        sessions.set(id, { transport, lastSeen: Date.now() });
+        sessions.set(id, { transport, lastSeen: Date.now(), open: 0 });
       },
     });
     transport.onclose = () => {
@@ -371,6 +431,7 @@ export async function shutdownHub(): Promise<void> {
   sessions.clear();
   await Promise.allSettled(entries.map((entry) => entry.transport.close()));
   await closeAllChildren();
+  stopChildGuard();
 }
 
 /** Diagnostic: live hub session count. */

@@ -263,10 +263,14 @@ all see `end_turn` / `send` / `check_time` like any other backend.
 
 **Models.** `agy models` prints `id<TAB>label`; the catalog is parsed
 at init and behind a 10-minute TTL. Effort is baked into most ids
-(`gemini-3.8-flash-high|medium|low`), so a requested level first
-re-points the model at the sibling slug carrying that suffix and is
-then also passed as `--effort` — see `backend/agy/effort.ts` for the
-precedence. Default model: `gemini-3.8-flash-high`.
+(`gemini-3.8-flash-high|medium|low`, `gemini-4-argon-*`), and since
+agy 1.4 the CLI rejects a suffixed id paired with a different
+`--effort`. So a requested level re-points the model at the sibling
+slug carrying that suffix and sends no `--effort`; only a suffix-less
+id (`claude-sonnet-5-5`) gets the flag, and a level the catalog can't
+express is dropped rather than sent as a conflicting pair — see
+`backend/agy/effort.ts`. Default model:
+`gemini-3.8-flash-high`.
 
 **System prompt.** No flag exists. The assembled prompt is prepended
 as a fenced block on the FIRST turn of a conversation only; resumed
@@ -276,8 +280,19 @@ conversations inherit it (the same thing codex does).
 stream-json mode, so a turn's cost is the delta against the previous
 result. `thinking_tokens` is a subset of `output_tokens`, never added
 to it. Cache reads are reported, cache writes are not — hence
-`cacheMetrics: "read"`. There is no plan-usage endpoint, so
-`getPlanUsage` returns `undefined`.
+`cacheMetrics: "read"`.
+
+**Plan usage.** There is no account API, but the `/usage` slash command
+runs headlessly: `agy -p /usage --output-format text` prints one
+tab-separated line per quota window — model group, window, percent
+*remaining*, reset time — and exits without a model call.
+`getPlanUsage` spawns that (same binary resolution and env as the chat
+children, 20s timeout), flips remaining into used, and labels the
+windows `Gemini · 5h`, `Gemini · 7d`, `Claude/GPT · 5h`,
+`Claude/GPT · 7d`. The result is cached for 60s with concurrent callers
+sharing one spawn, and a failed read backs off 15s and serves the last
+good value — or `undefined`, so headroom falls back to the
+`backendBudgets` ledger.
 
 **Live check.** `npx tsx scripts/agy-live-check.ts` runs the whole
 stack against the real binary and a running daemon: it writes one hub
@@ -299,9 +314,9 @@ using. On an install with more than one subscription that is a good way
 to burn one plan to its ceiling while another sits idle, so when nothing
 is pinned Talon now picks the backend with the most **headroom**.
 Headroom is `1 - (tightest rate-limit window)` where a backend reports
-its own plan (Claude, Codex), and `1 - used/budget` against a local
-rolling token ledger where it does not (`agy`, `openai-agents`) — see
-`config.backendBudgets`. A backend with neither reports "no usage
+its own plan (Claude, Codex, `agy`), and `1 - used/budget` against a
+local rolling token ledger where it does not (`openai-agents`, or `agy`
+when its `/usage` read fails) — see `config.backendBudgets`. A backend with neither reports "no usage
 signal" and ranks below any measured backend it ties with. Every
 decision is logged under the `router` component with all the candidates
 it saw, and `/usage`, `/status`, `plan_usage` and `list_backends` all
@@ -317,6 +332,15 @@ any task-class preference, so "reasoning runs on Claude" cannot send
 work to a spent plan; and routing never boots a cold provider to measure
 it, so a backend joins the rotation once it is running (bound to a role
 or serving a chat) or once you give it a `backendBudgets` entry.
+
+A backend that isn't working is routed around. If its runs fail
+repeatedly (3 in a row), or fail on a credential (401, expired login),
+a breaker opens and it scores zero headroom for a cool-off period. The
+cool-off starts at 15 minutes and doubles each time the breaker re-opens,
+up to 4 hours. The same happens while its usage endpoint reports a rejected login. A
+backend with no usage signal at all scores zero too: it still takes work
+when nothing measured is available, but it is never preferred over a
+backend that can show it has room.
 
 ## Adding a new backend
 
@@ -338,8 +362,9 @@ or serving a chat) or once you give it a `backendBudgets` entry.
    `backend/builtins.ts` — the one list bootstrap, `talon doctor`, and
    the registry tests all load.
 
-4. Add `"<name>"` to the `backend` enum in
-   `src/util/config.ts` so config validation accepts it.
+4. Add `"<name>"` to `BACKEND_IDS` in
+   `src/core/agent-runtime/model-ref.ts` — the config `backend` enum is
+   built from it, so config validation accepts it.
 
 5. Wire shared infrastructure where it helps. If your backend wraps
    an OpenCode-shaped HTTP server, it is a `RemoteProfileDefinition`:

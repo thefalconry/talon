@@ -19,10 +19,8 @@ export const historyHandlers: SharedActionHandlers = {
     const limit = Math.min(100, Number(body.limit ?? 30));
     const cid = chatKey;
     // The tool schema advertises `offset_id` and `before` for paging back;
-    // this fallback used to ignore both and hand back the same newest
-    // window no matter what the model asked, so "go further back" was a
-    // silent no-op on frontends without a platform history API (WhatsApp,
-    // native).
+    // ignoring them here would make "go further back" a silent no-op on
+    // frontends without a platform history API (WhatsApp, native).
     const offsetId = Number(body.offset_id);
     if (Number.isFinite(offsetId) && offsetId > 0) {
       return { ok: true, text: getFormattedBefore(cid, offsetId, limit) };

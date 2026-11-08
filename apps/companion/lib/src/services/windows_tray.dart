@@ -98,6 +98,9 @@ class WindowsTray with TrayListener, WindowListener {
     }
   }
 
+  /// Tear down tray and window manager cleanly before process exit.
+  Future<void> destroy() => _quit();
+
   Future<void> _quit() async {
     try {
       await trayManager.destroy();

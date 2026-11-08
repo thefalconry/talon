@@ -244,7 +244,7 @@ describe("retrieveForTurn / fail closed", () => {
 describe("formatUserPrompt / retrieved memory", () => {
   const base = {
     text: "what did I say about the cache?",
-    senderName: "Dylan",
+    senderName: "Ada",
     messageId: 42,
     omitTimeTag: true,
   };
@@ -277,10 +277,10 @@ describe("formatUserPrompt / retrieved memory", () => {
     const out = formatUserPrompt({
       ...base,
       isGroup: true,
-      senderHandle: "dylanneve1",
+      senderHandle: "ada",
       retrievedMemory: "#1 [fact] a: b",
     });
-    expect(out.startsWith("[Dylan (@dylanneve1)] [msg_id:42]: ")).toBe(true);
+    expect(out.startsWith("[Ada (@ada)] [msg_id:42]: ")).toBe(true);
     expect(out.endsWith("#1 [fact] a: b")).toBe(true);
   });
 });
@@ -387,7 +387,7 @@ describe("weaver / turn memory", () => {
       chatId: "weaver-memory",
       numericChatId: 1,
       prompt,
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       source: "message",
     });

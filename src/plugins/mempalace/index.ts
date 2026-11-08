@@ -123,7 +123,6 @@ export function createMempalacePlugin(config: {
     },
 
     async init() {
-      // Ensure palace directory exists
       if (!existsSync(palacePath)) {
         mkdirSync(palacePath, { recursive: true });
         log("mempalace", `Created palace directory: ${palacePath}`);
@@ -140,11 +139,11 @@ export function createMempalacePlugin(config: {
           { timeout: 15_000 },
         );
         log("mempalace", stdout.trim() || "Module verified");
-      } catch {
+      } catch (err) {
         // Non-fatal — MCP server handles lazy init
         log(
           "mempalace",
-          "Module import check skipped — MCP server will initialize on first use",
+          `Module import check skipped — MCP server will initialize on first use (${firstLine(err)})`,
         );
       }
 
@@ -182,4 +181,11 @@ export function createMempalacePlugin(config: {
       }
     },
   };
+}
+
+/** First line of an error's message; execFile errors append all of stderr. */
+function firstLine(err: unknown): string {
+  return (
+    (err instanceof Error ? err.message : String(err)).split("\n")[0] ?? ""
+  );
 }

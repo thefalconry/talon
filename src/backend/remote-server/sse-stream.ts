@@ -5,17 +5,12 @@
  * `client.global.event()` which (per the upstream wire format) returns
  * a `ServerSentEventsResult` whose `stream` field is an async iterable
  * of typed events. The SDK's published types under-promise this shape —
- * the call signature returns a wider type than the value it produces.
- *
- * Previously, every backend that consumed this called
- * `await oc.global.event() as unknown as { stream?: AsyncIterable<unknown> }`
- * inline. Three copies of the same lie. This helper centralises it
- * behind one narrowing function with a runtime guard, so subsequent
- * backends (or the next SDK revision) can update the typing in one
- * place.
+ * the call signature returns a wider type than the value it produces,
+ * so the narrowing lives here once, behind a runtime guard.
  */
 
-import { logWarn } from "../../util/log.js";
+import { faultText } from "../../core/engine/fault-text.js";
+import { logDebug, logWarn } from "../../util/log.js";
 
 /**
  * Minimal client surface — what both `KiloClient` and `OpencodeClient`
@@ -54,6 +49,10 @@ export async function subscribeSseStream(
       lastError = err;
     }
     if (attempt < 3) {
+      logDebug(
+        "agent",
+        `sse.subscribe.retry chat=${chatId} attempt=${attempt} delay_ms=${150 * attempt} error="${faultText(lastError)}"`,
+      );
       await new Promise((resolve) => setTimeout(resolve, 150 * attempt));
     }
   }

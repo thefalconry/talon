@@ -9,9 +9,7 @@
  * frontend), creating an ephemeral session, running the prompt,
  * rendering the response parts into the run log, and cleaning up.
  *
- * Both backends previously carried byte-for-byte copies of this file
- * that drifted (the abort handler landed in one and not the other);
- * the per-backend differences are exactly the `RemoteOneShotBindings`
+ * The per-backend differences are exactly the `RemoteOneShotBindings`
  * fields — server bootstrap, model-selection parsing, and the
  * delivery-contract suffix.
  *

@@ -14,13 +14,6 @@ vi.mock("../util/log.js", () => ({
   logDebug: vi.fn(),
 }));
 
-// Identity-wrap so existing assertions can match the raw MCP server shape
-// without the launcher prefix. Dedicated wrap behavior is covered in
-// mcp-launcher.test.ts.
-vi.mock("../core/mcp-hub/launcher.js", () => ({
-  wrapMcpServer: <T>(server: T) => server,
-}));
-
 describe("plugin system", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -59,6 +52,7 @@ describe("plugin system", () => {
       plugins: [],
       botDisplayName: "Talon",
       nativeTools: false,
+      allowNativeSubagents: false,
       fuse: "off",
       teamsWebhookPort: 19878,
       teamsGraphPollMs: 10000,
@@ -259,6 +253,25 @@ describe("plugin system", () => {
       );
       expect(servers["test-plugin-tools"].env.TALON_CHAT_ID).toBe("chat1");
       expect(servers["test-plugin-tools"].env.MY_KEY).toBe("val");
+      // Plugins that call POST /action authenticate with the gateway token.
+      expect(servers["test-plugin-tools"].env.TALON_GATEWAY_TOKEN).toBe(
+        "vitest-gateway-token",
+      );
+    });
+
+    it("returns raw specs — the hub applies orphan protection at spawn time", async () => {
+      const plugin = createMockPlugin({
+        mcpServer: { command: "python3", args: ["-m", "srv"] },
+      });
+      const { loadPlugins, getPluginMcpServers } = await setup(plugin);
+      await loadPlugins([{ path: "/fake/plugin" }]);
+
+      const spec = getPluginMcpServers("http://localhost:19876", "chat1")[
+        "test-plugin-tools"
+      ];
+      expect(spec.command).toBe("python3");
+      expect(spec.args).toEqual(["-m", "srv"]);
+      expect(spec.args).not.toContain("_mcp-launch");
     });
 
     it("skips plugins without mcpServerPath", async () => {
@@ -332,6 +345,7 @@ describe("plugin system", () => {
         getEnvVars: () => ({
           TALON_BRIDGE_URL: "http://malicious.example",
           TALON_CHAT_ID: "wrong-chat",
+          TALON_GATEWAY_TOKEN: "forged",
           MY_KEY: "val",
         }),
       });
@@ -343,6 +357,7 @@ describe("plugin system", () => {
       expect(servers["test-plugin-tools"].env).toMatchObject({
         TALON_BRIDGE_URL: "http://localhost:19876",
         TALON_CHAT_ID: "chat1",
+        TALON_GATEWAY_TOKEN: "vitest-gateway-token",
         MY_KEY: "val",
       });
     });
@@ -618,6 +633,113 @@ describe("plugin system", () => {
       vi.useRealTimers();
       // Plugin still registers despite timeout (error is caught)
       expect(mod.getPluginCount()).toBeGreaterThan(0);
+    });
+  });
+
+  describe("operator alerts", () => {
+    async function captureAlerts() {
+      const alerts = await import("../core/frontend-runtime/alerts.js");
+      const sent: string[] = [];
+      alerts.resetAlertsForTest(async (text) => {
+        sent.push(text);
+      });
+      return { sent, keys: () => alerts.activeAlerts().map((a) => a.key) };
+    }
+
+    it("alerts when init times out, not before, and clears when a later init succeeds", async () => {
+      vi.useFakeTimers();
+      try {
+        let hang = true;
+        const plugin = createMockPlugin({
+          init: () => (hang ? new Promise(() => {}) : undefined),
+        });
+        const mod = await setup(plugin);
+        const { sent, keys } = await captureAlerts();
+
+        const loading = mod.loadPlugins([{ path: "/fake/plugin" }]);
+        await vi.advanceTimersByTimeAsync(29_000);
+        expect(sent).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(1_001);
+        await loading;
+        expect(keys()).toEqual(["plugin.test-plugin"]);
+        expect(sent[0]).toMatch(
+          /Plugin "test-plugin" failed to initialise: init timed out after 30s/,
+        );
+
+        hang = false;
+        const { registry } = await import("../core/plugin/registry.js");
+        await registry.destroyAndClear();
+        await mod.loadPlugins([{ path: "/fake/plugin" }]);
+        expect(keys()).toEqual([]);
+        expect(sent.at(-1)).toMatch(
+          /Plugin "test-plugin" initialised normally/,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("an init that outlives its deadline keeps running and clears the alert when it finishes", async () => {
+      vi.useFakeTimers();
+      try {
+        const plugin = createMockPlugin({
+          init: () => new Promise<void>((r) => setTimeout(r, 45_000)),
+        });
+        const mod = await setup(plugin);
+        const { sent, keys } = await captureAlerts();
+
+        const loading = mod.loadPlugins([{ path: "/fake/plugin" }]);
+        await vi.advanceTimersByTimeAsync(30_001);
+        await loading;
+        // Boot moved on; the plugin is registered and alerted, not dropped.
+        expect(mod.getPluginCount()).toBe(1);
+        expect(keys()).toEqual(["plugin.test-plugin"]);
+        expect(sent[0]).toMatch(/timed out after 30s/);
+
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(keys()).toEqual([]);
+        expect(sent.at(-1)).toMatch(
+          /Plugin "test-plugin" finished initialising late \(45s\)/,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("alerts when a native runtime fails to provision and clears when it is usable", async () => {
+      let status: "failed" | "ready" = "failed";
+      vi.doMock("../plugins/github/index.js", () => ({
+        createGitHubPlugin: () => createMockPlugin({ name: "github" }),
+      }));
+      vi.doMock("../plugins/github/provision.js", () => ({
+        provisionGithubMcp: async () => ({
+          status,
+          kind: "docker",
+          actions: [],
+          warnings: [],
+          ...(status === "failed"
+            ? { error: "docker pull: permission denied" }
+            : {}),
+        }),
+        inspectGithub: async () => [],
+        githubMcpImageRef: (tag?: string) =>
+          `ghcr.io/github/github-mcp-server:${tag ?? "test"}`,
+        GITHUB_MCP_PINNED_TAG: "test",
+      }));
+      const mod = await import("../core/plugin/index.js");
+      const { sent, keys } = await captureAlerts();
+      const config = createTestConfig({ github: { enabled: true } });
+
+      await mod.loadBuiltinPlugins(config);
+      expect(keys()).toContain("provision.github");
+      expect(sent[0]).toMatch(
+        /Installing the github runtime failed: docker pull: permission denied/,
+      );
+
+      status = "ready";
+      await mod.loadBuiltinPlugins(config);
+      expect(keys()).not.toContain("provision.github");
+      expect(sent.at(-1)).toMatch(/github runtime is installed and usable/);
     });
   });
 

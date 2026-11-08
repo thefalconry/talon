@@ -102,6 +102,86 @@ export const meshTools: ToolDefinition[] = [
     tag: "mesh",
   },
   {
+    name: "device_computer",
+    description:
+      'Look at and operate the desktop of a mesh device that has a screen (today: macOS talon-nodes that list `computer` in list_devices). Work in this order: `snapshot` first — it reads the frontmost window\'s accessibility tree and lists each control with its name, its on/off state where it has one, and the exact point to click, which is faster and more reliable than judging positions from a picture. The frontmost window never contains the system\'s own UI: for menu bar extras, Control Center and its module popovers (e.g. Video Effects), open menus, Notification Center and floating panels, pass scope "all". Use `screenshot` when the snapshot is empty or unhelpful (canvas apps, games, custom-drawn UI) or to check what a step did. All coordinates, from either source, are in one space: the screenshot\'s own pixels (a busy screen may come back shrunk — the result then gives the factor to multiply by). Actions: screenshot; snapshot (scope, limit); click (x, y, button, count, modifiers) — the result names the control it hit and that control\'s state after the click, so a toggle that flipped the wrong way shows up at once; move (x, y); drag (x, y, to_x, to_y); scroll (dy, dx, optionally x, y to aim first — positive dy moves down the page); type (text, into whatever has keyboard focus — click the field first); key (keys, e.g. "cmd+s", "escape", "cmd+shift+4"). Only the primary display is covered. After an action that changes the screen, take a new snapshot or screenshot before the next one — earlier coordinates may be stale.',
+    schema: {
+      device: z
+        .string()
+        .describe(
+          "Device id, exact name, or unique name fragment of a device that supports `computer` (see list_devices).",
+        ),
+      action: z
+        .enum([
+          "screenshot",
+          "snapshot",
+          "click",
+          "move",
+          "drag",
+          "scroll",
+          "type",
+          "key",
+        ])
+        .describe("What to do."),
+      x: z.number().optional().describe("Target x, in screenshot pixels."),
+      y: z.number().optional().describe("Target y, in screenshot pixels."),
+      to_x: z.number().optional().describe("drag: where to release, x."),
+      to_y: z.number().optional().describe("drag: where to release, y."),
+      dy: z
+        .number()
+        .optional()
+        .describe("scroll: lines down the page (negative = up), max 50."),
+      dx: z
+        .number()
+        .optional()
+        .describe("scroll: lines to the right (negative = left), max 50."),
+      button: z
+        .enum(["left", "right", "middle"])
+        .optional()
+        .describe("click: which button (default left)."),
+      count: z
+        .number()
+        .optional()
+        .describe("click: 1, 2 (double) or 3 (triple). Default 1."),
+      modifiers: z
+        .array(z.enum(["cmd", "shift", "alt", "ctrl"]))
+        .optional()
+        .describe("click: keys held during the click."),
+      text: z
+        .string()
+        .optional()
+        .describe("type: the text to type (max 4000 characters)."),
+      keys: z
+        .string()
+        .optional()
+        .describe(
+          'key: one key with optional modifiers joined by +, e.g. "return", "cmd+a", "ctrl+left", "f5".',
+        ),
+      limit: z
+        .number()
+        .optional()
+        .describe("snapshot: max elements to list (default 150, max 400)."),
+      scope: z
+        .enum(["front", "all"])
+        .optional()
+        .describe(
+          'snapshot: "front" (default) reads the frontmost window; "all" also lists the menu bar, every menu bar extra, and the controls in open menus, Control Center popovers, Notification Center and floating panels of other processes.',
+        ),
+      verify: z
+        .boolean()
+        .optional()
+        .describe(
+          "click: report the control hit and its state after the click (default true). false skips the ~0.4 s settle.",
+        ),
+    },
+    // The bridge envelope's own `action` field names the gateway route, and
+    // `{ action, ...params }` lets a param of the same name overwrite it — so
+    // the desktop action travels as `computer_action` and is mapped back.
+    execute: ({ action, ...rest }, bridge) =>
+      bridge("device_computer", { ...rest, computer_action: action }),
+    tag: "mesh",
+  },
+  {
     name: "device_list_dir",
     description:
       "List a directory on a Talon companion device (name, type, size per entry).",
@@ -181,6 +261,12 @@ export const meshTools: ToolDefinition[] = [
         .describe(
           "Where to stage the APK on the device (default /sdcard/Download/talon-companion-update.apk).",
         ),
+      allow_downgrade: z
+        .boolean()
+        .optional()
+        .describe(
+          "Install even when the APK has a lower versionCode (pm install -d), for a deliberate rollback.",
+        ),
     },
     execute: (params, bridge) => bridge("update_device", params),
     tag: "mesh",
@@ -203,6 +289,12 @@ export const meshTools: ToolDefinition[] = [
         .describe(
           "Where to stage the binary on the node (default /tmp/talon-node.update; the node re-stages next to its own executable before the atomic swap).",
         ),
+      allow_downgrade: z
+        .boolean()
+        .optional()
+        .describe(
+          "Install even when the binary is an older version, or the exact build already running. The node refuses both without it.",
+        ),
     },
     execute: (params, bridge) => bridge("update_node", params),
     tag: "mesh",
@@ -223,12 +315,20 @@ export const meshTools: ToolDefinition[] = [
   {
     name: "make_node_install_link",
     description:
-      "Mint a single-use install link served by this daemon's bridge and return the one command that attaches a fresh Linux/macOS/Windows host to the mesh as a headless talon-node. Running it on the host downloads the installer script and binary from the bridge (sha256-verified), installs talon-node, pre-pins the bridge TLS certificate, embeds the bearer token, and registers a boot service — no toolchain, package manager, or manual config on the host. The link expires in 30 minutes and each leg serves exactly once; the host only needs to reach the bridge URL. Requires the native bridge running on a non-loopback bind with a token.",
+      "Mint a single-use install link served by this daemon's bridge and return the one command that attaches a fresh Linux/macOS/Windows host to the mesh as a headless talon-node. Running it on the host downloads the installer script and binary from the bridge (sha256-verified), installs talon-node, pre-pins the bridge TLS certificate, embeds the bearer token, and registers a boot service — no toolchain, package manager, or manual config on the host. Omit os and arch when you don't know the host: you get a POSIX and a PowerShell command, and whichever runs reports its own platform so the bridge picks the right binary. The link expires in 30 minutes and each leg serves exactly once; the host only needs to reach the bridge URL. Requires the native bridge running on a non-loopback bind with a token.",
     schema: {
-      os: z.string().describe("Host OS: linux, macos/darwin, or windows."),
+      os: z
+        .string()
+        .optional()
+        .describe(
+          "Host OS: linux, macos/darwin, or windows. Omit (with arch) to auto-detect on the host.",
+        ),
       arch: z
         .string()
-        .describe("Host arch: amd64/x86_64, arm64/aarch64, or arm."),
+        .optional()
+        .describe(
+          "Host arch: amd64/x86_64, arm64/aarch64, or arm. Omit (with os) to auto-detect on the host.",
+        ),
       name: z
         .string()
         .optional()
@@ -239,10 +339,31 @@ export const meshTools: ToolDefinition[] = [
         .string()
         .optional()
         .describe(
-          "Bridge base URL as reachable FROM the new host (e.g. https://100.64.0.7:19880). Default: derived from the bridge bind (wildcard binds use this host's first external IPv4).",
+          "Bridge base URL as reachable FROM the new host (e.g. https://100.64.0.7:19880). Default: native.publicUrl when set, else derived from the bridge bind (wildcard binds use this host's first external IPv4).",
         ),
     },
     execute: (params, bridge) => bridge("make_node_install_link", params),
+    tag: "mesh",
+  },
+  {
+    name: "make_companion_pair_link",
+    description:
+      "Mint a single-use pairing link that connects a Talon companion app (Android, macOS, Windows, Linux) to this daemon's bridge — the agent-tool twin of Telegram's /mesh pair. Returns the link (open it on the device: it fills the companion's connection form) plus the values to type in by hand when the link doesn't open the app: bridge URL, bearer token (a fresh per-device credential that binds to the first device registering with it), and TLS certificate fingerprint. The link expires in 10 minutes and serves once. A device that already holds a live credential must have it revoked before it can pair again. Requires the native bridge running on a non-loopback bind with a token.",
+    schema: {
+      label: z
+        .string()
+        .optional()
+        .describe(
+          "What the companion should call this connection (e.g. the bot's name). Default: none — the app picks.",
+        ),
+      bridge_url: z
+        .string()
+        .optional()
+        .describe(
+          "Bridge base URL as reachable FROM the device (e.g. https://talon.example.org behind a reverse proxy). Default: native.publicUrl when set, else derived from the bridge bind.",
+        ),
+    },
+    execute: (params, bridge) => bridge("make_companion_pair_link", params),
     tag: "mesh",
   },
 ];

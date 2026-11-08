@@ -2,11 +2,8 @@
  * Hub child manager — the single owner of external MCP server
  * subprocesses (plugins, brave-search).
  *
- * Before the hub, every chat turn (claude-sdk, codex) or every chat
- * lifetime (openai-agents, kilo/opencode) spawned its own copy of every
- * plugin MCP server — memory grew linearly with chats. The hub instead
- * keeps one child per key and reaps it after an idle TTL, so resident
- * cost tracks *recently active* keys, not every chat ever seen.
+ * One child per key, reaped after an idle TTL, so resident cost tracks
+ * *recently active* keys, not every chat ever seen.
  *
  * Keys: chat-scoped plugins get `name + chatId` (they read
  * `TALON_CHAT_ID` at boot, so instances cannot be shared across chats
@@ -14,11 +11,20 @@
  * use a shared key. Either way the spec factory decides — this module
  * only manages lifecycles.
  *
- * Each child is spawned through the same supervisor wrap as before
- * (stdout JSON filtering + orphan cleanup if the daemon is SIGKILLed),
- * connected once over stdio, and shared by every hub session that
- * proxies to it. The tools list is cached per child lifetime — plugin
- * reload restarts children, which naturally invalidates the cache.
+ * Each child is spawned directly by the daemon — stdout JSON filtering
+ * happens in-process (child-transport.ts) and orphan cleanup if the
+ * daemon is SIGKILLed is the child guard's job (one reaper per daemon,
+ * child-guard.ts; per-child supervisor wrap as the fallback) — then
+ * connected once over stdio and shared by every hub session that
+ * proxies to it.
+ *
+ * Tool lists are cached per SERVER, not just per child: a chat-scoped
+ * plugin serves the same tools to every chat, so a new session's
+ * tools/list is answered from the cache and the chat's own child is only
+ * spawned when a tool is actually called. Without this every session —
+ * each chat, sub-agent and isolated cron/heartbeat run — spawned the
+ * whole plugin fleet just to enumerate tools at session start. Plugin
+ * reload restarts children and clears the cache.
  *
  * Every exit is accounted for: the child's exit code, signal and
  * stderr tail are logged when it goes away unasked (handshake death,
@@ -30,23 +36,30 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import { log, logError, logWarn } from "../../util/log.js";
 import { HubChildTransport, type ChildExit } from "./child-transport.js";
+import { raiseAlert, resolveAlert } from "../frontend-runtime/alerts.js";
+import { faultText } from "../engine/fault-text.js";
+import { guardChild, guardedSpec, releaseChild } from "./child-guard.js";
 
 export type ChildSpec = {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** The daemon gateway's base URL — arms the reaper's bridge watchdog. */
+  bridgeUrl?: string;
 };
 
 export type ChildHandle = {
   /** Cached tools/list result — fetched once per child lifetime. */
   listTools(): Promise<Tool[]>;
-  /** Forward one tool call; tracked so retirement can drain in-flight work. */
+  /**
+   * Forward one tool call; tracked so retirement can drain in-flight work.
+   * Aborting `signal` cancels the call on the child too.
+   */
   callTool(
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<CallToolResult>;
-  /** Mark activity so the idle reaper skips this child. */
-  touch(): void;
 };
 
 type ChildEntry = {
@@ -67,6 +80,11 @@ type ChildEntry = {
 
 const children = new Map<string, ChildEntry>();
 const inflight = new Map<string, Promise<ChildHandle>>();
+
+/** Server name → its tools, as last listed by any of its children. */
+const toolListCache = new Map<string, Tool[]>();
+/** Bumped on reload/shutdown so an old child can't refill the cache. */
+let toolListGeneration = 0;
 
 /**
  * Most recent exit per key, whether the child died during the
@@ -151,11 +169,49 @@ type SpawnFailure = { at: number; count: number; error: unknown };
 const spawnFailures = new Map<string, SpawnFailure>();
 const FAILURE_BACKOFF_BASE_MS = 30_000;
 const FAILURE_BACKOFF_MAX_MS = 10 * 60_000;
+/** Consecutive spawn failures of one child before the operator hears. */
+const SPAWN_FAILURE_ALERT_THRESHOLD = 3;
 
 function failureBackoffMs(count: number): number {
   return Math.min(
     FAILURE_BACKOFF_BASE_MS * 2 ** (count - 1),
     FAILURE_BACKOFF_MAX_MS,
+  );
+}
+
+/** The MCP server name of a child key (keys are `server\0chat`). */
+function serverOf(key: string): string {
+  const nul = key.indexOf("\u0000");
+  return nul === -1 ? key : key.slice(0, nul);
+}
+
+/**
+ * Count a failed spawn into the negative cache, log it with the child's
+ * last words, and alert once the same child has failed
+ * SPAWN_FAILURE_ALERT_THRESHOLD times running — its tools are gone for
+ * every turn until whatever backs it comes back.
+ */
+function noteSpawnFailure(key: string, err: unknown): void {
+  const count = (spawnFailures.get(key)?.count ?? 0) + 1;
+  spawnFailures.set(key, { at: Date.now(), count, error: err });
+  const backoffMs = failureBackoffMs(count);
+  // The exit record is this attempt's only when it is fresh — an older
+  // one belongs to a child that ran and was reaped long ago.
+  const exit = lastExits.get(key);
+  const stderr =
+    exit && Date.now() - exit.at < 60_000 ? exit.stderr.at(-1) : undefined;
+  const detail = faultText(err);
+  logWarn(
+    "gateway",
+    `hub child spawn failed ${describeKey(key)} attempt=${count} backoff_ms=${backoffMs} ` +
+      `error="${detail}"${stderr ? ` stderr="${faultText(stderr)}"` : ""}`,
+  );
+  if (count < SPAWN_FAILURE_ALERT_THRESHOLD) return;
+  const server = serverOf(key);
+  raiseAlert(
+    `mcp.child.${server}`,
+    `MCP server "${server}" has failed to start ${count} times in a row: ${detail}` +
+      `${stderr ? ` (stderr: ${faultText(stderr, 120)})` : ""}. Its tools are unavailable until it starts.`,
   );
 }
 
@@ -166,15 +222,27 @@ function idleTtlMs(): number {
 }
 
 const REAP_INTERVAL_MS = 60_000;
+
+/**
+ * Backstop for one forwarded tool call. The SDK's default (60s) would cut
+ * any longer plugin call, though the upstream client allows far more —
+ * its own timeout or cancel reaches the child through the forwarded
+ * signal. This only bounds a call nobody is waiting on any more.
+ */
+const CHILD_CALL_TIMEOUT_MS = 65 * 60_000;
 let reaper: ReturnType<typeof setInterval> | null = null;
 
 async function spawnChild(key: string, spec: ChildSpec): Promise<ChildHandle> {
+  const run = guardedSpec(spec);
+  const generation = toolListGeneration;
   const transport = new HubChildTransport({
-    command: spec.command,
-    args: spec.args,
+    command: run.command,
+    args: run.args,
     // Merge over the daemon env — same visibility the SDK-spawned
     // subprocesses had (PATH, HOME, proxy vars, …).
-    env: { ...(process.env as Record<string, string>), ...spec.env },
+    env: { ...(process.env as Record<string, string>), ...run.env },
+    onSpawned: (pid) => guardChild(pid, spec.bridgeUrl),
+    onExited: releaseChild,
   });
   transport.onclose = () => onChildClosed(key, transport);
   const client = new Client(
@@ -217,22 +285,22 @@ async function spawnChild(key: string, spec: ChildSpec): Promise<ChildHandle> {
         })());
     })(),
     handle: {
-      touch: () => {
-        entry.lastActivity = Date.now();
-      },
       listTools: () =>
         track(async () => {
           if (toolsCache) return toolsCache;
           const result = await client.listTools();
           toolsCache = result.tools;
+          if (generation === toolListGeneration) {
+            toolListCache.set(serverOf(key), result.tools);
+          }
           return toolsCache;
         }),
-      callTool: (name, args) =>
+      callTool: (name, args, signal) =>
         track(
           () =>
-            client.callTool({
-              name,
-              arguments: args,
+            client.callTool({ name, arguments: args }, undefined, {
+              signal,
+              timeout: CHILD_CALL_TIMEOUT_MS,
             }) as Promise<CallToolResult>,
         ),
     },
@@ -264,7 +332,7 @@ export function acquireChild(
   if (pending) return pending;
 
   const failure = spawnFailures.get(key);
-  if (failure && Date.now() - failure.at < failureBackoffMs(failure.count)) {
+  if (failure && inSpawnBackoff(key)) {
     return Promise.reject(
       failure.error instanceof Error
         ? failure.error
@@ -272,31 +340,63 @@ export function acquireChild(
     );
   }
 
-  const promise = (async () => {
+  const spawn = async (): Promise<ChildHandle> => {
     try {
       const handle = await spawnChild(key, spec());
-      spawnFailures.delete(key);
+      if (spawnFailures.delete(key)) {
+        const server = serverOf(key);
+        resolveAlert(
+          `mcp.child.${server}`,
+          `MCP server "${server}" is starting normally again.`,
+        );
+      }
       return handle;
     } catch (err) {
-      const prior = spawnFailures.get(key);
-      spawnFailures.set(key, {
-        at: Date.now(),
-        count: (prior?.count ?? 0) + 1,
-        error: err,
-      });
+      noteSpawnFailure(key, err);
       throw err;
-    } finally {
-      inflight.delete(key);
     }
-  })();
+  };
+  // `.finally` always runs after the `set` below. A `finally` block inside
+  // `spawn` would not: when `spec()` throws synchronously it runs before
+  // the set, leaving the rejected promise in `inflight` for good.
+  const promise = spawn().finally(() => inflight.delete(key));
   inflight.set(key, promise);
   return promise;
+}
+
+/**
+ * tools/list for `key` without spawning when avoidable: served from the
+ * per-server cache once any child of that server has listed its tools
+ * (see header). Falls through to the chat's own child when nothing is
+ * cached yet, or when this key is inside its spawn-failure backoff —
+ * a server that cannot start keeps failing its listing, as before,
+ * rather than advertising tools every call to which would fail.
+ */
+export async function listChildTools(
+  key: string,
+  spec: () => ChildSpec,
+): Promise<Tool[]> {
+  const live = children.get(key);
+  const cached = toolListCache.get(serverOf(key));
+  if (!live && cached && !inSpawnBackoff(key)) return cached;
+  const child = await acquireChild(key, spec);
+  return child.listTools();
+}
+
+function inSpawnBackoff(key: string): boolean {
+  const failure = spawnFailures.get(key);
+  return (
+    failure !== undefined &&
+    Date.now() - failure.at < failureBackoffMs(failure.count)
+  );
 }
 
 /** Close every child immediately. Daemon shutdown path. */
 export async function closeAllChildren(): Promise<void> {
   const entries = [...children.values()];
   children.clear();
+  toolListCache.clear();
+  toolListGeneration++;
   await Promise.allSettled(entries.map((entry) => entry.close()));
   if (entries.length > 0) {
     log("gateway", `hub: closed ${entries.length} MCP child(ren)`);
@@ -319,6 +419,9 @@ const RETIRE_GRACE_MS = 60_000;
 export function retireAllChildren(): void {
   const entries = [...children.values()];
   children.clear();
+  // Reloaded plugin code may expose different tools.
+  toolListCache.clear();
+  toolListGeneration++;
   for (const entry of entries) {
     entry.retired = true;
     if (entry.pending === 0) {
@@ -340,7 +443,9 @@ export function retireAllChildren(): void {
 function reapIdle(): void {
   const cutoff = Date.now() - idleTtlMs();
   for (const [key, entry] of children) {
-    if (entry.lastActivity >= cutoff) continue;
+    // A call outliving the TTL is work, not idleness — closing the child
+    // would fail it mid-flight. The first sweep after it drains reaps.
+    if (entry.lastActivity >= cutoff || entry.pending > 0) continue;
     children.delete(key);
     entry.close().catch((err) => {
       logError("gateway", `hub reap of ${describeKey(key)} failed`, err);

@@ -133,8 +133,8 @@ terminal claims the legacy chat id `"1"` ahead of telegram (10).
    `core/frontend-runtime/chat-id.ts`).
 3. Drop a `factory.ts` beside the implementation and list it in
    `src/frontend/factories.ts`.
-4. Add the id to the config `frontendEnum` in `util/config.ts`, plus a
-   config block and its credential check in `validateConfig`.
+4. Add the id to the config `frontendEnum` in `core/config/index.ts`, plus
+   a config block and its credential check in `loadConfig`.
 5. Expose the tools it implements: add the id to `ToolFrontend`
    (`core/tools/types.ts`), to `VALID_TOOL_FRONTENDS`
    (`core/mcp-hub/talon-server.ts`), to `FRONTEND_TOOLS`

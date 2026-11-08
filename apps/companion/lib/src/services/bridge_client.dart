@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show HttpClient, X509Certificate;
+import 'dart:io' show HttpClient, SecurityContext, X509Certificate;
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
 import '../models/bridge_models.dart';
 import '../models/connection.dart';
+import '../models/credentials.dart';
 import 'bridge_trust.dart';
 import 'log.dart';
 
@@ -34,6 +36,14 @@ class BridgeClient {
   /// up here turns silence into a reported failure.
   static const Duration streamIdleTimeout = Duration(seconds: 45);
 
+  /// Silence after which the SSE event stream is declared dead. The daemon
+  /// writes a `: ping` comment every 25 s, so a healthy stream is never quiet
+  /// this long; a half-open socket (a network switch, NAT dropping the flow
+  /// without a FIN) delivers neither bytes nor an error, and without this
+  /// deadline the stream would sit "connected" forever while the HTTP
+  /// heartbeat keeps the device marked online.
+  static const Duration eventStreamIdleTimeout = Duration(seconds: 70);
+
   /// Wall-clock budget for pushing [bytes] up (the `upload_file` half).
   /// Unlike a download there is no per-chunk event to watch — the response
   /// arrives only once the whole body is sent — so the deadline is sized
@@ -43,8 +53,26 @@ class BridgeClient {
         milliseconds: 30 * 1000 + (bytes / (32 * 1024) * 1000).round(),
       );
 
-  ConnectionConfig config;
-  late final http.Client _http = _newClient();
+  ConnectionConfig _config;
+  http.Client? _httpClient;
+
+  /// The profile this client talks to. Swapping it (the background isolate
+  /// hops between the LAN and the external address) rebuilds the REST
+  /// client when the TLS setup it was built for no longer matches.
+  ConnectionConfig get config => _config;
+  set config(ConnectionConfig next) {
+    final prev = _config;
+    _config = next;
+    if (next.tls != prev.tls ||
+        next.enforcesPin != prev.enforcesPin ||
+        next.clientP12 != prev.clientP12 ||
+        next.clientP12Password != prev.clientP12Password) {
+      _httpClient?.close();
+      _httpClient = null;
+    }
+  }
+
+  http.Client get _http => _httpClient ??= _newClient();
 
   final _events = StreamController<Map<String, dynamic>>.broadcast();
   StreamSubscription<String>? _sseSub;
@@ -53,6 +81,7 @@ class BridgeClient {
 
   String? _seenFingerprint;
   bool _pinRejected = false;
+  bool _pinObserved = false;
 
   /// This device's mesh id, when it has one. Claimed on the SSE GET so the
   /// daemon addresses `device_command` frames to this client alone, and sent
@@ -61,27 +90,98 @@ class BridgeClient {
   /// makes this a plain UI connection.
   String? meshDeviceId;
 
-  BridgeClient(this.config);
+  BridgeClient(
+    ConnectionConfig config, {
+    this.skipKinds = const {},
+    this.eventStreamIdle = eventStreamIdleTimeout,
+  }) : _config = config;
+
+  /// See [eventStreamIdleTimeout]; injectable so tests can stall a stream
+  /// without waiting a minute.
+  final Duration eventStreamIdle;
+
+  DateTime? _lastRx;
+
+  /// When the event stream last delivered anything — an event or a `: ping`
+  /// keep-alive. Null until a stream has opened. The freshest proof the
+  /// connection is really alive, unlike a successful HTTP request, which
+  /// travels on a different socket.
+  DateTime? get lastRx => _lastRx;
+
+  /// Event kinds this client drops *before* JSON-decoding them. The
+  /// background mesh isolate sets this to the chat-UI firehose (`delta`,
+  /// `reasoning`, …) it never uses — otherwise both isolates parse every
+  /// streamed token while the app is open (#1060).
+  final Set<String> skipKinds;
+
+  /// The `kind` of an SSE frame without decoding it, when it can be read
+  /// cheaply: the daemon serialises every event with `kind` as its first
+  /// key (`{"kind":"delta",…}`). Anything else returns null and is decoded
+  /// normally, so an unexpected shape never loses an event.
+  @visibleForTesting
+  static String? peekKind(String raw) {
+    const prefix = '{"kind":"';
+    if (!raw.startsWith(prefix)) return null;
+    final end = raw.indexOf('"', prefix.length);
+    if (end < 0) return null;
+    final kind = raw.substring(prefix.length, end);
+    return kind.contains(r'\') ? null : kind;
+  }
 
   /// Fingerprint of the certificate seen on the most recent TLS handshake —
   /// the pin candidate the caller persists after a successful first connect.
   String? get seenFingerprint => _seenFingerprint;
 
+  /// True once a handshake presented exactly the pinned certificate — the
+  /// caller then persists [ConnectionConfig.pinObserved], which makes the
+  /// pin binding even for CA-valid certificates.
+  bool get pinObserved => _pinObserved;
+
+  /// How long an idle pooled connection is kept for reuse. dart:io's default
+  /// is 15 s, shorter than the mesh's 60 s registration heartbeat, so every
+  /// heartbeat paid a fresh DNS lookup, TCP connect and TLS handshake
+  /// (~1000 of them in two days on one Mac). Outliving the heartbeat lets
+  /// it ride one kept-alive connection wherever the server end (a reverse
+  /// proxy, or the bridge's own keep-alive window) holds it open too; a
+  /// connection the server has closed is dropped from the pool as soon as
+  /// its FIN arrives, so nothing is sent on a dead socket.
+  static const Duration restIdleTimeout = Duration(seconds: 90);
+
   http.Client _newClient() {
-    if (!config.tls) return http.Client();
-    final inner = HttpClient()
-      ..badCertificateCallback = (cert, host, port) => _evaluate(cert);
+    // A reverse proxy in front of the bridge may demand a client
+    // certificate; present the imported one whenever it's asked for. Server
+    // trust is still the pin below. A profile that enforces its pin leaves
+    // the platform's CA roots out, so no certificate is trusted before the
+    // pin has been checked.
+    final strict = config.enforcesPin;
+    final inner = config.tls
+        ? (HttpClient(
+            context: config.clientSecurityContext(trustedRoots: !strict) ??
+                (strict ? SecurityContext(withTrustedRoots: false) : null),
+          )
+            // BridgeTrust (the process-wide HttpOverrides) may have routed
+            // connections through the process pin; this client pins itself.
+            ..connectionFactory = null
+            ..badCertificateCallback = (cert, host, port) => _evaluate(cert))
+        : HttpClient();
+    inner.idleTimeout = restIdleTimeout;
     return IOClient(inner);
   }
 
-  /// Fires only for certificates the platform doesn't already trust (so
-  /// CA-backed reverse proxies bypass it). No pin yet ⇒ trust on first use;
-  /// pinned ⇒ exact fingerprint match or the handshake is refused.
+  /// Fires for certificates the platform doesn't already trust — and, on a
+  /// profile that [ConnectionConfig.enforcesPin], for every certificate.
+  /// Otherwise CA-backed reverse proxies bypass it. No pin yet ⇒ trust on
+  /// first use; pinned ⇒ exact fingerprint match or the handshake is
+  /// refused.
   bool _evaluate(X509Certificate cert) {
     final seen = BridgeTrust.fingerprintOf(cert);
     _seenFingerprint = seen;
     final pinned = config.fingerprint;
-    if (pinned == null || seen == pinned) return true;
+    if (pinned == null) return true;
+    if (seen == pinned) {
+      _pinObserved = true;
+      return true;
+    }
     _pinRejected = true;
     return false;
   }
@@ -92,7 +192,33 @@ class BridgeClient {
       _pinRejected = false;
       throw BridgeException.certificateChanged();
     }
+    if (isClientCertificateAlert(error)) {
+      throw BridgeException.clientCertificateRequired(
+        rejected: config.hasClientCert,
+      );
+    }
     throw BridgeException('$fallback: $error');
+  }
+
+  /// TLS alerts a reverse proxy sends when the handshake lacked an
+  /// acceptable client certificate (Caddy, Traefik, HAProxy…).
+  static bool isClientCertificateAlert(Object error) {
+    final text = error.toString().toUpperCase();
+    return text.contains('CERTIFICATE_REQUIRED') ||
+        text.contains('ALERT_BAD_CERTIFICATE') ||
+        text.contains('ALERT_UNKNOWN_CA') ||
+        text.contains('ALERT_CERTIFICATE_UNKNOWN');
+  }
+
+  /// HTTP-level refusals by a proxy that wanted a client certificate:
+  /// nginx answers 400 "No required SSL certificate was sent", Cloudflare's
+  /// mTLS rule a 403 page (marked by cf-ray).
+  static bool _proxyRefusedCertificate(http.Response res) {
+    if (res.statusCode == 403 && res.headers.containsKey('cf-ray')) {
+      return true;
+    }
+    return res.statusCode == 400 &&
+        RegExp(r'SSL certificate', caseSensitive: false).hasMatch(res.body);
   }
 
   /// Decoded SSE payloads (`{kind: ...}` objects).
@@ -111,18 +237,91 @@ class BridgeClient {
           .get(_u('/health'))
           .timeout(timeout ?? const Duration(seconds: 4));
       AppLog.debug('bridge', 'health result ${res.statusCode}');
+      if (_proxyRefusedCertificate(res)) {
+        throw BridgeException.clientCertificateRequired(
+          rejected: config.hasClientCert,
+        );
+      }
       if (res.statusCode != 200) return null;
       final body = _decodeObject(res.body);
       return body['app'] == 'talon-bridge' ? body : null;
+    } on BridgeException {
+      rethrow; // already a diagnosis (client certificate required)
     } catch (e) {
       AppLog.warn('bridge', 'health probe failed', e);
       if (_pinRejected) {
         _pinRejected = false;
         throw BridgeException.certificateChanged();
       }
+      if (isClientCertificateAlert(e)) {
+        throw BridgeException.clientCertificateRequired(
+          rejected: config.hasClientCert,
+        );
+      }
       return null;
     }
   }
+
+  /// Handshake with [config]'s bridge and report the certificate it
+  /// presents, without sending any credential: the token is dropped from
+  /// the probe's profile, and `/health` is the only request made. Any pin on
+  /// [config] is ignored too, so the certificate is always observed.
+  ///
+  /// The manual-entry path uses this to show the fingerprint for the user
+  /// to confirm before the token goes anywhere.
+  static Future<CertificateProbe> probeCertificate(
+    ConnectionConfig config, {
+    Duration timeout = const Duration(seconds: 6),
+  }) async {
+    final probe = BridgeClient(
+      config.copyWith(clearToken: true, clearFingerprint: true),
+    );
+    try {
+      final h = await probe.health(timeout: timeout);
+      return CertificateProbe(
+        fingerprint: probe.seenFingerprint,
+        reached: h != null,
+      );
+    } on BridgeException {
+      // A proxy demanding a client certificate still answered; the connect
+      // that follows reports that properly.
+      return CertificateProbe(
+        fingerprint: probe.seenFingerprint,
+        reached: true,
+      );
+    } finally {
+      probe.dispose();
+    }
+  }
+
+  // ── Per-device credentials ─────────────────────────────────────────────────
+
+  /// `GET /auth/whoami` — which credential this connection uses and whether
+  /// the daemon wants it upgraded or rotated. Null when the daemon predates
+  /// per-device credentials (the route answers 404).
+  Future<CredentialStatus?> whoami() async {
+    final res = await _http
+        .get(_u('/auth/whoami'), headers: config.authHeaders())
+        .timeout(const Duration(seconds: 12));
+    if (res.statusCode == 404) return null;
+    return CredentialStatus.fromJson(_decode(res));
+  }
+
+  /// The `POST /auth/upgrade` body a companion sends: its mesh device id and
+  /// the scopes it needs (the mesh + the chat UI). The daemon caps the grant
+  /// by its `native.companionScopes` policy.
+  static Map<String, dynamic> upgradeRequestBody(String deviceId) => {
+        'deviceId': deviceId,
+        'client': 'companion',
+        'scopes': const ['device', 'client'],
+      };
+
+  /// Trade the current bearer (shared token, or this device's credential
+  /// when rotating) for a per-device credential bound to [deviceId].
+  Future<CredentialGrant> upgradeCredential(String deviceId) async =>
+      CredentialGrant.fromJson(
+        await _postJson('/auth/upgrade', upgradeRequestBody(deviceId)),
+      );
 
   // ── SSE stream ──────────────────────────────────────────────────────────────
 
@@ -165,12 +364,36 @@ class BridgeClient {
       if (res.statusCode == 401) {
         throw BridgeException.unauthorized();
       }
-      throw BridgeException('Event stream rejected (${res.statusCode})');
+      // A 403 here is usually the daemon refusing this device id (e.g. a
+      // pairing it could not bind) — its body says why; show that.
+      final body = await res.stream
+          .bytesToString()
+          .timeout(const Duration(seconds: 5), onTimeout: () => '');
+      throw BridgeException(
+        _serverError('Event stream rejected', res.statusCode, body),
+      );
     }
 
     AppLog.info('bridge', 'event stream open');
+    _lastRx = DateTime.now();
     final buffer = StringBuffer();
+    final idle = eventStreamIdle;
     _sseSub = res.stream
+        // An inter-event deadline (as in downloadFile): the keep-alive pings
+        // reset it, so only a stream that stops delivering entirely trips
+        // it — and the error reaches the owner, whose reconnect fires.
+        .timeout(
+          idle,
+          onTimeout: (sink) => sink.addError(
+            BridgeException(
+              'Event stream idle: nothing received for ${idle.inSeconds}s',
+            ),
+          ),
+        )
+        .map((chunk) {
+          _lastRx = DateTime.now();
+          return chunk;
+        })
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(
@@ -204,6 +427,10 @@ class BridgeClient {
     final raw = buffer.toString().trim();
     buffer.clear();
     if (raw.isEmpty || _closed) return;
+    if (skipKinds.isNotEmpty) {
+      final kind = peekKind(raw);
+      if (kind != null && skipKinds.contains(kind)) return;
+    }
     try {
       final obj = _decodeObject(raw);
       _events.add(obj);
@@ -549,13 +776,26 @@ class BridgeClient {
   /// The daemon explains a rejected upload (too large, disk error) in the
   /// body; surface that rather than a bare status code.
   static String _uploadError(int status, String body) {
+    final error = _bodyError(body);
+    if (error != null) return error;
+    return 'Upload rejected ($status)${body.isEmpty ? '' : ': $body'}';
+  }
+
+  /// A non-401 rejection: the daemon's own `{"error": …}` text when it sent
+  /// one (e.g. a device-id bind refusal), else `<fallback> (<status>)`.
+  static String _serverError(String fallback, int status, String body) {
+    final error = _bodyError(body);
+    return error != null ? '$error ($status)' : '$fallback ($status)';
+  }
+
+  static String? _bodyError(String body) {
     try {
       final j = jsonDecode(body);
       if (j is Map && j['error'] is String) return j['error'] as String;
     } catch (_) {
-      /* not JSON — fall through to the generic form */
+      /* not JSON */
     }
-    return 'Upload rejected ($status)${body.isEmpty ? '' : ': $body'}';
+    return null;
   }
 
   Future<(String active, List<ModelOption> models)> models([
@@ -649,7 +889,9 @@ class BridgeClient {
   Map<String, dynamic> _decode(http.Response res) {
     if (res.statusCode == 401) throw BridgeException.unauthorized();
     if (res.statusCode >= 400) {
-      throw BridgeException('Request failed (${res.statusCode})');
+      throw BridgeException(
+        _serverError('Request failed', res.statusCode, res.body),
+      );
     }
     if (res.body.isEmpty) return const {};
     return _decodeObject(res.body);
@@ -672,28 +914,62 @@ class BridgeClient {
     AppLog.info('bridge', 'disconnect');
     _sseSub?.cancel();
     _sseClient?.close();
-    _http.close();
+    _httpClient?.close();
     _events.close();
   }
+}
+
+/// What [BridgeClient.probeCertificate] saw.
+class CertificateProbe {
+  /// SHA-256 of the certificate the server presented, when the platform did
+  /// not already trust it (a bridge's own self-signed certificate). Null
+  /// for a certificate that chains to a trusted CA, or when no TLS
+  /// handshake happened at all.
+  final String? fingerprint;
+
+  /// Whether a Talon bridge (or a proxy in front of one) answered.
+  final bool reached;
+
+  const CertificateProbe({this.fingerprint, required this.reached});
 }
 
 class BridgeException implements Exception {
   final String message;
   final bool unauthorized;
   final bool certificateChanged;
-  BridgeException(this.message)
-      : unauthorized = false,
-        certificateChanged = false;
+
+  /// A reverse proxy refused the connection for want of a (valid) client
+  /// certificate. Never heals by retrying — the user has to import one.
+  final bool clientCertificateRequired;
+
+  /// [message] often embeds a lower-level error whose text quotes the full
+  /// request URL (token included); it is redacted before it is stored.
+  BridgeException(String message)
+      : message = redactSecrets(message),
+        unauthorized = false,
+        certificateChanged = false,
+        clientCertificateRequired = false;
   BridgeException.unauthorized()
       : message = 'Unauthorized — check your token',
         unauthorized = true,
-        certificateChanged = false;
+        certificateChanged = false,
+        clientCertificateRequired = false;
   BridgeException.certificateChanged()
       : message = "The bridge's certificate no longer matches the pinned "
             'fingerprint. If Talon was reinstalled, clear the pinned '
             'fingerprint in connection settings and reconnect.',
         unauthorized = false,
-        certificateChanged = true;
+        certificateChanged = true,
+        clientCertificateRequired = false;
+  BridgeException.clientCertificateRequired({bool rejected = false})
+      : message = rejected
+            ? "The server didn't accept this device's client certificate. "
+                'Import a valid one in connection settings.'
+            : 'This server requires a client certificate. Import one in '
+                'connection settings (Import certificate).',
+        unauthorized = false,
+        certificateChanged = false,
+        clientCertificateRequired = true;
   @override
   String toString() => message;
 }

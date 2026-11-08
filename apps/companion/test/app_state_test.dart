@@ -474,6 +474,49 @@ void main() {
       expect(await state.loadOlderMessages('c1'), 0);
     });
 
+    test('reconnect after paging back keeps the thread in order', () async {
+      // Regression: the reconnect merge appended every in-memory message
+      // missing from the 200-row window — including older scrollback paged
+      // in earlier — BELOW the newest history, so week-old messages showed
+      // up as the latest after a daemon/Docker restart.
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      bridge.messages['c1'] = [
+        for (var i = 1; i <= 250; i++)
+          {
+            'id': '$i',
+            'chatId': 'c1',
+            'role': i.isEven ? 'assistant' : 'user',
+            'text': 'msg $i',
+            'ts': i,
+          },
+      ];
+      final state = await stateFor(configFor(bridge));
+      addTearDown(state.dispose);
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+      await _waitFor(() => state.messagesFor('c1').length == 200);
+      expect(await state.loadOlderMessages('c1'), 50);
+      expect(state.messagesFor('c1').length, 250);
+
+      // Daemon restarts → the client reconnects and reloads the window.
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+      await _waitFor(() => state.messagesFor('c1').length == 200);
+
+      final ts = state.messagesFor('c1').map((m) => m.ts).toList();
+      for (var i = 1; i < ts.length; i++) {
+        expect(ts[i], greaterThan(ts[i - 1]), reason: 'out of order at $i');
+      }
+      expect(state.messagesFor('c1').first.text, 'msg 51');
+      expect(state.messagesFor('c1').last.text, 'msg 250');
+      // Scrolling back up pages the dropped rows in again, in order.
+      expect(state.hasMoreHistory('c1'), isTrue);
+      expect(await state.loadOlderMessages('c1'), 50);
+      expect(state.messagesFor('c1').first.text, 'msg 1');
+      expect(state.messagesFor('c1').last.text, 'msg 250');
+    });
+
     test('searchMessages returns daemon hits', () async {
       final bridge = await MockBridge.start();
       addTearDown(bridge.close);
@@ -815,6 +858,67 @@ void main() {
         state.messagesFor('c1').any((m) => m.text.startsWith('Failed to send')),
         isTrue,
       );
+    });
+  });
+
+  group('AppState resume after silence', () {
+    test('reopens a stream that has been quiet past the threshold', () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final state = await stateFor(configFor(bridge));
+      addTearDown(state.dispose);
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+      expect(bridge.eventRequests, hasLength(1));
+
+      // Fresh stream: resuming must not churn the connection.
+      state.reconnectIfStale();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(bridge.eventRequests, hasLength(1));
+
+      // Resumed "40 s later" with nothing heard since: reopen.
+      state.reconnectIfStale(
+        now: DateTime.now().add(const Duration(seconds: 40)),
+      );
+      await _waitFor(() => bridge.eventRequests.length == 2);
+      await _waitFor(() => state.conn == ConnState.connected);
+    });
+
+    test('resumeUiStream resets backoff and reconnects immediately', () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final state = await stateFor(configFor(bridge));
+      addTearDown(state.dispose);
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+
+      state.pauseUiStream();
+      expect(state.conn, ConnState.idle);
+      expect(state.uiStreamPaused, isTrue);
+
+      state.resumeUiStream();
+      expect(state.uiStreamPaused, isFalse);
+      await _waitFor(() => state.conn == ConnState.connected);
+      expect(bridge.eventRequests.length, greaterThanOrEqualTo(2));
+    });
+
+    test('foreground resume reconnects immediately after a background pause',
+        () async {
+      final bridge = await MockBridge.start();
+      addTearDown(bridge.close);
+      final state = await stateFor(configFor(bridge));
+      addTearDown(state.dispose);
+      await state.start();
+      await _waitFor(() => state.conn == ConnState.connected);
+
+      state.pauseUiStream();
+      expect(state.conn, ConnState.idle);
+
+      // What the app does on resume: un-pause, then probe for staleness.
+      state.resumeUiStream();
+      state.reconnectIfStale();
+      await _waitFor(() => state.conn == ConnState.connected);
+      expect(bridge.eventRequests.length, greaterThanOrEqualTo(2));
     });
   });
 }

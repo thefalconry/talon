@@ -305,12 +305,12 @@ describe("readLastTokenCount", () => {
 // of the existing per-call usage reader. The same rollout JSONL carries
 // rate_limits info on every `token_count` event; we read it to distinguish
 // "silent exit because oauth-incompat" from "silent exit because account
-// has no credits" — the 2026-05-21 case Dylan flagged where a free
+// has no credits" — the 2026-05-21 case Ada flagged where a free
 // ChatGPT OAuth account ran out of quota and surfaced as a silent exit-1.
 
 /**
  * Exhausted-shape `token_count` payload — exactly the shape Codex CLI
- * wrote to Dylan's rollout when his free OAuth ran out of credits.
+ * wrote to Ada's rollout when his free OAuth ran out of credits.
  *
  *   info: null               — turn died before any API call returned usage
  *   rate_limits.credits.has_credits: false

@@ -32,7 +32,7 @@
 import { randomBytes } from "node:crypto";
 
 /** Unclaimed grants die after this long. A pairing link is used at once. */
-const GRANT_TTL_MS = 10 * 60 * 1000;
+export const PAIR_GRANT_TTL_MS = 10 * 60 * 1000;
 
 export type CompanionPairGrant = {
   token: string;
@@ -59,7 +59,7 @@ export type CompanionPairPayload = {
 export class CompanionPairStore {
   private readonly grants = new Map<string, CompanionPairGrant>();
 
-  constructor(private readonly ttlMs = GRANT_TTL_MS) {}
+  constructor(private readonly ttlMs = PAIR_GRANT_TTL_MS) {}
 
   create(
     grant: Omit<CompanionPairGrant, "token" | "createdAt" | "used">,

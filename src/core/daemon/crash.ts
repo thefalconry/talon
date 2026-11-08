@@ -19,6 +19,8 @@
  */
 
 import { logError, logWarn } from "../../util/log.js";
+import { writeCrashMarker } from "./crash-marker.js";
+import { noteUnhandledRejection } from "./health-alerts.js";
 import { removePidRecordIfOwnedBy } from "./pidfile.js";
 import { spawnSuccessor } from "./respawn.js";
 
@@ -65,7 +67,9 @@ export function crashCleanup(hooks: CrashHooks): void {
 
 /**
  * `process.on("uncaughtException")` body. Cleanup happens before the
- * crash is reported, never after.
+ * crash is reported, never after. The crash marker sits between the two:
+ * it is how the operator hears about this crash (the next boot announces
+ * it), but it is not worth a pidfile or a successor.
  */
 export function handleUncaughtException(err: Error, hooks: CrashHooks): void {
   // EPIPE errors from network sockets (e.g. Telegram MTProto) are transient —
@@ -77,6 +81,32 @@ export function handleUncaughtException(err: Error, hooks: CrashHooks): void {
     return;
   }
   crashCleanup(hooks);
+  crashStep("crash marker", () => writeCrashMarker("uncaught", err));
   crashStep("crash report", () => logError("bot", "Uncaught exception", err));
   process.exit(1);
+}
+
+/**
+ * `process.on("unhandledRejection")` body. Report — never crash — but keep
+ * the stack: a bare "Unhandled rejection: ENOSPC: no space left on device,
+ * write" says nothing about which code path forgot its `.catch()`. Async fs
+ * errors carry `path`/`syscall` rather than useful frames, so those ride
+ * along in the message too. Repeats raise `daemon.unhandled`
+ * (./health-alerts.ts).
+ */
+export function handleUnhandledRejection(reason: unknown): void {
+  crashStep("rejection report", () => {
+    if (!(reason instanceof Error)) {
+      logError("bot", `Unhandled rejection: ${String(reason)}`);
+      return;
+    }
+    const { syscall, path } = reason as NodeJS.ErrnoException;
+    const where = [syscall, path].filter(Boolean).join(" ");
+    logError(
+      "bot",
+      `Unhandled rejection: ${reason.message}${where ? ` (${where})` : ""}`,
+      reason,
+    );
+  });
+  crashStep("rejection alarm", () => noteUnhandledRejection(reason));
 }

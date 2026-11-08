@@ -12,6 +12,7 @@
 import { networkInterfaces } from "node:os";
 import {
   CompanionPairStore,
+  PAIR_GRANT_TTL_MS,
   pairLink,
   pairPage,
   type CompanionPairPayload,
@@ -23,7 +24,31 @@ import {
   normalizeGoos,
   type NodeBinaryResolver,
 } from "./node-binaries.js";
-import { installOneLiner, NodeProvisionStore } from "./node-provision.js";
+import {
+  autoInstallOneLiners,
+  checkBridgeUrl,
+  installOneLiner,
+  installRefusalScript,
+  NodeProvisionStore,
+} from "./node-provision.js";
+import {
+  DEFAULT_COMPANION_SCOPES,
+  isDeviceCredentialToken,
+  NODE_SCOPES,
+  UNBOUND_TTL_MS,
+  type CredentialOrigin,
+  type MeshScope,
+} from "../credentials/index.js";
+
+/**
+ * Mints the per-device credential a pairing link or installer carries,
+ * unbound until the device first names itself with it. Absent (tests,
+ * embedders without a credential store) = links carry the shared token.
+ */
+export type PairingCredentialMinter = (
+  scopes: readonly MeshScope[],
+  origin: CredentialOrigin,
+) => string;
 
 /**
  * What the native bridge tells the mesh about itself once it's listening —
@@ -40,6 +65,17 @@ export type MeshBridgeInfo = {
   token?: string;
   /** TLS certificate SHA-256 (absent over plain HTTP). */
   fingerprint?: string;
+  /** Base64 SHA-256 of the TLS key's SPKI, curl's pin (absent over HTTP). */
+  spkiPin?: string;
+  /**
+   * The operator's `native.publicUrl`: what devices dial when the bind
+   * address isn't reachable as-is (containers, NAT, proxies).
+   */
+  publicUrl?: string;
+  /** `native.legacySharedToken`: whether remote clients may still use `token`. */
+  legacySharedToken?: boolean;
+  /** Scopes a companion's pairing credential carries (`native.companionScopes`). */
+  companionScopes?: readonly MeshScope[];
 };
 
 export class BridgeLinks {
@@ -49,7 +85,24 @@ export class BridgeLinks {
   private readonly companionPairs = new CompanionPairStore();
   private bridgeInfo: MeshBridgeInfo | null = null;
 
-  constructor(private readonly resolveNode: NodeBinaryResolver) {}
+  constructor(
+    private readonly resolveNode: NodeBinaryResolver,
+    private readonly mintCredential?: PairingCredentialMinter,
+  ) {}
+
+  /**
+   * The bearer a link hands a new device: its own credential when the mesh
+   * has a credential store, else the shared bridge token (legacy).
+   */
+  private linkCredential(
+    sharedToken: string,
+    scopes: readonly MeshScope[],
+    origin: CredentialOrigin,
+  ): string {
+    return this.mintCredential
+      ? this.mintCredential(scopes, origin)
+      : sharedToken;
+  }
 
   /** The native bridge reports its reachable identity here (null on stop). */
   setBridgeInfo(info: MeshBridgeInfo | null): void {
@@ -93,9 +146,10 @@ export class BridgeLinks {
     name?: unknown,
     bridgeUrl?: unknown,
   ): Promise<MeshToolResult> {
+    const auto = isBlank(os) && isBlank(arch);
     const goos = normalizeGoos(os);
     const goarch = normalizeGoarch(arch);
-    if (!goos || !goarch) {
+    if (!auto && (!goos || !goarch)) {
       return { ok: false, text: unknownTargetText(os, arch) };
     }
     const info = this.bridgeInfo;
@@ -113,6 +167,33 @@ export class BridgeLinks {
     }
     const base = this.bridgeBaseUrl(info, bridgeUrl);
     if (typeof base !== "string") return { ok: false, text: base.error };
+    if (auto || !goos || !goarch) {
+      const pending = this.provision.createAuto({
+        ...(typeof name === "string" && name.trim()
+          ? { name: name.trim() }
+          : {}),
+        bridgeUrl: base,
+        bearerToken: this.linkCredential(info.token, NODE_SCOPES, "install"),
+        ...(info.fingerprint ? { fingerprint: info.fingerprint } : {}),
+        ...(info.spkiPin ? { spkiPin: info.spkiPin } : {}),
+      });
+      const cmd = autoInstallOneLiners(pending);
+      return {
+        ok: true,
+        text: [
+          "Run ONE of these on the new host — it reports its own OS and CPU, and the bridge picks the matching talon-node:",
+          "",
+          "Linux / macOS:",
+          `  ${cmd.posix}`,
+          "",
+          "Windows (elevated PowerShell or cmd):",
+          `  ${cmd.windows}`,
+          "",
+          `It installs talon-node (sha256-verified), pins the bridge certificate, and registers a boot service — the host appears on the mesh within a minute. Supported: ${NODE_TARGETS.map((t) => `${t.goos}/${t.goarch}`).join(", ")}.`,
+          `Single-use link, expires in 30 minutes. The host must be able to reach ${base}.`,
+        ].join("\n"),
+      };
+    }
     let bin;
     try {
       bin = await this.resolveNode(goos, goarch);
@@ -128,8 +209,9 @@ export class BridgeLinks {
       size: bin.size,
       version: bin.version,
       bridgeUrl: base,
-      bearerToken: info.token,
+      bearerToken: this.linkCredential(info.token, NODE_SCOPES, "install"),
       ...(info.fingerprint ? { fingerprint: info.fingerprint } : {}),
+      ...(info.spkiPin ? { spkiPin: info.spkiPin } : {}),
     });
     return {
       ok: true,
@@ -180,9 +262,14 @@ export class BridgeLinks {
     }
     const base = this.bridgeBaseUrl(info, bridgeUrl);
     if (typeof base !== "string") return { ok: false, text: base.error };
+    const token = this.linkCredential(
+      info.token,
+      info.companionScopes ?? DEFAULT_COMPANION_SCOPES,
+      "pair",
+    );
     const grant = this.companionPairs.create({
       bridgeUrl: base,
-      bearerToken: info.token,
+      bearerToken: token,
       ...(info.fingerprint ? { fingerprint: info.fingerprint } : {}),
       ...(typeof label === "string" && label.trim()
         ? { label: label.trim() }
@@ -192,8 +279,42 @@ export class BridgeLinks {
       ok: true,
       link: pairLink(grant),
       url: base,
-      token: info.token,
+      token,
       ...(info.fingerprint ? { fingerprint: info.fingerprint } : {}),
+    };
+  }
+
+  /**
+   * `make_companion_pair_link`: {@link makeCompanionPairLink} as a tool
+   * result — the one-tap link plus the values for typing in by hand, the
+   * same things the Telegram `/mesh pair` reply shows.
+   */
+  makeCompanionPairLinkText(
+    label?: unknown,
+    bridgeUrl?: unknown,
+  ): MeshToolResult {
+    const minted = this.makeCompanionPairLink(label, bridgeUrl);
+    if (!minted.ok) return minted;
+    const minutes = Math.round(PAIR_GRANT_TTL_MS / 60_000);
+    const perDevice = isDeviceCredentialToken(minted.token);
+    return {
+      ok: true,
+      text: [
+        "Open this link on the phone or computer running the Talon companion:",
+        "",
+        `  ${minted.link}`,
+        "",
+        `Single-use, expires in ${minutes} minutes. If the link doesn't open the app, enter these by hand:`,
+        `  Bridge URL: ${minted.url}`,
+        `  Token: ${minted.token}`,
+        ...(minted.fingerprint
+          ? [`  Certificate SHA-256: ${minted.fingerprint}`]
+          : []),
+        "",
+        perDevice
+          ? `The token is this device's own credential: it binds to the first device that registers with it and lapses after ${Math.round(UNBOUND_TTL_MS / 86_400_000)} days unused. It can't take over a device that already holds a live credential — revoke that one first (talon mesh revoke <device>).`
+          : "The token is the bridge's shared token (this mesh has no per-device credential store).",
+      ].join("\n"),
     };
   }
 
@@ -250,8 +371,67 @@ export class BridgeLinks {
     };
   }
 
+  /**
+   * The base URL a device should open a bridge-served link at (secret
+   * drop): the same answer the pairing and install links use.
+   */
+  bridgeBaseUrlFor(
+    explicit?: unknown,
+  ): { ok: true; url: string } | { ok: false; text: string } {
+    const info = this.bridgeInfo;
+    if (!info) {
+      return {
+        ok: false,
+        text: "The native bridge isn't running, so there is nothing to serve the link. Enable the native frontend first.",
+      };
+    }
+    const base = this.bridgeBaseUrl(info, explicit);
+    return typeof base === "string"
+      ? { ok: true, url: base }
+      : { ok: false, text: base.error };
+  }
+
   /** GET /node/install — serve a grant's installer script (single-use). */
-  openNodeInstall(token: string): { script: string; filename: string } | null {
+  /**
+   * An auto grant is pinned here first, from the os/arch its one-liner
+   * reported; a host with no build gets a failing script and the grant
+   * stays unspent.
+   */
+  async openNodeInstall(
+    token: string,
+    os?: string | null,
+    arch?: string | null,
+  ): Promise<{ script: string; filename: string } | null> {
+    if (this.provision.isPending(token)) {
+      const goos = normalizeGoos(os);
+      const goarch = normalizeGoarch(arch);
+      if (!goos || !goarch) {
+        return {
+          script: installRefusalScript(
+            `no talon-node build for os=${os ?? ""} arch=${arch ?? ""}`,
+          ),
+          filename: "install-talon-node.txt",
+        };
+      }
+      try {
+        const bin = await this.resolveNode(goos, goarch);
+        this.provision.pin(token, {
+          goos,
+          goarch,
+          binaryPath: bin.path,
+          sha256: bin.sha256,
+          size: bin.size,
+          version: bin.version,
+        });
+      } catch (err) {
+        return {
+          script: installRefusalScript(
+            `could not resolve talon-node for ${goos}/${goarch}: ${(err as Error).message}`,
+          ),
+          filename: "install-talon-node.txt",
+        };
+      }
+    }
     return this.provision.openScript(token);
   }
 
@@ -261,21 +441,26 @@ export class BridgeLinks {
   }
 
   /**
-   * The bridge base URL a NEW host should dial: an explicit override wins;
-   * otherwise derive from the bridge's bind. A wildcard bind maps to this
-   * host's first external IPv4; a loopback bind is unreachable from other
+   * The bridge base URL a NEW host should dial: an explicit override wins,
+   * then the configured `native.publicUrl`; otherwise derive from the
+   * bridge's bind. A wildcard bind maps to this host's first external IPv4;
+   * a loopback bind is unreachable from other
    * machines, so it's an error rather than a link that can't work.
    */
   private bridgeBaseUrl(
     info: MeshBridgeInfo,
     explicit?: unknown,
   ): string | { error: string } {
+    // Both URLs end up inside generated installer scripts, so they are held
+    // to a quote-safe alphabet (checkBridgeUrl), not just "looks like a URL".
     if (typeof explicit === "string" && explicit.trim()) {
-      const url = explicit.trim().replace(/\/+$/, "");
-      if (!/^https?:\/\/\S+$/.test(url)) {
-        return { error: `bridge_url must be an http(s) URL, got "${url}".` };
-      }
-      return url;
+      return checkBridgeUrl(explicit);
+    }
+    // Inside a container the "first external IPv4" is the container's own
+    // bridge-network address, which no phone can reach — the operator's
+    // public URL is the only right answer there.
+    if (info.publicUrl) {
+      return checkBridgeUrl(info.publicUrl, "native.publicUrl");
     }
     let host = info.host;
     if (host === "0.0.0.0" || host === "::") {
@@ -294,6 +479,15 @@ export class BridgeLinks {
     }
     return `${info.scheme}://${host}:${info.port}`;
   }
+}
+
+/** An omitted tool argument: absent, or an empty/whitespace string. */
+function isBlank(value: unknown): boolean {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" && !value.trim())
+  );
 }
 
 /** Error text for an os/arch pair outside the talon-node build matrix. */

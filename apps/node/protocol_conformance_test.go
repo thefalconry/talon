@@ -7,10 +7,16 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -25,6 +31,7 @@ type fixtureCommand struct {
 type fixtureCommandEntry struct {
 	Run             bool           `json:"run"`
 	NodeUnsupported bool           `json:"nodeUnsupported"`
+	Transfer        bool           `json:"transfer"`
 	ExpectOk        bool           `json:"expectOk"`
 	DataKeys        []string       `json:"dataKeys"`
 	Command         fixtureCommand `json:"command"`
@@ -33,10 +40,12 @@ type fixtureCommandEntry struct {
 type meshFixture struct {
 	Protocol         int                   `json:"protocol"`
 	NodeCapabilities []string              `json:"nodeCapabilities"`
+	NodeDesktop      []string              `json:"nodeDesktopCapabilities"`
 	Registration     map[string]any        `json:"registration"`
 	ResultOk         map[string]any        `json:"resultOk"`
 	ResultError      map[string]any        `json:"resultError"`
 	SandboxFiles     map[string]string     `json:"sandboxFiles"`
+	TransferBody     string                `json:"transferBody"`
 	Commands         []fixtureCommandEntry `json:"commands"`
 }
 
@@ -74,6 +83,26 @@ func TestNodeCapabilitiesMatchFixture(t *testing.T) {
 	}
 }
 
+// A platform may add commands on top of the common surface, but only ones
+// the shared fixture names — otherwise the daemon would meet a capability
+// no conformance sample describes.
+func TestPlatformCapabilitiesAreInFixture(t *testing.T) {
+	fx := loadMeshFixture(t)
+	for _, name := range platformCapabilities {
+		if !slices.Contains(fx.NodeDesktop, name) {
+			t.Errorf("platform capability %q is not in the fixture's nodeDesktopCapabilities %v", name, fx.NodeDesktop)
+		}
+	}
+	// Every build must at least recognise them, so a platform that does not
+	// implement one answers "unavailable here" and never "unknown command".
+	for _, name := range fx.NodeDesktop {
+		result := dispatch(context.Background(), nil, name, map[string]any{})
+		if strings.Contains(result.Message, "does not support") {
+			t.Errorf("fixture desktop capability %q has no dispatch case: %s", name, result.Message)
+		}
+	}
+}
+
 func TestRegistrationBodyMatchesFixture(t *testing.T) {
 	fx := loadMeshFixture(t)
 	n := &Node{
@@ -96,8 +125,8 @@ func TestRegistrationBodyMatchesFixture(t *testing.T) {
 	}
 
 	if body["capabilities"] == nil ||
-		!reflect.DeepEqual(body["capabilities"], nodeCapabilities) {
-		t.Errorf("registration must advertise nodeCapabilities, got %v", body["capabilities"])
+		!reflect.DeepEqual(body["capabilities"], allCapabilities()) {
+		t.Errorf("registration must advertise the full capability surface, got %v", body["capabilities"])
 	}
 	platform, _ := body["platform"].(string)
 	switch platform {
@@ -244,5 +273,83 @@ func TestDispatchUnsupportedAnswersCleanly(t *testing.T) {
 	}
 	if tested == 0 {
 		t.Fatal("fixture has no nodeUnsupported command samples")
+	}
+}
+
+// fixtureFileBridge is a fake /devices/file: it serves body for GET (push)
+// and records the POSTed body (pull), whatever the token.
+func fixtureFileBridge(t *testing.T, body string) (*httptest.Server, *[]byte) {
+	t.Helper()
+	var uploaded []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/devices/file" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method == http.MethodPost {
+			uploaded, _ = io.ReadAll(r.Body)
+			_, _ = io.WriteString(w, `{"ok":true}`)
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &uploaded
+}
+
+// TestTransferConformance runs the streamed transfer samples (`transfer:
+// true`) through the real dispatch against a fake /devices/file: the
+// result keys, the push digest check, and the digest the node reports.
+func TestTransferConformance(t *testing.T) {
+	fx := loadMeshFixture(t)
+	srv, uploaded := fixtureFileBridge(t, fx.TransferBody)
+	n := testNode(t, srv.URL, "test-token", filepath.Join(t.TempDir(), "config.json"))
+	bodySum := sha256.Sum256([]byte(fx.TransferBody))
+	want := hex.EncodeToString(bodySum[:])
+
+	tested := 0
+	for _, entry := range fx.Commands {
+		if !entry.Transfer {
+			continue
+		}
+		tested++
+		sandbox := t.TempDir()
+		for name, content := range fx.SandboxFiles {
+			if err := os.WriteFile(filepath.Join(sandbox, name), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		params := make(map[string]any, len(entry.Command.Params))
+		for k, v := range entry.Command.Params {
+			if s, isString := v.(string); isString {
+				v = strings.ReplaceAll(s, "{{TMP}}", sandbox)
+			}
+			params[k] = v
+		}
+		result := dispatch(context.Background(), n, entry.Command.Name, params)
+		if result.OK != entry.ExpectOk {
+			t.Fatalf("dispatch(%s) ok=%v (message: %s)", entry.Command.Name, result.OK, result.Message)
+		}
+		for _, key := range entry.DataKeys {
+			if _, present := result.Data[key]; !present {
+				t.Errorf("dispatch(%s) result data is missing contract key %q (got %v)",
+					entry.Command.Name, key, result.Data)
+			}
+		}
+		switch entry.Command.Name {
+		case "download_file":
+			if params["sha256"] != want || result.Data["sha256"] != want {
+				t.Errorf("download_file digest: param %v, reported %v, body %s",
+					params["sha256"], result.Data["sha256"], want)
+			}
+		case "upload_file":
+			sum := sha256.Sum256(*uploaded)
+			if got := hex.EncodeToString(sum[:]); result.Data["sha256"] != got {
+				t.Errorf("upload_file reported %v for bytes hashing to %s", result.Data["sha256"], got)
+			}
+		}
+	}
+	if tested != 2 {
+		t.Fatalf("fixture has %d transfer samples, want upload_file and download_file", tested)
 	}
 }

@@ -25,12 +25,11 @@ List<_ShortcutEntry> _entries() {
     const _ShortcutEntry('Esc', 'Close the open conversation / dialog'),
     const _ShortcutEntry('↑ / ↓', 'Move selection in the command palette'),
     const _ShortcutEntry('Enter', 'Run the highlighted action / open result'),
-    const _ShortcutEntry('?', 'Show this shortcuts list'),
   ];
 }
 
 /// Opens the "Keyboard shortcuts" dialog. Safe to call from anywhere with a
-/// [BuildContext] — used by the sidebar's ? button and the global ? binding.
+/// [BuildContext] — used by settings and the command palette.
 Future<void> openShortcutsHelp(BuildContext context) {
   return showDialog<void>(
     context: context,

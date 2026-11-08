@@ -63,7 +63,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { dirs, files as pathFiles } from "../../util/paths.js";
 import { todayAndYesterday } from "../../util/time.js";
-import { log } from "../../util/log.js";
+import { log, logWarn } from "../../util/log.js";
 import { loadSystemTemplate } from "./templates.js";
 import { renderMemoryView } from "./memory-view.js";
 import { renderWorkspaceListing } from "./workspace-listing.js";
@@ -125,11 +125,23 @@ const MEMORY_CHARS_METRIC = "prompt.memory_chars";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Unreadable prompt files already reported (path + error code). */
+const reportedUnreadable = new Set<string>();
+
 function readOptionalFile(path: string): string {
   try {
     if (existsSync(path)) return readFileSync(path, "utf-8").trim();
-  } catch {
-    /* ignore */
+  } catch (err) {
+    // Absent is fine (existsSync above); present-but-unreadable silently
+    // drops a prompt section, so say which — once, not every assembly.
+    const key = `${path}\0${(err as NodeJS.ErrnoException).code ?? ""}`;
+    if (!reportedUnreadable.has(key)) {
+      reportedUnreadable.add(key);
+      logWarn(
+        "workspace",
+        `Prompt file unreadable, section omitted path=${path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
   return "";
 }

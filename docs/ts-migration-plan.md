@@ -1,6 +1,6 @@
 # Long-term plan: migrating Talon off TypeScript
 
-Status: **proposal** (2026-08). Owner: Dylan. Nothing below is committed
+Status: **proposal** (2026-08). Owner: Ada. Nothing below is committed
 until its phase's entry gate is met.
 
 ## Why, and why carefully
@@ -105,7 +105,7 @@ idle-memory and per-turn rows need a daemon that has been up for a while
 and served turns; a freshly booted process has the boot rows and nothing
 else.
 Nothing here is estimated or back-filled; the cells stay empty until
-Dylan pastes a reading in.
+Ada pastes a reading in.
 
 | Metric | Question it answers | Reading | Notes |
 | --- | --- | --- | --- |
@@ -211,7 +211,7 @@ readings far enough apart to tell warm-up from creep.
 
 ## Position, 2026-09-18 — boundaries before rewrites
 
-Re-read after the cleanup and memory work, with Dylan asking whether
+Re-read after the cleanup and memory work, with Ada asking whether
 TypeScript is the right language for every part. The answer the tree
 gives:
 

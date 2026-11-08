@@ -60,8 +60,19 @@ class FakeBot {
   }
 }
 
+/** Just enough of grammY's GrammyError for the token check in bot.catch. */
+class FakeGrammyError extends Error {
+  constructor(
+    readonly error_code: number,
+    readonly description: string,
+  ) {
+    super(`Call to 'x' failed! (${error_code}: ${description})`);
+  }
+}
+
 vi.mock("grammy", () => ({
   Bot: FakeBot,
+  GrammyError: FakeGrammyError,
   InputFile: class {},
   API_CONSTANTS: { DEFAULT_UPDATE_TYPES: ["message", "callback_query"] },
 }));
@@ -72,7 +83,7 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
 }));
 
 const confirmUpdates = vi.fn(async () => {});
-vi.mock("../frontend/telegram/update-offset.js", () => ({
+vi.mock("../frontend/telegram/polling/update-offset.js", () => ({
   confirmUpdates: () => confirmUpdates(),
 }));
 
@@ -150,5 +161,63 @@ describe("telegram frontend lifecycle", () => {
     expect(confirmUpdates).toHaveBeenCalled();
     expect(disconnectUserClient).toHaveBeenCalled();
     expect(gatewayStop).toHaveBeenCalled();
+  });
+
+  describe("bot.catch", () => {
+    /** Start the frontend and hand back the error handler it installed. */
+    async function installedCatch(): Promise<(err: unknown) => void> {
+      const frontend = makeFrontend();
+      const starting = frontend.start();
+      const bot = FakeBot.last!;
+      bot.reportListening();
+      await starting;
+      return bot.catch.mock.calls[0][0] as (err: unknown) => void;
+    }
+
+    /** grammY hands bot.catch a BotError wrapping what the handler threw. */
+    function botError(inner: Error): Error {
+      return Object.assign(
+        new Error(`${inner.name} in middleware: ${inner.message}`),
+        {
+          error: inner,
+        },
+      );
+    }
+
+    it("survives a handler's 400 'not found' — only the token is fatal", async () => {
+      const exit = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => {}) as never);
+      try {
+        const onError = await installedCatch();
+        onError(
+          botError(
+            new FakeGrammyError(400, "Bad Request: message to edit not found"),
+          ),
+        );
+        onError(
+          botError(new FakeGrammyError(400, "Bad Request: chat not found")),
+        );
+        onError(botError(new Error("session 404 not found")));
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        exit.mockRestore();
+      }
+    });
+
+    it("still shuts down when Telegram rejects the token (401 / 404)", async () => {
+      const exit = vi
+        .spyOn(process, "exit")
+        .mockImplementation((() => {}) as never);
+      try {
+        const onError = await installedCatch();
+        onError(botError(new FakeGrammyError(401, "Unauthorized")));
+        onError(botError(new FakeGrammyError(404, "Not Found")));
+        expect(exit).toHaveBeenCalledTimes(2);
+        expect(exit).toHaveBeenCalledWith(1);
+      } finally {
+        exit.mockRestore();
+      }
+    });
   });
 });

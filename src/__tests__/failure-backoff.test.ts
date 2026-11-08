@@ -4,7 +4,19 @@
  * dream.test.ts).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+vi.mock("../util/log.js", () => ({
+  log: vi.fn(),
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+  logDebug: vi.fn(),
+}));
+
+import {
+  activeAlerts,
+  resetAlertsForTest,
+} from "../core/frontend-runtime/alerts.js";
 import {
   parseSessionLimitResetMs,
   failureBackoffUntil,
@@ -102,5 +114,55 @@ describe("FailureBackoff", () => {
     expect(b.failures).toBe(0);
     expect(b.active(NOW)).toBe(false);
     expect(b.fail(new Error("boom"), NOW)).toBe(NOW + 5 * 60 * 1000);
+  });
+});
+
+describe("FailureBackoff — operator alert", () => {
+  const sent: string[] = [];
+  const keys = () => activeAlerts().map((a) => a.key);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 0, 1, 0, 0, 0));
+    sent.length = 0;
+    resetAlertsForTest(async (text) => {
+      sent.push(text);
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("raises on the second consecutive failure, not the first, and resolves on success", () => {
+    const b = new FailureBackoff({ key: "thing.failing", label: "The thing" });
+    b.fail(new Error("socket hang up"));
+    expect(keys()).toEqual([]);
+    vi.advanceTimersByTime(5 * 60_000);
+    b.fail(new Error("socket hang up"));
+    expect(keys()).toEqual(["thing.failing"]);
+    expect(sent[0]).toBe(
+      "🔴 The thing has failed 2 times in a row: socket hang up. Next attempt after 00:15 UTC.",
+    );
+    b.succeed();
+    expect(keys()).toEqual([]);
+    expect(sent.at(-1)).toMatch(/^✅ The thing is running again\./);
+  });
+
+  it("a holder without an alert never raises", () => {
+    const b = new FailureBackoff();
+    for (let i = 0; i < 4; i++) b.fail(new Error("x"));
+    expect(sent).toHaveLength(0);
+  });
+
+  it("heartbeat and dream holders carry their alert keys", async () => {
+    const { hb } = await import("../core/background/heartbeat/state.js");
+    const { dreamFailureBackoff } =
+      await import("../core/background/dream/index.js");
+    hb.failureBackoff.fail(new Error("a"));
+    hb.failureBackoff.fail(new Error("a"));
+    dreamFailureBackoff.fail(new Error("b"));
+    dreamFailureBackoff.fail(new Error("b"));
+    expect(keys().sort()).toEqual(["dream.failing", "heartbeat.failing"]);
+    hb.failureBackoff.succeed();
+    dreamFailureBackoff.succeed();
+    expect(keys()).toEqual([]);
   });
 });

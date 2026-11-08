@@ -16,6 +16,7 @@ import { stat } from "node:fs/promises";
 import { NATIVE_MODULES } from "../../native/registry.js";
 import { dirs } from "../../util/paths.js";
 import { getBackend, listBackends } from "../agent-runtime/backend-registry.js";
+import { checkOpenAlerts, checkRecentErrors } from "./logs.js";
 import type {
   DoctorCheck,
   DoctorConfigSlice,
@@ -271,6 +272,22 @@ async function checkOneBackend(
 }
 
 /**
+ * What the deployment is doing rather than what it is built from: the
+ * provisioned plugin runtimes, the backends, and what the daemon's log
+ * and alert table say went wrong lately (./logs.ts).
+ */
+async function checkRunningState(
+  config: DoctorConfigSlice | undefined,
+): Promise<DoctorCheck[]> {
+  return [
+    ...(await checkPluginRuntimes(config)),
+    ...(await checkBackend(config)),
+    checkRecentErrors(),
+    ...checkOpenAlerts(),
+  ];
+}
+
+/**
  * Run every check and return the structured report. `config` is
  * undefined when no config file exists yet (first run).
  */
@@ -440,8 +457,7 @@ export async function collectDoctorReport(opts: {
   }
 
   const native = await checkNativeModules();
-  checks.push(...(await checkPluginRuntimes(opts.config)));
-  checks.push(...(await checkBackend(opts.config)));
+  checks.push(...(await checkRunningState(opts.config)));
 
   const issues =
     checks.filter((c) => c.status === "fail" || c.issue).length +

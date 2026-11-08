@@ -33,6 +33,16 @@ import { mediaHandlers } from "./media.js";
 import { messagingHandlers } from "./messaging.js";
 import { moderationHandlers } from "./moderation.js";
 import type { WhatsAppActionContext, WhatsAppActionHandlers } from "./types.js";
+import {
+  createDeliveryTracker,
+  trackDeliveries,
+} from "../../health/delivery.js";
+
+const delivery = createDeliveryTracker("whatsapp", "WhatsApp", "whatsapp");
+
+/** A cross-send names its destination; everything else goes to `chatId`. */
+const destination = (body: Record<string, unknown>, chatId: number) =>
+  body.target !== undefined ? String(body.target) : chatId;
 
 // Null-prototype so a request `action` of "toString" / "constructor" can't
 // resolve an inherited Object.prototype method via `handlers[action]`.
@@ -62,7 +72,7 @@ export function createWhatsAppActionHandler(
 ) {
   const scheduledMessages = new Map<string, ReturnType<typeof setTimeout>>();
 
-  return async (
+  const dispatch = async (
     body: Record<string, unknown>,
     chatId: number,
   ): Promise<ActionResult | null> => {
@@ -118,4 +128,5 @@ export function createWhatsAppActionHandler(
       ? { ...result, chat_id: chat.chatId }
       : result;
   };
+  return trackDeliveries(delivery, dispatch, destination);
 }

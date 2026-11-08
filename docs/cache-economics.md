@@ -1,6 +1,6 @@
 # Cache economics — sharing the prefix across chats, and compacting cold sessions
 
-Status: plan, 2026-09-18. Dylan's brief: "keep caching front of mind in
+Status: plan, 2026-09-18. Ada's brief: "keep caching front of mind in
 everything; never invalidate cache", "reuse the cached system prompt and
 tools from an existing chat when a new session starts", "when caching runs
 out, auto-compact so the next message costs less". This document turns
@@ -108,7 +108,7 @@ dynamic) → history → this user turn`. Prices (Opus 5): cache read is
 | Situation | What is billed |
 | --- | --- |
 | Warm chat, next turn | prefix + history at 0.1×; only the new user turn and the model's output at full price. Cheap. |
-| Same frontend, different chat, warm | `tools + static system` at 0.1× (shared), that chat's own history at full price the first time, then cached. This is the cross-chat reuse Dylan asked for — it already happens whenever the bytes match. |
+| Same frontend, different chat, warm | `tools + static system` at 0.1× (shared), that chat's own history at full price the first time, then cached. This is the cross-chat reuse Ada asked for — it already happens whenever the bytes match. |
 | Cold chat (idle > TTL), next turn | the whole prefix **and the whole transcript** re-written at 2× (1h TTL). A 60 k-token idle chat costs ~120 k-token-equivalents to wake up, before the model says a word. |
 | Model switch | a separate cache per model; the first turn after a switch is a cold start. |
 | Background agents (heartbeat, dream, cron) | their own system prompts, so their own prefixes — they never warm the chat prefix and the chat never warms theirs. |
@@ -147,7 +147,7 @@ Two consequences the plan turns into work:
   win is gone for those chats — measure how many.
 - `/reset` and a Companion "new chat" start a fresh session: same prefix,
   so a hit if any chat on that frontend was active within the TTL. This
-  is the concrete case Dylan described; PR A's `cache.session_start.hit`
+  is the concrete case Ada described; PR A's `cache.session_start.hit`
   is the number that proves it.
 
 ## Considered and parked

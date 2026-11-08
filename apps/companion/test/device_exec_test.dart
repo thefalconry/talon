@@ -392,8 +392,15 @@ void main() {
       expect(r.message, contains('Shizuku'));
     });
 
-    test('aborts on a sha256 mismatch before touching pm', () async {
-      const channel = MethodChannel('talon/shizuku-install-badhash');
+    const goodSha =
+        'abc1230000000000000000000000000000000000000000000000000000000000';
+
+    /// A Shizuku bridge whose exec answers the staging step with [stage] and
+    /// records every command it was asked to run.
+    List<String> mockShizuku(
+      MethodChannel channel,
+      Map<String, Object> stage,
+    ) {
       final execCmds = <String>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
@@ -403,125 +410,206 @@ void main() {
         if (call.method == 'exec') {
           final cmd = (call.arguments as Map)['cmd'] as String;
           execCmds.add(cmd);
-          if (cmd.startsWith('test -f')) {
-            return {'stdout': 'ok', 'stderr': '', 'exitCode': 0};
-          }
-          // cp succeeds; sha256sum returns a digest that won't match.
-          return {
-            'stdout': 'deadbeef  /data/local/tmp/talon-companion-update.apk',
-            'stderr': '',
-            'exitCode': 0,
-          };
+          if (cmd.contains('mktemp')) return stage;
+          return {'stdout': '', 'stderr': '', 'exitCode': 0};
         }
         return null;
       });
       addTearDown(() => TestDefaultBinaryMessengerBinding
           .instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, null));
+      return execCmds;
+    }
 
-      final apk = File('${tmp.path}/app.apk')..writeAsStringSync('fake-apk');
+    test('aborts on a sha256 mismatch before touching pm', () async {
+      const channel = MethodChannel('talon/shizuku-install-badhash');
+      final execCmds = mockShizuku(channel, {
+        'stdout': '',
+        'stderr': 'deadbeef',
+        'exitCode': 6,
+      });
       final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
-      final r = await dev.installApk(apk.path, sha256: 'cafebabe');
+      final r = await dev.installApk('/sdcard/Download/app.apk', sha256: goodSha);
       expect(r.ok, isFalse);
       expect(r.message, contains('integrity check failed'));
-      // Only the hash check ran — pm install must NOT have been staged.
+      expect(r.message, contains('deadbeef'));
       expect(execCmds.any((c) => c.contains('pm install')), isFalse);
     });
 
-    test('stages a detached pm install when hash matches', () async {
-      const channel = MethodChannel('talon/shizuku-install-ok');
-      final execCmds = <String>[];
-      final apk = File('${tmp.path}/app.apk')..writeAsStringSync('fake-apk');
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'getStatus') {
-          return {'ready': true, 'state': 'ready'};
-        }
-        if (call.method == 'exec') {
-          final cmd = (call.arguments as Map)['cmd'] as String;
-          execCmds.add(cmd);
-          if (cmd.startsWith('test -f')) {
-            return {'stdout': 'ok', 'stderr': '', 'exitCode': 0};
-          }
-          if (cmd.startsWith('sha256sum')) {
-            return {
-              'stdout': 'abc123  /data/local/tmp/talon-companion-update.apk',
-              'stderr': '',
-              'exitCode': 0,
-            };
-          }
-          return {'stdout': '', 'stderr': '', 'exitCode': 0};
-        }
-        return null;
-      });
-      addTearDown(() => TestDefaultBinaryMessengerBinding
-          .instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, null));
-
+    test('refuses a malformed digest without touching the device', () async {
+      const channel = MethodChannel('talon/shizuku-install-malformed');
+      final execCmds = mockShizuku(channel, {'exitCode': 0, 'stdout': ''});
       final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
-      final r = await dev.installApk(apk.path, sha256: 'ABC123', delayMs: 1000);
-      expect(r.ok, isTrue);
+      final r = await dev.installApk('/sdcard/app.apk', sha256: 'cafe; reboot');
+      expect(r.ok, isFalse);
+      expect(execCmds, isEmpty);
+    });
+
+    test('reports a missing APK', () async {
+      const channel = MethodChannel('talon/shizuku-install-missing');
+      mockShizuku(channel, {'stdout': '', 'stderr': '', 'exitCode': 3});
+      final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
+      final r = await dev.installApk('/sdcard/nope.apk');
+      expect(r.ok, isFalse);
+      expect(r.message, contains('No such APK'));
+    });
+
+    test('stages privately and detaches a same-or-newer pm install', () async {
+      const channel = MethodChannel('talon/shizuku-install-ok');
+      const dir = '/data/local/tmp/talon-update.Ab12Cd34Ef';
+      final execCmds = mockShizuku(channel, {
+        'stdout': '$dir\n',
+        'stderr': '',
+        'exitCode': 0,
+      });
+      final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
+      final r = await dev.installApk(
+        '/sdcard/Download/app.apk',
+        sha256: goodSha.toUpperCase(),
+        delayMs: 1000,
+      );
+      expect(r.ok, isTrue, reason: r.message);
       expect(r.data!['staged'], isTrue);
       expect(r.data!['via'], 'shizuku');
-      expect(
-          r.data!['stagedPath'], '/data/local/tmp/talon-companion-update.apk');
-      // pm cannot read app-FUSE paths (/sdcard), so the APK must be re-staged
-      // into /data/local/tmp and hashed THERE (the file pm actually reads).
-      expect(
-        execCmds.any((c) =>
-            c.startsWith('cp -f') &&
-            c.contains('/data/local/tmp/talon-companion-update.apk')),
-        isTrue,
-      );
-      expect(
-        execCmds.any(
-            (c) => c.startsWith('sha256sum') && c.contains('/data/local/tmp/')),
-        isTrue,
-      );
-      // The install is detached (setsid + background) so the ack flushes and
-      // the install survives the app being replaced.
-      final install = execCmds.firstWhere((c) => c.contains('pm install'),
-          orElse: () => '');
+      expect(r.data!['stagedPath'], '$dir/update.apk');
+      expect(r.data!['log'], '$dir/install.log');
+      // Staging (probe + private copy + hash) is one elevated invocation.
+      final stage = execCmds.firstWhere((c) => c.contains('mktemp'));
+      expect(stage, contains('/sdcard/Download/app.apk'));
+      expect(stage, contains(goodSha));
+      // The install is detached (setsid + background), re-verifies the digest
+      // and never allows a downgrade.
+      final install = execCmds.firstWhere((c) => c.contains('pm install'));
       expect(install, contains('setsid'));
-      expect(install, contains('pm install -r -d'));
-      expect(install, contains('/data/local/tmp/talon-companion-update.apk'));
-      // The staged copy is cleaned up after the install…
-      expect(install, contains('rm -f'));
+      expect(install, contains('pm install -r '));
+      expect(install, isNot(contains('-d ')));
+      expect(install, contains('sha256sum'));
+      expect(install, contains('$dir/update.apk'));
     });
 
-    test('skips the copy when the APK is already in /data/local/tmp', () async {
-      const channel = MethodChannel('talon/shizuku-install-tmp');
-      final execCmds = <String>[];
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'getStatus') {
-          return {'ready': true, 'state': 'ready'};
-        }
-        if (call.method == 'exec') {
-          final cmd = (call.arguments as Map)['cmd'] as String;
-          execCmds.add(cmd);
-          if (cmd.startsWith('test -f')) {
-            return {'stdout': 'ok', 'stderr': '', 'exitCode': 0};
-          }
-          return {'stdout': '', 'stderr': '', 'exitCode': 0};
-        }
-        return null;
+    test('allow_downgrade opts the install into pm install -d', () async {
+      const channel = MethodChannel('talon/shizuku-install-downgrade');
+      const dir = '/data/local/tmp/talon-update.Zz98Yy76Xx';
+      final execCmds = mockShizuku(channel, {
+        'stdout': '$dir\n',
+        'stderr': '',
+        'exitCode': 0,
       });
-      addTearDown(() => TestDefaultBinaryMessengerBinding
-          .instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, null));
-
       final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
-      final r = await dev.installApk('/data/local/tmp/talon.apk');
-      expect(r.ok, isTrue);
-      expect(r.data!['stagedPath'], '/data/local/tmp/talon.apk');
-      expect(execCmds.any((c) => c.startsWith('cp -f')), isFalse);
-      final install = execCmds.firstWhere((c) => c.contains('pm install'),
-          orElse: () => '');
-      expect(install, contains('/data/local/tmp/talon.apk'));
-      // …but a pre-existing original is never deleted (retry without re-push).
-      expect(install.contains('rm -f'), isFalse);
+      final r = await dev.handle('install_apk', {
+        'path': '/sdcard/Download/app.apk',
+        'sha256': goodSha,
+        'allow_downgrade': true,
+      });
+      expect(r!.ok, isTrue, reason: r.message);
+      expect(r.data!['allowDowngrade'], isTrue);
+      final install = execCmds.firstWhere((c) => c.contains('pm install'));
+      expect(install, contains('pm install -r -d '));
     });
+
+    test('refuses a staging directory it did not ask for', () async {
+      const channel = MethodChannel('talon/shizuku-install-oddpath');
+      final execCmds = mockShizuku(channel, {
+        'stdout': '/sdcard/elsewhere\n',
+        'stderr': '',
+        'exitCode': 0,
+      });
+      final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
+      final r = await dev.installApk('/sdcard/app.apk');
+      expect(r.ok, isFalse);
+      expect(execCmds.any((c) => c.contains('pm install')), isFalse);
+    });
+
+    group('staging and install scripts (run for real in sh)', () {
+      late Directory root;
+      late Directory bin;
+      late File apk;
+      late String apkSha;
+
+      setUp(() async {
+        root = await Directory('${tmp.path}/stage').create();
+        bin = await Directory('${tmp.path}/bin').create();
+        apk = File('${tmp.path}/app.apk')..writeAsStringSync('fake-apk');
+        final sum = await Process.run('sha256sum', [apk.path]);
+        apkSha = (sum.stdout as String).split(' ').first;
+        // A stand-in pm that records its arguments.
+        final pm = File('${bin.path}/pm')
+          ..writeAsStringSync('#!/bin/sh\necho "\$@" > "${tmp.path}/pm-args"\n');
+        await Process.run('chmod', ['+x', pm.path]);
+      });
+
+      Future<ProcessResult> sh(String script) => Process.run(
+            'sh',
+            ['-c', script],
+            environment: {
+              'PATH': '${bin.path}:${Platform.environment['PATH']}',
+            },
+          );
+
+      test('stages into a fresh private directory', () async {
+        final r = await sh(
+          DeviceExec.stageApkScript(apk.path, apkSha, root: root.path),
+        );
+        expect(r.exitCode, 0, reason: '${r.stderr}');
+        final dir = (r.stdout as String).trim();
+        expect(dir, startsWith('${root.path}/talon-update.'));
+        expect(File('$dir/update.apk').readAsStringSync(), 'fake-apk');
+        expect(FileStat.statSync(dir).mode & 0x1ff, 0x1c0); // 0700
+      });
+
+      test('a digest mismatch leaves nothing behind', () async {
+        final wrong = '0' * 64;
+        final r = await sh(
+          DeviceExec.stageApkScript(apk.path, wrong, root: root.path),
+        );
+        expect(r.exitCode, 6);
+        expect((r.stderr as String).trim(), apkSha);
+        expect(root.listSync(), isEmpty);
+      });
+
+      test('a missing source exits 3', () async {
+        final r = await sh(
+          DeviceExec.stageApkScript('${tmp.path}/nope.apk', '', root: root.path),
+        );
+        expect(r.exitCode, 3);
+      });
+
+      test('the worker installs only the bytes it verified', () async {
+        final staged = await sh(
+          DeviceExec.stageApkScript(apk.path, apkSha, root: root.path),
+        );
+        final dir = (staged.stdout as String).trim();
+        final args = File('${tmp.path}/pm-args');
+
+        // Tampered after staging: the worker's own re-check refuses it.
+        File('$dir/update.apk').writeAsStringSync('evil-apk');
+        await sh(DeviceExec.installApkWorker(dir, apkSha, 0));
+        expect(args.existsSync(), isFalse);
+        expect(File('$dir/install.log').readAsStringSync(),
+            contains('integrity check failed'));
+        expect(File('$dir/update.apk').existsSync(), isFalse);
+
+        // Intact: pm installs it with -r and without -d.
+        final again = await sh(
+          DeviceExec.stageApkScript(apk.path, apkSha, root: root.path),
+        );
+        final dir2 = (again.stdout as String).trim();
+        await sh(DeviceExec.installApkWorker(dir2, apkSha, 0));
+        expect(args.readAsStringSync().trim(), 'install -r $dir2/update.apk');
+        expect(File('$dir2/install.log').readAsStringSync(), contains('exit=0'));
+        expect(File('$dir2/update.apk').existsSync(), isFalse);
+
+        // Opted in: the same pipeline adds -d for a deliberate rollback.
+        final third = await sh(
+          DeviceExec.stageApkScript(apk.path, apkSha, root: root.path),
+        );
+        final dir3 = (third.stdout as String).trim();
+        await sh(
+            DeviceExec.installApkWorker(dir3, apkSha, 0, allowDowngrade: true));
+        expect(
+            args.readAsStringSync().trim(), 'install -r -d $dir3/update.apk');
+      });
+    }, skip: !Platform.isLinux);
 
     test('routes through handle() by name', () async {
       final desktop = DeviceExec(isAndroid: () => false);

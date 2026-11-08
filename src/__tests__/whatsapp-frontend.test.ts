@@ -82,8 +82,8 @@ describe("WhatsApp chat ids", () => {
   beforeEach(() => resetWhatsAppRegistry());
 
   it("maps DM and group JIDs onto distinct namespaced ids", () => {
-    expect(chatIdForJid("353851722396@s.whatsapp.net")).toBe(
-      "wa_dm_353851722396",
+    expect(chatIdForJid("447700900101@s.whatsapp.net")).toBe(
+      "wa_dm_447700900101",
     );
     expect(chatIdForJid("120363012345678901@g.us")).toBe(
       "wa_group_120363012345678901",
@@ -91,17 +91,17 @@ describe("WhatsApp chat ids", () => {
   });
 
   it("claims only its own chat ids", () => {
-    expect(isWhatsAppChatId("wa_dm_353851722396")).toBe(true);
+    expect(isWhatsAppChatId("wa_dm_447700900101")).toBe(true);
     expect(isWhatsAppChatId("discord_dm_1")).toBe(false);
-    expect(isWhatsAppChatId("-1001426819337")).toBe(false);
+    expect(isWhatsAppChatId("-1009876543210")).toBe(false);
   });
 
   it("registers a chat once and finds it by numeric id", () => {
-    const first = registerWhatsAppChat("353851722396@s.whatsapp.net");
-    const again = registerWhatsAppChat("353851722396@s.whatsapp.net");
+    const first = registerWhatsAppChat("447700900101@s.whatsapp.net");
+    const again = registerWhatsAppChat("447700900101@s.whatsapp.net");
     expect(again).toBe(first);
     expect(lookupWhatsAppChat(first.numericChatId)?.jid).toBe(
-      "353851722396@s.whatsapp.net",
+      "447700900101@s.whatsapp.net",
     );
     expect(first.isGroup).toBe(false);
   });
@@ -172,25 +172,25 @@ describe("WhatsApp action adapter", () => {
   }
 
   it("sends text translated into WhatsApp markup", async () => {
-    const { handle, chat } = handlerFor("353851722396@s.whatsapp.net");
+    const { handle, chat } = handlerFor("447700900101@s.whatsapp.net");
     const result = await handle(
       { action: "send_message", text: "**hi** there" },
       chat.numericChatId,
     );
     expect(result?.ok).toBe(true);
     expect(sent[0].content.text).toBe("*hi* there");
-    expect(sent[0].jid).toBe("353851722396@s.whatsapp.net");
+    expect(sent[0].jid).toBe("447700900101@s.whatsapp.net");
   });
 
   it("returns null for actions it does not own, so the core can serve them", async () => {
-    const { handle, chat } = handlerFor("353851722396@s.whatsapp.net");
+    const { handle, chat } = handlerFor("447700900101@s.whatsapp.net");
     expect(
       await handle({ action: "read_history" }, chat.numericChatId),
     ).toBeNull();
   });
 
   it("reacts to a message addressed by its numeric id", async () => {
-    const { handle, chat } = handlerFor("353851722396@s.whatsapp.net");
+    const { handle, chat } = handlerFor("447700900101@s.whatsapp.net");
     const msgId = rememberMessage({
       key: { id: "WA9", remoteJid: chat.jid, fromMe: false },
       chatId: chat.chatId,
@@ -210,7 +210,7 @@ describe("WhatsApp action adapter", () => {
   });
 
   it("refuses to act on a message id it never saw", async () => {
-    const { handle, chat } = handlerFor("353851722396@s.whatsapp.net");
+    const { handle, chat } = handlerFor("447700900101@s.whatsapp.net");
     const result = await handle(
       { action: "delete_message", message_id: 424242 },
       chat.numericChatId,
@@ -220,7 +220,7 @@ describe("WhatsApp action adapter", () => {
   });
 
   it("renders button rows as a numbered list (no buttons on personal accounts)", async () => {
-    const { handle, chat } = handlerFor("353851722396@s.whatsapp.net");
+    const { handle, chat } = handlerFor("447700900101@s.whatsapp.net");
     await handle(
       {
         action: "send_message_with_buttons",
@@ -244,7 +244,7 @@ describe("WhatsApp action adapter", () => {
   });
 
   it("fails clearly when the socket is down", async () => {
-    const { chat } = handlerFor("353851722396@s.whatsapp.net");
+    const { chat } = handlerFor("447700900101@s.whatsapp.net");
     const handle = createWhatsAppActionHandler(() => null, gateway);
     const result = await handle(
       { action: "send_message", text: "hi" },
@@ -291,7 +291,7 @@ describe("WhatsApp action adapter", () => {
   });
 
   it("resolves a registered numeric chat id target", async () => {
-    const { chat } = handlerFor("353851722396@s.whatsapp.net");
+    const { chat } = handlerFor("447700900101@s.whatsapp.net");
     const handle = createWhatsAppActionHandler(() => sock, gateway);
     const result = await handle(
       {
@@ -302,7 +302,7 @@ describe("WhatsApp action adapter", () => {
       0,
     );
     expect(result?.ok).toBe(true);
-    expect(sent[0].jid).toBe("353851722396@s.whatsapp.net");
+    expect(sent[0].jid).toBe("447700900101@s.whatsapp.net");
   });
 
   it("resolves a group JID target", async () => {
@@ -349,7 +349,7 @@ describe("WhatsApp action adapter", () => {
       }
     ).groupParticipantsUpdate = vi.fn(async () => [{ status: "200" }]);
     const result = await handle(
-      { action: "moderate", op: "ban", user_id: "353851722396" },
+      { action: "moderate", op: "ban", user_id: "447700900101" },
       chat.numericChatId,
     );
     expect(result?.ok).toBe(true);
@@ -364,25 +364,25 @@ describe("WhatsApp identity (LID ↔ phone number)", () => {
   it("pairs a LID with the phone number from the message key", async () => {
     const identity = await resolveIdentity(
       null,
-      "180753715482747@lid",
-      "353834733284@s.whatsapp.net",
+      "190000000000001@lid",
+      "447700900102@s.whatsapp.net",
     );
-    expect(identity.lid).toBe("180753715482747");
-    expect(identity.phone).toBe("353834733284");
-    expect(identity.ids).toEqual(["353834733284", "180753715482747"]);
+    expect(identity.lid).toBe("190000000000001");
+    expect(identity.phone).toBe("447700900102");
+    expect(identity.ids).toEqual(["447700900102", "190000000000001"]);
   });
 
   it("falls back to the signal store when the key carries no counterpart", async () => {
     const sock = {
       signalRepository: {
         lidMapping: {
-          getPNForLID: async () => "353834733284@s.whatsapp.net",
+          getPNForLID: async () => "447700900102@s.whatsapp.net",
           getLIDForPN: async () => null,
         },
       },
     } as never;
-    const identity = await resolveIdentity(sock, "180753715482747@lid");
-    expect(identity.phone).toBe("353834733284");
+    const identity = await resolveIdentity(sock, "190000000000001@lid");
+    expect(identity.phone).toBe("447700900102");
   });
 
   it("matches a phone-number allowlist against a LID-addressed sender", async () => {
@@ -390,29 +390,29 @@ describe("WhatsApp identity (LID ↔ phone number)", () => {
     // arrived as a LID and was ignored as "unlisted".
     const identity = await resolveIdentity(
       null,
-      "180753715482747@lid",
-      "353834733284@s.whatsapp.net",
+      "190000000000001@lid",
+      "447700900102@s.whatsapp.net",
     );
-    expect(identityAllowed(identity, new Set(["353834733284"]))).toBe(true);
+    expect(identityAllowed(identity, new Set(["447700900102"]))).toBe(true);
     expect(identityAllowed(identity, new Set(["999999999999"]))).toBe(false);
   });
 
   it("keeps one chat id whichever form addresses the conversation", async () => {
     const viaLid = await resolveIdentity(
       null,
-      "180753715482747@lid",
-      "353834733284@s.whatsapp.net",
+      "190000000000001@lid",
+      "447700900102@s.whatsapp.net",
     );
-    expect(canonicalId(viaLid)).toBe("353834733284");
-    expect(chatIdForJid("180753715482747@lid", canonicalId(viaLid))).toBe(
-      "wa_dm_353834733284",
+    expect(canonicalId(viaLid)).toBe("447700900102");
+    expect(chatIdForJid("190000000000001@lid", canonicalId(viaLid))).toBe(
+      "wa_dm_447700900102",
     );
   });
 
   it("degrades to the form it has when no mapping is available", async () => {
-    const identity = await resolveIdentity(null, "180753715482747@lid");
-    expect(identity.ids).toEqual(["180753715482747"]);
-    expect(canonicalId(identity)).toBe("180753715482747");
+    const identity = await resolveIdentity(null, "190000000000001@lid");
+    expect(identity.ids).toEqual(["190000000000001"]);
+    expect(canonicalId(identity)).toBe("190000000000001");
   });
 
   it("treats an empty id as absent rather than a value", async () => {
@@ -423,12 +423,12 @@ describe("WhatsApp identity (LID ↔ phone number)", () => {
     expect(identity.ids).toEqual([]);
     expect(canonicalId(identity)).toBeUndefined();
     expect(
-      chatIdForJid("353834733284@s.whatsapp.net", canonicalId(identity)),
-    ).toBe("wa_dm_353834733284");
+      chatIdForJid("447700900102@s.whatsapp.net", canonicalId(identity)),
+    ).toBe("wa_dm_447700900102");
   });
 
   it("keeps distinct DMs in distinct chats", () => {
-    expect(chatIdForJid("353834733284@s.whatsapp.net")).not.toBe(
+    expect(chatIdForJid("447700900102@s.whatsapp.net")).not.toBe(
       chatIdForJid("353871234567@s.whatsapp.net"),
     );
   });

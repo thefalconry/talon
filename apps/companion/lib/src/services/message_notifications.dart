@@ -35,6 +35,9 @@ class MessageNotifications {
   /// whole streamed reply in a payload is pointless weight.
   static const int _maxBody = 240;
 
+  /// Body used instead of the reply while the app lock is on (#1051).
+  static const String lockedBody = 'New reply — unlock Talon to read it.';
+
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
@@ -135,12 +138,64 @@ class MessageNotifications {
             // A reply that has been superseded shouldn't buzz again.
             onlyAlertOnce: true,
             autoCancel: true,
+            // Reply text is conversation content: on a locked screen show
+            // only that a reply arrived, not what it says.
+            visibility: NotificationVisibility.private,
           ),
         ),
         payload: chatId,
       );
     } catch (e) {
       AppLog.warn('notify', 'notification post failed', e);
+    }
+  }
+
+  /// Slot for the "background mesh paused" notice — outside the per-chat id
+  /// space in practice (a fixed small id), so it replaces itself.
+  static const int meshPausedId = 7;
+
+  /// Post a status notice that isn't a chat reply (no payload: tapping it
+  /// just opens the app). Never throws.
+  static Future<void> showNotice({
+    required int id,
+    required String title,
+    required String body,
+  }) async {
+    if (!supported) return;
+    await ensureInitialized();
+    if (!_initialized) return;
+    try {
+      await _plugin.show(
+        id: id,
+        title: title,
+        body: body,
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            channelId,
+            channelName,
+            channelDescription: channelDescription,
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+            styleInformation: BigTextStyleInformation(body),
+            onlyAlertOnce: true,
+            autoCancel: true,
+          ),
+        ),
+      );
+    } catch (e) {
+      AppLog.warn('notify', 'notice post failed', e);
+    }
+  }
+
+  /// Withdraw a notice posted with [showNotice].
+  static Future<void> clearNotice(int id) async {
+    if (!supported) return;
+    await ensureInitialized();
+    if (!_initialized) return;
+    try {
+      await _plugin.cancel(id: id);
+    } catch (_) {
+      // Nothing to cancel.
     }
   }
 

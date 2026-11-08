@@ -23,11 +23,11 @@ export const dmUsers = createDmUserTracker<number>(10_000);
 
 /** Reassignable access config — holder object so setAccessControl can mutate. */
 export const accessConfig: {
-  allowedUserIds: Set<number> | null; // null = no whitelist (allow all)
+  allowedUserIds: Set<number>; // DM allowlist — empty means nobody
   blockedUserIds: Set<number> | null; // null = no denylist
   adminId: number;
 } = {
-  allowedUserIds: null,
+  allowedUserIds: new Set(),
   blockedUserIds: null,
   adminId: 0,
 };

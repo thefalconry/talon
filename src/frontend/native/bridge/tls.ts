@@ -228,6 +228,21 @@ export function certificateFingerprint(certPem: string): string {
     .digest("hex");
 }
 
+/**
+ * The certificate's public-key pin: base64 SHA-256 of its DER
+ * SubjectPublicKeyInfo — the value curl's `--pinnedpubkey sha256//…` checks.
+ */
+export function certificateSpkiPin(certPem: string): string {
+  return createHash("sha256")
+    .update(
+      new X509Certificate(certPem).publicKey.export({
+        type: "spki",
+        format: "der",
+      }),
+    )
+    .digest("base64");
+}
+
 /** AA:BB:… presentation of a fingerprint, for logs and pairing screens. */
 export function formatFingerprint(fingerprint: string): string {
   return (fingerprint.match(/.{2}/g) ?? []).join(":").toUpperCase();

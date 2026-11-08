@@ -5,7 +5,7 @@
  *
  * Read-only on purpose: a bridge client can ask what Talon remembers and
  * why, and nothing more. Asserting, superseding and dropping stay with
- * the write path (rollout PR 6), so a paired phone can never quietly
+ * the write path, so a paired phone can never quietly
  * rewrite the operator's memory.
  *
  * The one piece of policy here is the limit cap: whatever a client asks

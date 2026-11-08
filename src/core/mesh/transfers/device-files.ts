@@ -15,12 +15,11 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
+import { logDebug } from "../../../util/log.js";
 import { dirs } from "../../../util/paths.js";
 import {
   formatBytes,
@@ -29,6 +28,7 @@ import {
   type MeshToolResult,
 } from "../tool-surface.js";
 import {
+  hashFile,
   normalizeGoarch,
   platformToGoos,
   type NodeBinaryResolver,
@@ -70,8 +70,8 @@ const FILE_CHUNK_BYTES = 1024 * 1024;
  * and never throws, and the command result it would have posted afterwards
  * is never posted. The dispatch timeout is the only thing that ends that
  * wait — and since turns serialize per chat, the whole chat's message loop
- * queues behind it. A flat hour therefore takes a chat offline for an hour
- * over one dropped TCP connection.
+ * queues behind it. A flat budget sized for the largest transfer would
+ * take a chat offline that long over one dropped TCP connection.
  *
  * So the budget is sized to the payload instead: a fixed grace for the
  * handshake and device-side setup, plus the body at a deliberately
@@ -83,9 +83,8 @@ const STREAM_TRANSFER_FLOOR_BYTES_PER_SEC = 32 * 1024;
 /**
  * Ceiling, so a payload large enough to out-scale the formula still can't
  * block a chat indefinitely. Deliberately well above what a big transfer
- * over a slow link needs — the common wedge is a SMALL transfer that used
- * to inherit the same budget as a huge one, and that case now resolves in
- * about a minute.
+ * over a slow link needs — the common wedge is a SMALL transfer, and its
+ * budget runs out in about a minute.
  */
 const STREAM_TRANSFER_MAX_MS = 30 * 60 * 1000;
 
@@ -129,6 +128,14 @@ const MAX_CHUNKED_TRANSFER_BYTES = 64 * 1024 * 1024;
  * Resolved lazily (not at module load) so a test that mocks `util/paths`
  * doesn't hit its workspace binding before initialization.
  */
+/**
+ * The opt-in rollback flag for install_apk / update_node. Sent only when set,
+ * so the default command shape is exactly what older devices already accept.
+ */
+function downgradeParam(allow: unknown): { allow_downgrade?: true } {
+  return allow === true ? { allow_downgrade: true } : {};
+}
+
 function pullDir(): string {
   return resolve(dirs.workspace, "mesh-pull");
 }
@@ -204,7 +211,7 @@ export class DeviceFiles {
     // is normally already resolved — the grace window only catches a device
     // that claims success without having streamed anything.
     try {
-      const bytes = await Promise.race([
+      const receipt = await Promise.race([
         done,
         new Promise<never>((_, rej) =>
           setTimeout(
@@ -218,11 +225,81 @@ export class DeviceFiles {
           ).unref?.(),
         ),
       ]);
-      return { bytes };
+      // The device hashed what it sent; the store hashed what arrived.
+      const mismatch = digestMismatch(
+        dispatched.result,
+        receipt.sha256,
+        `pull of ${remote} from ${target.name}`,
+      );
+      if (mismatch) {
+        await rm(dest, { force: true }).catch(() => {});
+        return {
+          error: `Integrity check failed pulling ${remote} from ${target.name}: ${mismatch}. The received copy was discarded.`,
+        };
+      }
+      return { bytes: receipt.bytes };
     } catch (err) {
       this.transfers.cancel(token);
       return { error: (err as Error).message };
     }
+  }
+
+  /**
+   * Streamed daemon→device transfer: one command round trip, the body as a
+   * single raw HTTP response. The source's SHA-256 rides along so the device
+   * can refuse to rename a corrupted temp file into place; its reported
+   * digest is checked here too.
+   */
+  private async pushViaStream(
+    target: DeviceInfo,
+    local: string,
+    remote: string,
+  ): Promise<MeshToolResult> {
+    const started = Date.now();
+    // Hashing the source also sizes the budget (a local read, not a mesh
+    // round trip). A source we cannot read still gets a bounded, looser
+    // budget and no digest — this decides a timeout, not whether the
+    // transfer may start.
+    const source = await hashFile(local).catch(() => undefined);
+    const { token } = this.transfers.createPush(target.id, local);
+    const dispatched = await this.host.dispatchCommand(
+      target.id,
+      "download_file",
+      { token, path: remote, ...(source && { sha256: source.sha256 }) },
+      streamTransferTimeoutMs(source?.size),
+    );
+    if ("error" in dispatched) {
+      this.transfers.cancel(token);
+      return { ok: false, text: dispatched.error };
+    }
+    if (!dispatched.result.ok) {
+      this.transfers.cancel(token);
+      return {
+        ok: false,
+        text:
+          dispatched.result.message ??
+          `${target.name} could not download ${local}.`,
+      };
+    }
+    const mismatch =
+      source &&
+      digestMismatch(
+        dispatched.result,
+        source.sha256,
+        `push of ${local} to ${target.name}`,
+      );
+    if (mismatch) {
+      return {
+        ok: false,
+        text: `Integrity check failed pushing ${local} to ${remote} on ${target.name}: ${mismatch}.`,
+      };
+    }
+    const bytes = dispatched.result.data?.bytesWritten;
+    const size = typeof bytes === "number" ? bytes : 0;
+    return {
+      ok: true,
+      text: `Pushed ${formatBytes(size)} to ${remote} on ${target.name} (streamed, ${transferRate(size, started)})`,
+    };
   }
 
   /**
@@ -383,40 +460,7 @@ export class DeviceFiles {
     if ("error" in resolved) return { ok: false, text: resolved.error };
     const target = resolved.target;
     if (this.canStream(target, "download_file")) {
-      const started = Date.now();
-      // The source is on this host, so sizing the budget costs a local stat
-      // rather than a mesh round trip. A source we cannot stat still gets a
-      // bounded (if looser) budget — this decides a timeout, not whether
-      // the transfer is allowed to start.
-      const localSize = await stat(local)
-        .then((s) => s.size)
-        .catch(() => undefined);
-      const { token } = this.transfers.createPush(target.id, local);
-      const dispatched = await this.host.dispatchCommand(
-        target.id,
-        "download_file",
-        { token, path: remote },
-        streamTransferTimeoutMs(localSize),
-      );
-      if ("error" in dispatched) {
-        this.transfers.cancel(token);
-        return { ok: false, text: dispatched.error };
-      }
-      if (!dispatched.result.ok) {
-        this.transfers.cancel(token);
-        return {
-          ok: false,
-          text:
-            dispatched.result.message ??
-            `${target.name} could not download ${local}.`,
-        };
-      }
-      const bytes = dispatched.result.data?.bytesWritten;
-      const size = typeof bytes === "number" ? bytes : 0;
-      return {
-        ok: true,
-        text: `Pushed ${formatBytes(size)} to ${remote} on ${target.name} (streamed, ${transferRate(size, started)})`,
-      };
+      return this.pushViaStream(target, local, remote);
     }
     let data: Buffer;
     try {
@@ -452,6 +496,7 @@ export class DeviceFiles {
     query: unknown,
     localApkPath: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
     const local =
       typeof localApkPath === "string" && localApkPath.trim()
@@ -498,7 +543,7 @@ export class DeviceFiles {
     const dispatched = await this.host.dispatchCommand(
       target.id,
       "install_apk",
-      { path: remote, sha256 },
+      { path: remote, sha256, ...downgradeParam(allowDowngrade) },
       this.host.commandTimeoutMs,
     );
     if ("error" in dispatched) return { ok: false, text: dispatched.error };
@@ -537,6 +582,7 @@ export class DeviceFiles {
     query: unknown,
     localBinaryPath?: unknown,
     remotePath?: unknown,
+    allowDowngrade?: unknown,
   ): Promise<MeshToolResult> {
     await this.host.load();
     const resolved = this.host.resolveDevice(query);
@@ -606,7 +652,7 @@ export class DeviceFiles {
     const dispatched = await this.host.dispatchCommand(
       target.id,
       "update_node",
-      { path: remote, sha256 },
+      { path: remote, sha256, ...downgradeParam(allowDowngrade) },
       this.host.commandTimeoutMs,
     );
     if ("error" in dispatched) return { ok: false, text: dispatched.error };
@@ -740,24 +786,31 @@ export class DeviceFiles {
   }
 }
 
+/**
+ * Compare the SHA-256 a device reported for a streamed transfer with the one
+ * the daemon holds. Returns a description of a mismatch, or null when they
+ * agree. A device build that predates transfer digests reports none; the
+ * check is then skipped (with a debug line), never failed.
+ */
+function digestMismatch(
+  result: DeviceCommandResult,
+  expected: string,
+  what: string,
+): string | null {
+  const reported = result.data?.sha256;
+  if (typeof reported !== "string" || !reported) {
+    logDebug(
+      "mesh",
+      `${what}: device reported no sha256 (older build) — skipping the integrity check`,
+    );
+    return null;
+  }
+  if (reported.toLowerCase() === expected.toLowerCase()) return null;
+  return `the device reported sha256 ${reported}, the daemon has ${expected}`;
+}
+
 /** "12.4 MB/s in 3.2s" — observability for streamed transfers. */
 function transferRate(bytes: number, startedAtMs: number): string {
   const seconds = Math.max((Date.now() - startedAtMs) / 1000, 0.001);
   return `${formatBytes(bytes / seconds)}/s over ${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`;
-}
-
-/** Stream a file through SHA-256 without loading it into memory (APKs are big
- *  and Buffer has a hard ceiling). Returns the hex digest and byte size. */
-async function hashFile(
-  path: string,
-): Promise<{ sha256: string; size: number }> {
-  const { size } = await stat(path);
-  const hash = createHash("sha256");
-  await new Promise<void>((resolve, reject) => {
-    createReadStream(path)
-      .on("data", (chunk) => hash.update(chunk))
-      .on("end", () => resolve())
-      .on("error", reject);
-  });
-  return { sha256: hash.digest("hex"), size };
 }

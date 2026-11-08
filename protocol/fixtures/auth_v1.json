@@ -1,0 +1,122 @@
+{
+  "_comment": "Per-device credential wire samples (#1042 phase 2): the in-band upgrade/rotation exchange (POST /auth/upgrade), the credential hint on the POST /devices/register reply, and GET /auth/whoami. Asserted by all three implementations \u2014 the daemon replays the requests against a live bridge and checks its replies have exactly these shapes (protocol-auth-fixture.test.ts); talon-node builds its upgrade request and parses every reply through its real code (protocol_conformance_test.go); the companion does the same through BridgeClient/CredentialGrant (protocol_conformance_test.dart). `{{DEVICE_ID}}` stands for the caller's own device id. Clients MUST ignore credential actions they do not know (see registerReplies.forwardCompat).",
+  "protocol": 1,
+  "credentialPattern": "^tdc1\\.[0-9a-f]{16}\\.[A-Za-z0-9_-]{43}$",
+  "sampleCredentials": [
+    "tdc1.0123456789abcdef.Qm9ndXMtZml4dHVyZS1zZWNyZXQtbm90LWEtcmVhbC1",
+    "tdc1.fedcba9876543210.Zml4dHVyZS1jb21wYW5pb24tY3JlZGVudGlhbC1zZWN"
+  ],
+  "sampleSharedTokens": [
+    "8Pq3xZt1n0bV2cW9yK4mL7aR5sD6fG0hJ1kQ2wE3rT4",
+    "hunter2",
+    "tdc1.nothex.short"
+  ],
+  "upgradeRequests": {
+    "node": {
+      "deviceId": "{{DEVICE_ID}}",
+      "client": "node",
+      "scopes": ["device"]
+    },
+    "companion": {
+      "deviceId": "{{DEVICE_ID}}",
+      "client": "companion",
+      "scopes": ["device", "client"]
+    }
+  },
+  "upgradeReplies": {
+    "node": {
+      "ok": true,
+      "token": "tdc1.0123456789abcdef.Qm9ndXMtZml4dHVyZS1zZWNyZXQtbm90LWEtcmVhbC1",
+      "credentialId": "0123456789abcdef",
+      "deviceId": "dev_node01",
+      "scopes": ["device"]
+    },
+    "companion": {
+      "ok": true,
+      "token": "tdc1.fedcba9876543210.Zml4dHVyZS1jb21wYW5pb24tY3JlZGVudGlhbC1zZWN",
+      "credentialId": "fedcba9876543210",
+      "deviceId": "dev_pixel8",
+      "scopes": ["device", "client"]
+    }
+  },
+  "upgradeErrors": [
+    {
+      "status": 400,
+      "body": {
+        "ok": false,
+        "error": "deviceId is required (1-128 of A-Z a-z 0-9 . _ : @ -)"
+      }
+    },
+    {
+      "status": 403,
+      "body": {
+        "ok": false,
+        "error": "This credential belongs to device dev_node01; it cannot act as dev_other."
+      }
+    },
+    {
+      "status": 404,
+      "body": {
+        "ok": false,
+        "error": "Per-device credentials are not enabled on this bridge"
+      }
+    }
+  ],
+  "registerReplies": {
+    "none": {
+      "ok": true,
+      "deviceId": "dev_node01"
+    },
+    "upgrade": {
+      "ok": true,
+      "deviceId": "dev_node01",
+      "credential": {
+        "action": "upgrade"
+      }
+    },
+    "rotate": {
+      "ok": true,
+      "deviceId": "dev_node01",
+      "credential": {
+        "action": "rotate"
+      }
+    },
+    "forwardCompat": {
+      "ok": true,
+      "deviceId": "dev_node01",
+      "credential": {
+        "action": "enroll-client-certificate",
+        "csrPath": "/auth/csr"
+      },
+      "futureField": 1
+    }
+  },
+  "whoami": {
+    "shared": {
+      "ok": true,
+      "kind": "shared",
+      "scopes": ["device", "client", "operator"],
+      "action": "upgrade"
+    },
+    "device": {
+      "ok": true,
+      "kind": "device",
+      "scopes": ["device"],
+      "credentialId": "0123456789abcdef",
+      "deviceId": "dev_node01"
+    },
+    "rotate": {
+      "ok": true,
+      "kind": "device",
+      "scopes": ["device"],
+      "credentialId": "0123456789abcdef",
+      "deviceId": "dev_node01",
+      "action": "rotate"
+    },
+    "open": {
+      "ok": true,
+      "kind": "open",
+      "scopes": ["device", "client", "operator"]
+    }
+  }
+}

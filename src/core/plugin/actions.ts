@@ -14,6 +14,22 @@
 import { logError } from "../../util/log.js";
 import type { ActionResult } from "../types.js";
 import { registry } from "./registry.js";
+import type { TalonPlugin } from "./types.js";
+
+/** Run a plugin that has `handleAction`; a throw becomes an error result. */
+async function runAction(
+  plugin: TalonPlugin,
+  body: Record<string, unknown>,
+  chatId: string,
+): Promise<ActionResult | null> {
+  try {
+    return await plugin.handleAction!(body, chatId);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    logError("plugin", `${plugin.name} action error: ${detail}`);
+    return { ok: false, error: `Plugin ${plugin.name}: ${detail}` };
+  }
+}
 
 export async function handlePluginAction(
   body: Record<string, unknown>,
@@ -21,19 +37,8 @@ export async function handlePluginAction(
 ): Promise<ActionResult | null> {
   for (const { plugin } of registry.all) {
     if (!plugin.handleAction) continue;
-    try {
-      const result = await plugin.handleAction(body, chatId);
-      if (result) return result;
-    } catch (err) {
-      logError(
-        "plugin",
-        `${plugin.name} action error: ${err instanceof Error ? err.message : err}`,
-      );
-      return {
-        ok: false,
-        error: `Plugin ${plugin.name}: ${err instanceof Error ? err.message : err}`,
-      };
-    }
+    const result = await runAction(plugin, body, chatId);
+    if (result) return result;
   }
   return null;
 }
@@ -56,11 +61,5 @@ export async function handlePluginActionIn(
 ): Promise<ActionResult | null> {
   const entry = registry.all.find(({ plugin }) => plugin.name === name);
   if (!entry?.plugin.handleAction) return null;
-  try {
-    return await entry.plugin.handleAction(body, chatId);
-  } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    logError("plugin", `${name} action error: ${detail}`);
-    return { ok: false, error: `Plugin ${name}: ${detail}` };
-  }
+  return runAction(entry.plugin, body, chatId);
 }

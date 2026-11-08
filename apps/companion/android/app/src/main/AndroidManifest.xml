@@ -22,6 +22,9 @@
          as such for Android 14+'s typed-foreground-service enforcement. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Optional app lock: fingerprint / face unlock through BiometricPrompt
+         (never required — the passcode always works). -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
@@ -48,7 +51,16 @@
     <!-- Custom Application: hooks the foreground-task engine's creation to
          register the talon/shizuku channel there too (see TalonApplication) —
          backgrounded/boot-restarted exec keeps Shizuku elevation. -->
+    <!-- Nothing the app stores is worth restoring — a restored or migrated
+         phone simply pairs again — while what it stores (the bridge token,
+         an imported client certificate and its password, recent chats) must
+         not end up in a cloud backup or on another device. allowBackup and
+         fullBackupContent cover Android 11 and older; dataExtractionRules
+         covers cloud backup and device-to-device transfer on Android 12+. -->
     <application android:usesCleartextTraffic="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="Talon"
         android:name=".TalonApplication"
         android:icon="@mipmap/ic_launcher"
@@ -122,9 +134,9 @@
             android:foregroundServiceType="dataSync|location"
             android:stopWithTask="false"
             android:exported="false" />
-        <!-- Serves exactly one directory — the self-updater's download folder
-             inside the app's own external files dir — to the package
-             installer. A raw file:// URI for an APK throws
+        <!-- Serves two directories: the self-updater's download folder (to
+             the package installer) and the chat-attachment cache (to the app
+             that opens a tapped file). A raw file:// URI throws
              FileUriExposedException on Android 7+, so the content:// URI plus
              a per-intent read grant is the only working handoff. -->
         <provider

@@ -17,7 +17,11 @@ import {
   setSessionName,
   deleteSession,
 } from "../../../storage/sessions.js";
-import { getRecentHistory, clearHistory } from "../../../storage/history.js";
+import {
+  getRecentHistory,
+  hideChatHistory,
+  isChatHistoryHidden,
+} from "../../../storage/history.js";
 import { previewOf } from "../protocol.js";
 
 export type ChatEntry = {
@@ -55,14 +59,17 @@ export class NativeChats {
   restore(): void {
     for (const { chatId, info } of getAllSessions()) {
       if (!isNativeChatId(chatId)) continue;
+      // Deleted by the user: its rows are kept, the chat stays gone.
+      if (isChatHistoryHidden(chatId)) continue;
       const recent = getRecentHistory(chatId, 1);
+      if (recent.length === 0) continue;
       const entry: ChatEntry = {
         id: chatId,
         numericId: deriveNumericChatId(chatId),
         title: info.sessionName || defaultTitle(),
         createdAt: info.createdAt || Date.now(),
         lastActive: info.lastActive || Date.now(),
-        preview: recent.length ? previewOf(recent[recent.length - 1].text) : "",
+        preview: previewOf(recent[recent.length - 1].text),
         // Restored from a persisted session: it has carried a turn, even if a
         // later reset cleared its history.
         used: true,
@@ -133,13 +140,19 @@ export class NativeChats {
     return entry;
   }
 
+  /**
+   * Delete the chat from the app. A soft delete: the chat leaves every list
+   * and its session goes, but its history rows are only hidden, never
+   * deleted — the operator can still find them, and only an explicit
+   * `talon history purge` removes them for good.
+   */
   remove(id: string): boolean {
     const entry = this.byId.get(id);
     if (!entry) return false;
     this.byId.delete(id);
     this.byNum.delete(entry.numericId);
     deleteSession(id);
-    clearHistory(id);
+    hideChatHistory(id);
     return true;
   }
 

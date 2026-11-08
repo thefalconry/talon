@@ -1,6 +1,6 @@
 # Structure — the tree contract
 
-Status: plan of record, 2026-09-18. Dylan's brief: the codebase is getting
+Status: plan of record, 2026-09-18. Ada's brief: the codebase is getting
 bigger, with many components and folders; "branch and tree it as much as
 possible to make it manageable — some components will be large, but think
 of how the Linux kernel is structured."

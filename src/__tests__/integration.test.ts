@@ -257,7 +257,7 @@ describe("integration: dispatcher lifecycle", () => {
       prompt: "stream test",
       senderName: "User",
       isGroup: true,
-      source: "pulse",
+      source: "cron",
       onEvent: (event) => {
         if (event.type === "text_delta") deltas.push(event.text);
         if (event.type === "assistant_message") {

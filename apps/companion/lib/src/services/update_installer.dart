@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'device_exec.dart';
 import 'log.dart';
 import 'updater.dart';
+import 'windows_tray.dart';
 
 /// What happened when a downloaded release was handed to the platform.
 enum InstallKind {
@@ -97,9 +98,23 @@ class PlatformUpdateInstaller implements UpdateInstaller {
         AppLog.warn('update', 'no native staging dir, using temp', e);
       }
     }
-    return Directory(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}talon-update',
-    );
+    // A fresh, randomly named directory per download, never a fixed shared
+    // path: `/tmp/talon-update` could be created in advance by another local
+    // user, who would then own the directory the unpacked build and the swap
+    // script sit in until Restart. Dart creates it 0777 & ~umask (other users
+    // can list but not write it); narrow it to this user alone.
+    final dir = await Directory.systemTemp.createTemp('talon-update-');
+    if (!Platform.isWindows) {
+      final chmod = await Process.run('chmod', ['700', dir.path]);
+      if (chmod.exitCode != 0) {
+        await dir.delete(recursive: true);
+        throw FileSystemException(
+          'could not make the update staging directory private',
+          dir.path,
+        );
+      }
+    }
+    return dir;
   }
 
   @override
@@ -124,12 +139,18 @@ class PlatformUpdateInstaller implements UpdateInstaller {
   Future<void> quitForSwap() async {
     // Give the UI one frame to paint "Restarting…" before the process dies.
     await Future<void>.delayed(const Duration(milliseconds: 150));
+    if (!kIsWeb && Platform.isWindows) {
+      try {
+        await WindowsTray.instance.destroy();
+      } catch (_) {}
+    }
     exit(0);
   }
 
   // ── Android ───────────────────────────────────────────────────────────────
 
-  /// Two paths, best first.
+  /// Two paths, best first — both behind the signer check: the APK must be
+  /// this package and carry this install's signing key, or nothing installs.
   ///
   /// With root or Shizuku the APK installs silently through the same pipeline
   /// the daemon's remote `update_device` uses — `pm install -r` keeps the data,
@@ -144,6 +165,8 @@ class PlatformUpdateInstaller implements UpdateInstaller {
     File artifact,
     UpdateRelease release,
   ) async {
+    final signer = await _checkApkSigner(artifact);
+    if (signer != null) return signer;
     final silent = await _exec.installApk(
       artifact.path,
       sha256: release.sha256,
@@ -184,6 +207,33 @@ class PlatformUpdateInstaller implements UpdateInstaller {
       );
     } catch (e) {
       return InstallOutcome.failed('Could not start the installer: $e');
+    }
+  }
+
+  /// Self-update only: the downloaded APK must be this package, signed by the
+  /// key this install runs under (UpdateBridge.checkSelfUpdateApk). Returns
+  /// the refusal, or null to go ahead. The mesh's `install_apk` installs any
+  /// app and deliberately does not go through this.
+  Future<InstallOutcome?> _checkApkSigner(File artifact) async {
+    try {
+      final verdict = await _channel.invokeMapMethod<String, dynamic>(
+        'checkSelfUpdateApk',
+        {'path': artifact.path},
+      );
+      if (verdict?['ok'] == true) return null;
+      return InstallOutcome.failed(
+        '${verdict?['message'] ?? 'Could not check the update\'s signer.'} '
+        'Nothing was installed.',
+      );
+    } on MissingPluginException {
+      return const InstallOutcome.manual(
+        'This build cannot install updates itself — open the release page '
+        'and install the APK.',
+      );
+    } catch (e) {
+      return InstallOutcome.failed(
+        "Could not check the update's signer: $e. Nothing was installed.",
+      );
     }
   }
 
@@ -228,18 +278,30 @@ class PlatformUpdateInstaller implements UpdateInstaller {
     final guard = await _writableOrManual(installDir);
     if (guard != null) return guard;
     final unpacked = await _freshDir(artifact.parent, 'new');
-    final expand = await Process.run('powershell', [
-      '-NoProfile',
-      '-ExecutionPolicy',
-      'Bypass',
-      '-Command',
-      "Expand-Archive -LiteralPath ${_psQuote(artifact.path)} "
-          '-DestinationPath ${_psQuote(unpacked.path)} -Force',
-    ]);
-    if (expand.exitCode != 0) {
-      return InstallOutcome.failed(
-        'Could not unpack the download: ${expand.stderr}'.trim(),
+    var unpackedOk = false;
+    try {
+      final tar = await Process.run(
+        'tar',
+        ['-xf', artifact.path, '-C', unpacked.path],
       );
+      if (tar.exitCode == 0) unpackedOk = true;
+    } catch (_) {}
+
+    if (!unpackedOk) {
+      final expand = await Process.run('powershell', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        r"$ErrorActionPreference = 'Stop'; "
+            "Expand-Archive -LiteralPath ${_psQuote(artifact.path)} "
+            '-DestinationPath ${_psQuote(unpacked.path)} -Force',
+      ]);
+      if (expand.exitCode != 0) {
+        return InstallOutcome.failed(
+          'Could not unpack the download: ${expand.stderr}'.trim(),
+        );
+      }
     }
     final script = File('${artifact.parent.path}\\talon-swap.ps1');
     await script.writeAsString(
@@ -389,9 +451,10 @@ rm -rf ${_shQuote(cleanupDir)}
 open ${_shQuote(appBundle)}
 ''';
 
-  /// PowerShell helper. `Wait-Process` is bounded for the same reason the
-  /// POSIX loop is, and the copy is into the existing directory so the
-  /// shortcut/Start-menu entry keeps working.
+  /// PowerShell helper: wait for the app to exit, mirror the unpacked files
+  /// into the install directory (using robocopy to avoid PowerShell 5.1
+  /// Copy-Item directory-nesting bugs and handle file locks), clean up, and
+  /// relaunch with the install dir as working directory.
   static String windowsSwapScript({
     required int pid,
     required String sourceDir,
@@ -402,11 +465,36 @@ open ${_shQuote(appBundle)}
       '''
 # Talon companion self-update. Written by the app, run detached.
 \$ErrorActionPreference = 'Stop'
-try { Wait-Process -Id $pid -Timeout 60 } catch { }
-Start-Sleep -Milliseconds 500
-Copy-Item -Path (Join-Path ${_psQuote(sourceDir)} '*') -Destination ${_psQuote(installDir)} -Recurse -Force
+try { Wait-Process -Id $pid } catch { }
+# Guard against Wait-Process exiting early or failing; ensure target process is truly dead
+while (Get-Process -Id $pid -ErrorAction SilentlyContinue) {
+  Start-Sleep -Milliseconds 500
+}
+# Short delay to allow Windows to release file locks on executables and DLLs
+Start-Sleep -Seconds 1
+
+\$src = ${_psQuote(sourceDir)}
+\$dest = ${_psQuote(installDir)}
+
+# Prefer robocopy to mirror the directory cleanly without PowerShell 5.1 Copy-Item nesting bugs
+if (Get-Command robocopy -ErrorAction SilentlyContinue) {
+  & robocopy \$src \$dest /E /R:10 /W:1 /NP /NFL /NDL | Out-Null
+  if (\$LASTEXITCODE -ge 8) { exit \$LASTEXITCODE }
+} else {
+  # Fallback: copy items safely
+  Get-ChildItem -Path \$src -Recurse | ForEach-Object {
+    \$rel = \$_.FullName.Substring(\$src.Length).TrimStart('\\', '/')
+    \$targetPath = Join-Path \$dest \$rel
+    if (\$_.PSIsContainer) {
+      if (!(Test-Path \$targetPath)) { New-Item -ItemType Directory -Path \$targetPath -Force | Out-Null }
+    } else {
+      Copy-Item -LiteralPath \$_.FullName -Destination \$targetPath -Force
+    }
+  }
+}
+
 Remove-Item -Path ${_psQuote(cleanupDir)} -Recurse -Force -ErrorAction SilentlyContinue
-Start-Process -FilePath ${_psQuote(relaunch)}
+Start-Process -FilePath ${_psQuote(relaunch)} -WorkingDirectory \$dest
 ''';
 
   /// `/Applications/Talon.app/Contents/MacOS/Talon` → `/Applications/Talon.app`

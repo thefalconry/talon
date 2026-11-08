@@ -29,6 +29,14 @@ func serviceInstall(cfg *Config) error {
 		return err
 	}
 	system := os.Geteuid() == 0
+	if system {
+		// A system unit runs as root: its binary and config must not be
+		// replaceable by any other user (e.g. TALON_NODE_DIR pointed at a
+		// user-writable directory).
+		if err := requireOwnedPaths(0, exe, cfg.Path); err != nil {
+			return err
+		}
+	}
 	unitPath, ctl := unitLocation(system)
 	unit := fmt.Sprintf(`[Unit]
 Description=Talon headless mesh node

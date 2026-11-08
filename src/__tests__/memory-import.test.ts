@@ -62,7 +62,7 @@ function fixture(tag: string, ciText = "- flaky: telegram smoke"): string {
     "",
     "- Never force-push main",
     "",
-    `## User: Dylan ${tag}`,
+    `## User: Ada ${tag}`,
     "",
     "- Prefers terse answers",
     "",
@@ -114,7 +114,7 @@ describe("importMemoryFile", () => {
     expect(directive[0]!.source).toEqual({ actor: "import", chat });
     expect(directive[0]!.text).toBe("- Never force-push main");
 
-    const person = bySubject(chat, `User: Dylan ${tag}`);
+    const person = bySubject(chat, `User: Ada ${tag}`);
     expect(person).toHaveLength(1);
     expect(person[0]!.kind).toBe("relationship");
 

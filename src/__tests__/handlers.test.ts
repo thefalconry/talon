@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const executeMock = vi.hoisted(() => vi.fn());
 
+// These suites exercise the message pipeline, not access control (covered by
+// telegram-access-defaults / telegram-blocked-users): admit every sender.
+vi.mock("../frontend/telegram/handlers/access.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../frontend/telegram/handlers/access.js")
+  >()),
+  isAccessAllowed: vi.fn(async () => true),
+}));
 vi.mock("../core/engine/dispatcher.js", () => ({
   execute: executeMock,
 }));

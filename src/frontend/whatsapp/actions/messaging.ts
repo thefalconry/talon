@@ -17,6 +17,9 @@ import { tryAction } from "./try-action.js";
 import { resolveQuoted, sendContent, sendText, boundedSend } from "./send.js";
 import type { WhatsAppActionHandlers } from "./types.js";
 
+/** The tool schema's documented ceiling (1-86400), as telegram/discord clamp. */
+const MAX_DELAY_SEC = 24 * 60 * 60;
+
 /** WhatsApp keeps a pin for 24h, 7d, or 30d — no indefinite option. */
 const PIN_DURATIONS = [86_400, 604_800, 2_592_000] as const;
 
@@ -229,16 +232,18 @@ export const messagingHandlers: WhatsAppActionHandlers = {
   schedule_message: (body, _chatId, ctx) =>
     tryAction("schedule_message", async () => {
       const text = String(body.text ?? "");
-      const seconds = Number(body.delay_seconds ?? 0);
+      const requested = Number(body.delay_seconds ?? 0);
       if (!text.trim()) {
         return { ok: false, error: "schedule_message: text is required" };
       }
-      if (!Number.isFinite(seconds) || seconds <= 0) {
+      if (!Number.isFinite(requested) || requested <= 0) {
         return {
           ok: false,
           error: "schedule_message: delay_seconds must be a positive number",
         };
       }
+      // Past setTimeout's 2^31-1 ms (~24.8 days) the timer fires at once.
+      const seconds = Math.min(MAX_DELAY_SEC, requested);
       const id = randomUUID();
       const chat = ctx.chat!;
       const timer = setTimeout(() => {

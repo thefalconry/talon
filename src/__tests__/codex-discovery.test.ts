@@ -418,6 +418,48 @@ describe("codex / startDiscovery on chatgpt OAuth — cache-file path", () => {
     await loadCodexCacheModels();
     expect(Array.from(getState().discoveredModels)).toEqual(["gpt-5.5"]);
   });
+
+  it("records the lowest-priority listed model as the CLI default", async () => {
+    writeCacheFile({
+      models: [
+        {
+          slug: "gpt-5.5",
+          visibility: "list",
+          supported_in_api: true,
+          priority: 13,
+        },
+        {
+          slug: "gpt-reserve",
+          visibility: "hide",
+          supported_in_api: true,
+          priority: 1,
+        },
+        {
+          slug: "gpt-6-luna",
+          visibility: "list",
+          supported_in_api: true,
+          priority: 4,
+        },
+        {
+          slug: "gpt-5.6-terra",
+          visibility: "list",
+          supported_in_api: true,
+          priority: 8,
+        },
+      ],
+    });
+    await loadCodexCacheModels();
+    // Hidden entries never become the default, however high they sort.
+    expect(getState().discoveredDefaultModel).toBe("gpt-6-luna");
+  });
+
+  it("leaves the CLI default unset when no entry is usable", async () => {
+    writeCacheFile({
+      models: [{ slug: "gpt-reserve", visibility: "hide", priority: 1 }],
+    });
+    await loadCodexCacheModels();
+    expect(getState().discoveredDefaultModel).toBeNull();
+  });
 });
 
 // ── startDiscovery idempotency ────────────────────────────────────────

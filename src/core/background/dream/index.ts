@@ -24,6 +24,7 @@ import type { Backend } from "../../agent-runtime/capabilities.js";
 import { taskTable } from "../../tasks/index.js";
 import { resolveBackgroundEffort } from "../effort.js";
 import { FailureBackoff } from "../failure-backoff.js";
+import { faultText } from "../../engine/fault-text.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +62,10 @@ let dreaming = false; // in-process guard (one dream at a time)
  * every message (observed live: a model outage produced 403 identical
  * consolidation failures). Exported for tests.
  */
-export const dreamFailureBackoff = new FailureBackoff();
+export const dreamFailureBackoff = new FailureBackoff({
+  key: "dream.failing",
+  label: "Dream (memory consolidation)",
+});
 let configRef: {
   model?: string;
   dreamModel?: string;
@@ -141,6 +145,16 @@ export async function forceDream(): Promise<void> {
   await executeDream("forced");
 }
 
+/** Arm the failure backoff so maybeStartDream stays quiet for a while. */
+function backOff(err: unknown): void {
+  const until = dreamFailureBackoff.fail(err);
+  logWarn(
+    "dream",
+    `dream.backoff failures=${dreamFailureBackoff.failures} ` +
+      `until=${new Date(until).toISOString()} error="${faultText(err)}"`,
+  );
+}
+
 /** Shared dream execution — claims lock, runs agent, releases lock. */
 async function executeDream(trigger: "auto" | "forced"): Promise<void> {
   const state = readDreamState();
@@ -153,8 +167,13 @@ async function executeDream(trigger: "auto" | "forced"): Promise<void> {
 
   try {
     const dreamLogPath = await runDreamAgent(state?.last_run ?? 0);
-    writeDreamState({ last_run: Date.now(), status: "idle" });
-    dreamFailureBackoff.succeed();
+    // A run whose last_run didn't stick still looks overdue, and
+    // maybeStartDream would run it all again on the very next message.
+    if (writeDreamState({ last_run: Date.now(), status: "idle" })) {
+      dreamFailureBackoff.succeed();
+    } else {
+      backOff(new Error("dream state was not persisted"));
+    }
     log(
       "dream",
       `Memory consolidation complete (${trigger}), log: ${dreamLogPath}`,
@@ -164,12 +183,7 @@ async function executeDream(trigger: "auto" | "forced"): Promise<void> {
     writeDreamState({ last_run: state?.last_run ?? 0, status: "idle" });
     // A failed dream keeps the old last_run, so it would re-fire on the very
     // next invocation — back off instead (forceDream bypasses the window).
-    const until = dreamFailureBackoff.fail(err);
-    logWarn(
-      "dream",
-      `Backing off until ${new Date(until).toISOString()} ` +
-        `after ${dreamFailureBackoff.failures} consecutive failure(s)`,
-    );
+    backOff(err);
     if (trigger === "forced") throw err;
   } finally {
     dreaming = false;
@@ -306,11 +320,11 @@ If commands fail, log the error and continue — this stage is optional.`
   const timeoutPromise = new Promise<never>((_, reject) => {
     const t = setTimeout(() => {
       try {
-        abortController.abort();
+        abortController.abort(new Error("Dream agent timed out"));
       } catch {
         /* ignore */
       }
-      reject(new Error("Dream agent timed out"));
+      reject(abortController.signal.reason as Error);
     }, DREAM_TIMEOUT_MS);
     t.unref(); // Don't prevent Node.js from exiting cleanly during shutdown
     timeoutHandle = t;
@@ -427,10 +441,15 @@ function readDreamState(): DreamState | null {
   return parsed;
 }
 
-function writeDreamState(state: DreamState): void {
+/**
+ * Persist the state. Returns whether last_run actually landed: kvSet logs
+ * and swallows a failed write (full disk), so the store is read back.
+ */
+function writeDreamState(state: DreamState): boolean {
   const enriched: DreamState = {
     ...state,
     last_run_at: new Date(state.last_run).toISOString(),
   };
   kvSet(DREAM_STATE_KEY, enriched);
+  return readDreamState()?.last_run === state.last_run;
 }

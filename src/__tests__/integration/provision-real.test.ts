@@ -307,7 +307,7 @@ describe.skipIf(!REAL_DOCKER)("github mcp real provisioning", () => {
           expect(mcp.tools).toContain("get_file_contents");
           if (!token) return;
           const [owner, repo] = (
-            process.env.GITHUB_REPOSITORY ?? "dylanneve1/talon"
+            process.env.GITHUB_REPOSITORY ?? "thefalconry/talon"
           ).split("/");
           const pkg = await mcp.callText("get_file_contents", {
             owner,

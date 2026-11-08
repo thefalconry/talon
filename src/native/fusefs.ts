@@ -18,6 +18,7 @@
 
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import { logDebug, logWarn } from "../util/log.js";
 
 /** One root symlink entry the mount serves (a file-backed mount). */
 interface FuseSymlinkSpec {
@@ -84,14 +85,31 @@ function loadNativeFuseFs(): NativeFuseFs | null {
     const loaded = requireAddon(candidate) as NativeFuseFs;
     // Trust nothing that can't state its version — a truncated or
     // wrong-arch artifact fails here and the FUSE layer stays off.
-    if (typeof loaded.version() !== "string") return null;
+    if (typeof loaded.version() !== "string") {
+      reportAddonRejected(candidate, "no version");
+      return null;
+    }
     return loaded;
-  } catch {
+  } catch (err) {
+    reportAddonRejected(candidate, err);
     return null;
   }
 }
 
-/** Tests swap addons via TALON_FUSEFS_NODE and need the memo dropped. */
-function _resetNativeFuseFsForTesting(): void {
-  addon = undefined;
+/**
+ * The FUSE layer stays off either way; the log says why. An absent
+ * default artifact is normal off-Linux or on npm installs; an explicit
+ * TALON_FUSEFS_NODE that fails to load is config not taking effect.
+ */
+function reportAddonRejected(candidate: string, reason: unknown): void {
+  const code = (reason as { code?: unknown } | null)?.code;
+  const why = reason instanceof Error ? reason.message : String(reason);
+  if (process.env.TALON_FUSEFS_NODE) {
+    logWarn(
+      "fusefs",
+      `TALON_FUSEFS_NODE addon rejected, FUSE off path=${candidate}: ${why}`,
+    );
+  } else if (code !== "MODULE_NOT_FOUND") {
+    logDebug("fusefs", `addon rejected, FUSE off path=${candidate}: ${why}`);
+  }
 }

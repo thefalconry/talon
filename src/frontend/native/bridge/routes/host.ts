@@ -2,11 +2,16 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Readable } from "node:stream";
 import type { AttachmentRef } from "./params.js";
 import type {
+  BridgeCredentials,
+  BridgePrincipal,
+} from "../credentials/principal.js";
+import type {
   BackendOption,
   ClientAttachment,
   BridgeEvent,
   BridgeStatus,
   ClientChat,
+  ClientCommand,
   ClientMessage,
   DeviceInfo,
   DeviceLocation,
@@ -24,6 +29,7 @@ import type {
   MemoryListResult,
 } from "../../surface/memory.js";
 import type { ConfigSnapshot } from "../../surface/settings.js";
+import type { AdvertisedEndpoints } from "../../../../core/mesh/links/endpoints.js";
 
 /** Optional attachment references carried alongside a sent message. */
 export type SendOptions = {
@@ -60,8 +66,18 @@ export type BridgeServerHandlers = {
   listMemory(query: MemoryListQuery): MemoryListResult;
   /** One memory row plus its audit trail, or null when no such id. */
   memoryWhy(id: number): MemoryWhyWire | null;
-  /** Fire-and-forget: streams its results back through `broadcast`. */
-  send(id: string, text: string, opts?: SendOptions): void;
+  /**
+   * Fire-and-forget: streams its results back through `broadcast`. Text
+   * naming one of the daemon's slash commands is answered by the daemon
+   * instead of the model; `caller` says whether the credential may run
+   * the operator-only ones (absent = it may not).
+   */
+  send(
+    id: string,
+    text: string,
+    opts?: SendOptions,
+    caller?: { operator: boolean },
+  ): void;
   /**
    * Stream an uploaded file to disk and return its wire description. The body
    * is consumed as it arrives (never buffered whole), so the size ceiling is
@@ -108,6 +124,8 @@ export type BridgeServerHandlers = {
   setSkillEnabled(name: string, enabled: boolean): ToggleResult;
   /** Fire a daemon-level control action (e.g. "restart", "dream"). */
   control(action: string): Promise<{ ok: boolean; message: string }>;
+  /** The slash commands `/send` answers itself, for client autocomplete. */
+  listCommands(): ClientCommand[];
   /** Newest daemon log entries (for the client's log viewer). */
   logs(opts: {
     lines: number;
@@ -118,6 +136,8 @@ export type BridgeServerHandlers = {
   liveTurnEvents(): BridgeEvent[];
   /** Resolve a media id to an absolute file path (or null if unknown). */
   mediaPath(id: string): string | null;
+  /** Best-effort original file name for a media id (or null if unknown). */
+  mediaName?(id: string): string | null;
   /** Register/update one mesh device. */
   registerDevice(body: Record<string, unknown>): Promise<DeviceInfo>;
   /** Store the last-known location for one mesh device. */
@@ -145,10 +165,30 @@ export type BridgeServerHandlers = {
     token: string,
     format: "html" | "json",
   ): { contentType: string; body: string } | null;
-  /** Resolve a node-provisioning token to its installer script, or null. */
-  openNodeInstall(token: string): { script: string; filename: string } | null;
+  /**
+   * Resolve a node-provisioning token to its installer script, or null. An
+   * auto link passes the os/arch its host reported.
+   */
+  openNodeInstall(
+    token: string,
+    os?: string | null,
+    arch?: string | null,
+  ):
+    | { script: string; filename: string }
+    | null
+    | Promise<{ script: string; filename: string } | null>;
   /** Resolve a node-provisioning token to the binary to stream, or null. */
   openNodeBinary(token: string): { path: string; size: number } | null;
+  /** The secret-drop form for a live grant (not spent), or null. */
+  openSecretDrop(token: string): string | null;
+  /** Whether a secret-drop grant is live (checked before reading a body). */
+  isLiveSecretDrop(token: string): boolean;
+  /** Spend a secret-drop grant and store the value; the page to show. */
+  submitSecretDrop(
+    token: string,
+    body: string,
+    contentType: string | undefined,
+  ): Promise<{ status: number; html: string }>;
 };
 
 /**
@@ -170,6 +210,14 @@ export type RouteHost = {
     file: { path: string; size: number },
   ) => void;
   serveMedia: (res: ServerResponse, id: string) => Promise<void>;
-  openStream: (res: ServerResponse, deviceId?: string) => void;
+  openStream: (
+    res: ServerResponse,
+    deviceId: string | undefined,
+    principal: BridgePrincipal,
+  ) => void;
   unknownProvision: (res: ServerResponse) => void;
+  /** Per-device credential support; undefined = shared token only. */
+  credentials: BridgeCredentials | undefined;
+  /** Endpoint list for device register replies (undefined = none). */
+  endpoints: () => AdvertisedEndpoints | undefined;
 };

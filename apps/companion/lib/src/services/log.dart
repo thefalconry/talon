@@ -13,6 +13,30 @@ enum LogLevel {
   String get label => name.toUpperCase();
 }
 
+/// Strip credentials from text bound for the UI or the log ring: `token=`,
+/// pairing-link `t=` and provisioning grants in URLs, and `Bearer` header
+/// values. Exception text from the HTTP stack quotes the full request URL,
+/// which carries the bridge token as a query parameter.
+String redactSecrets(String text) => text
+    .replaceAllMapped(
+      _secretParam,
+      (m) => '${m[1]}${m[2]}=…',
+    )
+    .replaceAllMapped(_bearer, (m) => '${m[1]} …')
+    // A per-device credential quoted anywhere else (a JSON reply, an
+    // exception's toString): keep the public credential id, drop the secret.
+    .replaceAllMapped(_deviceCredential, (m) => 'tdc1.${m[1]}.…');
+
+final _secretParam = RegExp(
+  r"""([?&;]|\b)(token|access_token|t|provision|grant)=([^&\s#"'<>]+)""",
+  caseSensitive: false,
+);
+final _deviceCredential = RegExp(r'\btdc1\.([0-9a-f]{16})\.[A-Za-z0-9_-]+');
+final _bearer = RegExp(
+  r'\b(Bearer)\s+[A-Za-z0-9._~+/=-]+',
+  caseSensitive: false,
+);
+
 /// Tiny structured logger for connection diagnostics.
 ///
 /// It writes through Flutter/devtools-friendly sinks and keeps a bounded
@@ -42,6 +66,7 @@ class AppLog {
     Object? error,
   ]) {
     if (kReleaseMode && level == LogLevel.debug) return;
+    message = redactSecrets(message);
     final line =
         '${DateTime.now().toIso8601String()} ${level.label} [$tag] $message';
     if (_lines.length == _maxLines) _lines.removeFirst();
@@ -51,7 +76,7 @@ class AppLog {
       message,
       name: 'talon.$tag',
       level: _levelValue(level),
-      error: error,
+      error: error == null ? null : redactSecrets('$error'),
     );
     if (!kReleaseMode) debugPrint(line);
   }

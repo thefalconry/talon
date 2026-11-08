@@ -55,6 +55,7 @@
 import { spawn } from "node:child_process";
 import { log, logError, openRespawnLog } from "../../util/log.js";
 import { HANDOFF_WATCH_SUBCOMMAND } from "./handoff.js";
+import { PREDECESSOR_PID_ENV } from "./discovery.js";
 
 let pendingReason: string | null = null;
 let shutdown: ((reason: string) => void) | null = null;
@@ -187,7 +188,9 @@ export function spawnSuccessor(spawnFn: SpawnFn = spawn): void {
       cwd: process.cwd(),
       detached: true,
       stdio: ["ignore", fd ?? "ignore", fd ?? "ignore"],
-      env: { ...process.env },
+      // Tells the successor's single-instance guard that the daemon it
+      // can still see is us, on our way out — wait, don't refuse.
+      env: { ...process.env, [PREDECESSOR_PID_ENV]: String(process.pid) },
     });
     child.once("error", (err) => {
       logError("shutdown", `Respawn failed (${reason}) — see respawn.log`, err);

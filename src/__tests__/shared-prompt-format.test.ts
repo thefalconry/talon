@@ -22,7 +22,7 @@ describe("formatUserPrompt", () => {
   it("DM with msg_id: `[time] [msg_id:N] text`", () => {
     const out = formatUserPrompt({
       text: "hello",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       messageId: 42,
     });
@@ -46,7 +46,7 @@ describe("formatUserPrompt", () => {
   it("DM without msg_id: `[time] text`", () => {
     const out = formatUserPrompt({
       text: "no id here",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
     });
     expect(out).toMatch(TIME_TAG_RE);
@@ -68,7 +68,7 @@ describe("formatUserPrompt", () => {
   it("omitTimeTag drops the leading time bracket", () => {
     const out = formatUserPrompt({
       text: "no time",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       omitTimeTag: true,
     });
@@ -113,18 +113,18 @@ describe("formatUserPrompt", () => {
   it("DMs stay handle-free — Telegram already shows who is talking", () => {
     const out = formatUserPrompt({
       text: "dm",
-      senderName: "Dylan",
-      senderHandle: "dylanneve1",
+      senderName: "Ada",
+      senderHandle: "ada",
       isGroup: false,
       messageId: 3,
     });
-    expect(out).not.toContain("@dylanneve1");
+    expect(out).not.toContain("@ada");
   });
 
   it("string messageId works (Discord snowflake)", () => {
     const out = formatUserPrompt({
       text: "snowflake",
-      senderName: "Dylan",
+      senderName: "Ada",
       isGroup: false,
       messageId: "1234567890123456789",
     });

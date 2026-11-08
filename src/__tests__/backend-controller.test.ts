@@ -13,22 +13,26 @@ import {
   type BackendFactory,
 } from "../core/agent-runtime/backend-registry.js";
 import {
-  initBackendController,
-  getActiveBackend,
-  getActiveBackendId,
-  getActiveBackendLabel,
-  getActiveBackendOrNull,
-  hasActiveBackend,
-  switchBackend,
+  getBackendForRole,
+  getBackendIdForRole,
+  getBackendLabelForRole,
+  hasBackendPool,
+  rebindRole,
+  roleHolder,
   listAvailableBackends,
   isBackendAvailable,
   isModelValidForBackend,
   onBackendChange,
-  cleanupBackendController,
-  resetBackendControllerForTest,
+  cleanupBackendPool,
+  resetBackendPoolForTest,
   clearBackendChangeListenersForTest,
   acquireBackendInstance,
 } from "../core/engine/backend-controller/index.js";
+import {
+  bindings,
+  ctx,
+  ensurePoolEntry,
+} from "../core/engine/backend-controller/state.js";
 
 function makeStubBackend(label: string): Backend {
   return stubBackend({
@@ -79,9 +83,25 @@ const STUB_CTX = {
   frontendName: "terminal" as const,
 };
 
+/**
+ * Bind only the chat role (initBackendPool binds every role, which would
+ * keep the old backend pinned by heartbeat/dream across a chat swap).
+ */
+async function initChatRole(id: string): Promise<Backend> {
+  ctx.initCtx = STUB_CTX;
+  ctx.poolConfig = STUB_CONFIG;
+  const entry = await ensurePoolEntry(id, STUB_CONFIG);
+  const holder = roleHolder("chat");
+  entry.holders.add(holder);
+  bindings.set(holder, id);
+  return entry.backend;
+}
+
+const switchChat = (id: string) => rebindRole("chat", id, STUB_CONFIG);
+
 beforeEach(async () => {
-  await cleanupBackendController();
-  resetBackendControllerForTest();
+  await cleanupBackendPool();
+  resetBackendPoolForTest();
   clearBackendChangeListenersForTest();
   clearBackends();
 });
@@ -89,28 +109,24 @@ beforeEach(async () => {
 describe("backend-controller", () => {
   it("initialises with a registered backend", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
-    expect(hasActiveBackend()).toBe(false);
+    expect(hasBackendPool()).toBe(false);
 
-    const backend = await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
-    expect(hasActiveBackend()).toBe(true);
-    expect(getActiveBackendId()).toBe("alpha");
-    expect(getActiveBackendLabel()).toBe("Alpha");
-    expect(getActiveBackend()).toBe(backend);
-    expect(getActiveBackendOrNull()).toBe(backend);
+    const backend = await initChatRole("alpha");
+    expect(hasBackendPool()).toBe(true);
+    expect(getBackendIdForRole("chat")).toBe("alpha");
+    expect(getBackendLabelForRole("chat")).toBe("Alpha");
+    expect(getBackendForRole("chat")).toBe(backend);
   });
 
   it("throws when initialising an unknown backend", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
-    await expect(
-      initBackendController("ghost", STUB_CONFIG, STUB_CTX),
-    ).rejects.toThrow(/Unknown backend/);
+    await expect(initChatRole("ghost")).rejects.toThrow(/Unknown backend/);
   });
 
-  it("getActiveBackend throws if controller not initialised", () => {
-    expect(() => getActiveBackend()).toThrow(/not initialised/);
-    expect(() => getActiveBackendId()).toThrow(/not initialised/);
-    expect(() => getActiveBackendLabel()).toThrow(/not initialised/);
-    expect(getActiveBackendOrNull()).toBeNull();
+  it("role accessors throw if the chat role is not bound", () => {
+    expect(() => getBackendForRole("chat")).toThrow(/not bound/);
+    expect(() => getBackendIdForRole("chat")).toThrow(/not bound/);
+    expect(() => getBackendLabelForRole("chat")).toThrow(/not bound/);
   });
 
   it("hot-swaps to a different backend", async () => {
@@ -122,31 +138,31 @@ describe("backend-controller", () => {
     );
     registerBackend(makeFactory("beta", "Beta"));
 
-    const alpha = await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
-    expect(getActiveBackend()).toBe(alpha);
+    const alpha = await initChatRole("alpha");
+    expect(getBackendForRole("chat")).toBe(alpha);
 
-    const result = await switchBackend("beta", STUB_CONFIG);
+    const result = await switchChat("beta");
     expect(result).toMatchObject({ ok: true, from: "alpha", to: "beta" });
-    expect(getActiveBackendId()).toBe("beta");
-    expect(getActiveBackend()).not.toBe(alpha);
+    expect(getBackendIdForRole("chat")).toBe("beta");
+    expect(getBackendForRole("chat")).not.toBe(alpha);
     expect(cleanups).toEqual(["cleanup:alpha"]);
   });
 
   it("rejects same-id swap", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
-    const result = await switchBackend("alpha", STUB_CONFIG);
+    const result = await switchChat("alpha");
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/Already on/);
+    expect(result.error).toMatch(/already bound/);
   });
 
   it("rejects swap to unknown backend with helpful error", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("beta", "Beta"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
-    const result = await switchBackend("gamma", STUB_CONFIG);
+    const result = await switchChat("gamma");
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/Unknown backend "gamma"/);
     expect(result.error).toMatch(/"alpha"/);
@@ -162,13 +178,13 @@ describe("backend-controller", () => {
     );
     registerBackend(makeFactory("beta", "Beta", { failInit: true }));
 
-    const alpha = await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
-    const result = await switchBackend("beta", STUB_CONFIG);
+    const alpha = await initChatRole("alpha");
+    const result = await switchChat("beta");
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/Failed to init Beta/);
-    expect(getActiveBackend()).toBe(alpha);
-    expect(getActiveBackendId()).toBe("alpha");
+    expect(getBackendForRole("chat")).toBe(alpha);
+    expect(getBackendIdForRole("chat")).toBe("alpha");
     expect(cleanups).toEqual([]); // previous cleanup must not have fired
   });
 
@@ -187,42 +203,42 @@ describe("backend-controller", () => {
     });
     registerBackend(makeFactory("beta", "Beta"));
 
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
-    const result = await switchBackend("beta", STUB_CONFIG);
+    await initChatRole("alpha");
+    const result = await switchChat("beta");
     expect(result.ok).toBe(true);
-    expect(getActiveBackendId()).toBe("beta");
+    expect(getBackendIdForRole("chat")).toBe("beta");
   });
 
   it("notifies listeners after a successful swap", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("beta", "Beta"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     const calls: Array<{ id: string; label: string }> = [];
     onBackendChange((_role, _b, info) => {
       calls.push(info);
     });
 
-    await switchBackend("beta", STUB_CONFIG);
+    await switchChat("beta");
     expect(calls).toEqual([{ id: "beta", label: "Beta" }]);
   });
 
   it("does not notify listeners on failed swap (init error)", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("beta", "Beta", { failInit: true }));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     const calls: Array<{ id: string }> = [];
     onBackendChange((_role, _b, info) => calls.push({ id: info.id }));
 
-    await switchBackend("beta", STUB_CONFIG);
+    await switchChat("beta");
     expect(calls).toEqual([]);
   });
 
   it("listener errors do not block subsequent listeners", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("beta", "Beta"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     const second = vi.fn();
     onBackendChange(() => {
@@ -230,7 +246,7 @@ describe("backend-controller", () => {
     });
     onBackendChange(second);
 
-    await switchBackend("beta", STUB_CONFIG);
+    await switchChat("beta");
     expect(second).toHaveBeenCalledTimes(1);
   });
 
@@ -238,16 +254,16 @@ describe("backend-controller", () => {
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("beta", "Beta"));
     registerBackend(makeFactory("gamma", "Gamma"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     const calls: string[] = [];
     const unsubscribe = onBackendChange((_role, _b, info) =>
       calls.push(info.id),
     );
 
-    await switchBackend("beta", STUB_CONFIG);
+    await switchChat("beta");
     unsubscribe();
-    await switchBackend("gamma", STUB_CONFIG);
+    await switchChat("gamma");
 
     expect(calls).toEqual(["beta"]);
   });
@@ -256,7 +272,7 @@ describe("backend-controller", () => {
     registerBackend(makeFactory("kilo", "Kilo"));
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("codex", "Codex"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     expect(listAvailableBackends()).toEqual([
       { id: "alpha", label: "Alpha" },
@@ -342,10 +358,10 @@ describe("backend-controller", () => {
       }),
     );
 
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
-    await switchBackend("beta", STUB_CONFIG);
-    await switchBackend("alpha", STUB_CONFIG);
-    await switchBackend("beta", STUB_CONFIG);
+    await initChatRole("alpha");
+    await switchChat("beta");
+    await switchChat("alpha");
+    await switchChat("beta");
 
     // 4 inits: initial alpha, switch to beta, switch back to alpha,
     // switch to beta again. Each switch fully reinitialises the
@@ -356,26 +372,25 @@ describe("backend-controller", () => {
     expect(cleanups).toEqual(["alpha", "beta", "alpha"]);
   });
 
-  it("cleanupBackendController invokes cleanup and clears state", async () => {
+  it("cleanupBackendPool invokes cleanup and clears state", async () => {
     const cleanups: string[] = [];
     registerBackend(
       makeFactory("alpha", "Alpha", {
         cleanupSpy: (id) => cleanups.push(id),
       }),
     );
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
-    await cleanupBackendController();
+    await cleanupBackendPool();
     expect(cleanups).toEqual(["alpha"]);
-    expect(hasActiveBackend()).toBe(false);
-    expect(getActiveBackendOrNull()).toBeNull();
+    expect(hasBackendPool()).toBe(false);
   });
 
-  it("cleanupBackendController is idempotent", async () => {
+  it("cleanupBackendPool is idempotent", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
-    await cleanupBackendController();
-    await expect(cleanupBackendController()).resolves.toBeUndefined();
+    await initChatRole("alpha");
+    await cleanupBackendPool();
+    await expect(cleanupBackendPool()).resolves.toBeUndefined();
   });
 
   it("hot-swap accessor returns the new backend before cleanup completes", async () => {
@@ -399,12 +414,12 @@ describe("backend-controller", () => {
     });
     registerBackend(makeFactory("beta", "Beta"));
 
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
-    const swapPromise = switchBackend("beta", STUB_CONFIG);
+    await initChatRole("alpha");
+    const swapPromise = switchChat("beta");
 
     // Give the swap a microtask to flip the active pointer.
     await new Promise((r) => setImmediate(r));
-    expect(getActiveBackendId()).toBe("beta");
+    expect(getBackendIdForRole("chat")).toBe("beta");
 
     // Now release the old cleanup and await the swap.
     cleanupResolve();
@@ -418,7 +433,7 @@ describe("acquireBackendInstance — transient catalog reads", () => {
     const cleanupSpy = vi.fn();
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("beta", "Beta", { cleanupSpy }));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     const { backend, release } = await acquireBackendInstance("beta");
     expect(backend).toBeDefined();
@@ -429,7 +444,7 @@ describe("acquireBackendInstance — transient catalog reads", () => {
   it("leaves an already-active backend running after release", async () => {
     const cleanupSpy = vi.fn();
     registerBackend(makeFactory("alpha", "Alpha", { cleanupSpy }));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     const { release } = await acquireBackendInstance("alpha");
     await release();
@@ -438,7 +453,7 @@ describe("acquireBackendInstance — transient catalog reads", () => {
 
   it("throws for an unknown backend id", async () => {
     registerBackend(makeFactory("alpha", "Alpha"));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
     await expect(acquireBackendInstance("ghost")).rejects.toThrow(/ghost/);
   });
 
@@ -446,7 +461,7 @@ describe("acquireBackendInstance — transient catalog reads", () => {
     const cleanupSpy = vi.fn();
     registerBackend(makeFactory("alpha", "Alpha"));
     registerBackend(makeFactory("beta", "Beta", { cleanupSpy }));
-    await initBackendController("alpha", STUB_CONFIG, STUB_CTX);
+    await initChatRole("alpha");
 
     const { release } = await acquireBackendInstance("beta");
     await release();

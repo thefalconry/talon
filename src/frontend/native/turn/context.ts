@@ -88,14 +88,12 @@ export async function refreshContext(
 /**
  * Fill the context cache for chats restored at startup.
  *
- * The readout is served from an in-memory map that was only ever written at
- * turn end, so after a restart every existing chat reported no context at
- * all — the header chip vanished until that chat ran another turn, which
- * read as "context usage doesn't save". The numbers themselves are
- * persisted with the session; only the cache was cold. This re-reads them
- * for the most recently active chats (bounded, and on the cheap path that
- * never touches the backend pool); anything it skips or can't resolve is
- * filled in the moment the chat is opened.
+ * The readout is served from an in-memory map otherwise written only at
+ * turn end, so after a restart every chat would show no context until its
+ * next turn, though the numbers are persisted with the session. This
+ * re-reads them for the most recently active chats (bounded, and on the
+ * cheap path that never touches the backend pool); anything it skips or
+ * can't resolve is filled in the moment the chat is opened.
  */
 const CONTEXT_WARM_LIMIT = 40;
 

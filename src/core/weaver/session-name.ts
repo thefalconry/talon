@@ -10,6 +10,8 @@
  * code lived in three handlers and drifted independently.
  */
 
+import { unescapeHtml } from "../../util/text/html-entities.js";
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const MAX_NAME_LENGTH = 30;
@@ -28,9 +30,11 @@ const MAX_NAME_LENGTH = 30;
  * Returns `undefined` when the cleaned text is empty (e.g. the user
  * sent only a sticker or an attachment with no caption).
  */
+
 export function extractSessionName(rawText: string): string | undefined {
   if (!rawText) return undefined;
-  const cleaned = rawText
+  const unescaped = unescapeHtml(rawText);
+  const cleaned = unescaped
     .replace(/^\[.*?\]\s*/g, "")
     .replace(/\[msg_id:\d+\]\s*/g, "")
     .trim();

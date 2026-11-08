@@ -295,7 +295,7 @@ describe("per-chat frontend prompt flavour (multi-frontend)", () => {
     const prepared = prepareSystemPrompt({
       config,
       previousTurns: 0,
-      chatId: "-1001426819337",
+      chatId: "-1009876543210",
       sessionEpoch: 1000,
     });
 

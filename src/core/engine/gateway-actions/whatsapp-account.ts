@@ -5,7 +5,7 @@
  * A chat-free shared action, for the same reason `send_via` is one: the
  * account surface belongs to the WhatsApp *connection*, not to any
  * conversation, and the session driving it usually lives somewhere else
- * (Dylan's Telegram DM, or a heartbeat run with no ambient chat at
+ * (Ada's Telegram DM, or a heartbeat run with no ambient chat at
  * all). Routing it through the normal chat_id path would demand a
  * WhatsApp chat that need not exist.
  *

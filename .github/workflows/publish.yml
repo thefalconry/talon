@@ -17,10 +17,11 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           # Matches engines (>=24) and the CI test matrix.
           node-version: 24
@@ -37,8 +38,22 @@ jobs:
             exit 1
           fi
 
+      # Pack once and publish that exact tarball, so the GitHub attestation
+      # below covers the same bytes the registry serves (`npm pack
+      # talon-agent@<v>` fetches them back for `gh attestation verify`).
+      - name: Pack
+        run: |
+          mkdir -p dist
+          npm pack --pack-destination dist
+          ls -la dist
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tgz
+
       - name: Publish
-        run: npm publish --provenance --access public
+        run: npm publish ./dist/*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -50,7 +65,7 @@ jobs:
     # Must clear the propagation poll (up to 10 minutes) plus install + verify.
     timeout-minutes: 20
     steps:
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
 
@@ -119,17 +134,17 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - uses: docker/login-action@v4.6.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/metadata-action@v5
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
@@ -139,7 +154,7 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: true
@@ -160,15 +175,17 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
 
@@ -209,23 +226,33 @@ jobs:
         working-directory: dist
         run: sha256sum talon-* > SHA256SUMS
 
+      # SLSA build provenance for every binary plus SHA256SUMS, verifiable
+      # with `gh attestation verify <file> --repo thefalconry/talon`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$GITHUB_REF_NAME" dist/* --clobber
 
-  # ── Debian packages (.deb) → release assets ────────────────────
+  # ── Linux packages (.deb, .rpm) → release assets ───────────────
   # Wraps the already-built linux binaries with nfpm (nfpm.yaml). Users
-  # install with `apt install ./talon_<ver>_<arch>.deb` (or `dpkg -i`).
+  # install with `apt install ./talon_<ver>_<arch>.deb` (Debian/Ubuntu) or
+  # `dnf install ./talon-<ver>-1.<arch>.rpm` (Fedora/RHEL).
   deb:
-    name: Debian package
+    name: Linux packages (.deb, .rpm)
     needs: [binaries]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download release binaries
         env:
@@ -244,7 +271,7 @@ jobs:
           tar -xzf /tmp/nfpm.tgz -C "$HOME/.nfpm-bin" nfpm
           echo "$HOME/.nfpm-bin" >> "$GITHUB_PATH"
 
-      - name: Build .deb for each arch
+      - name: Build .deb and .rpm for each arch
         run: |
           export VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p dist
@@ -253,24 +280,34 @@ jobs:
           # top-level scalar fields like arch/version), so copy each
           # arch's binary to the fixed path nfpm.yaml references instead
           # of templating src per-arch.
-          build_deb() {
+          # nfpm translates the Debian arch to RPM's (amd64 → x86_64,
+          # arm64 → aarch64) itself; the third argument only names the file.
+          build_pkgs() {
             export ARCH="$1"
             cp "$2" dist/talon-bin
             chmod +x dist/talon-bin
             nfpm package -f nfpm.yaml -p deb -t "dist/talon_${VERSION}_${ARCH}.deb"
+            nfpm package -f nfpm.yaml -p rpm -t "dist/talon-${VERSION}-1.$3.rpm"
           }
-          build_deb amd64 bin/talon-linux-x64
-          build_deb arm64 bin/talon-linux-arm64
+          build_pkgs amd64 bin/talon-linux-x64 x86_64
+          build_pkgs arm64 bin/talon-linux-arm64 aarch64
           ls -la dist
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.deb
+            dist/*.rpm
 
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" dist/*.deb --clobber
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.deb dist/*.rpm --clobber
 
   # ── Homebrew tap bump ──────────────────────────────────────────
-  # Bumps Formula/talon.rb in dylanneve1/homebrew-talon to this version
-  # with fresh per-os/arch SHA256s, so `brew install dylanneve1/talon/talon`
+  # Bumps Formula/talon.rb in thefalconry/homebrew-talon to this version
+  # with fresh per-os/arch SHA256s, so `brew install thefalconry/talon/talon`
   # tracks the latest release. Uses the cross-repo PAT (same secret
   # release-please uses); skips cleanly if it isn't configured.
   homebrew:
@@ -291,8 +328,8 @@ jobs:
           set -euo pipefail
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          REPO="dylanneve1/talon"
-          TAP="dylanneve1/homebrew-talon"
+          REPO="thefalconry/talon"
+          TAP="thefalconry/homebrew-talon"
           BASE="https://github.com/${REPO}/releases/download/${TAG}"
 
           # Fetch the checksums published by the `binaries` job and pull each
@@ -311,9 +348,9 @@ jobs:
           # Homebrew formula for Talon — auto-bumped by the talon publish workflow.
           class Talon < Formula
             desc "Multi-frontend AI agent with full tool access, streaming, cron jobs, and plugins"
-            homepage "https://github.com/dylanneve1/talon"
+            homepage "https://github.com/thefalconry/talon"
             version "${VERSION}"
-            license "MIT"
+            license "Apache-2.0"
 
             on_macos do
               if Hardware::CPU.arm?

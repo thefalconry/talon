@@ -1,0 +1,67 @@
+# Talon on TrueNAS SCALE (24.10 "Electric Eel" and later).
+#
+# Apps → Discover Apps → ⋮ → Install via YAML → paste this file.
+# Full walkthrough: docs/truenas.md
+#
+# Before installing, create ONE dataset for Talon with the "Apps" dataset
+# preset (owner apps:apps = 568:568), e.g. /mnt/tank/apps/talon, and put
+# its path in the volume line below. Everything Talon keeps — config,
+# chat history, workspace, memory, bridge keys, and every backend's sign-in
+# and conversation transcripts — lives in that one dataset, so snapshots
+# and replication cover all of it. Map the dataset to /data as a whole;
+# mapping only a .talon folder loses the transcripts on every update.
+
+services:
+  talon:
+    # Published by this repo's release workflow. Pin a version (e.g. 5.5.1)
+    # for updates you choose rather than updates that happen on redeploy.
+    image: ghcr.io/thefalconry/talon:latest
+    pull_policy: always
+    restart: unless-stopped
+
+    # TrueNAS apps run as the `apps` user, which owns the dataset above.
+    user: "568:568"
+
+    environment:
+      # HOME *is* the dataset: ~/.talon, ~/.claude, ~/.claude.json,
+      # ~/.codex, ~/.gemini and ~/.local/share (OpenCode/Kilo) all persist
+      # without separate mounts. /data is also the image default; it is
+      # spelled out here so the layout is visible in the app's YAML.
+      HOME: /data
+      TZ: Etc/UTC
+
+      # ── First boot only ───────────────────────────────────────────
+      # These seed /data/.talon/config.json when it doesn't exist yet and
+      # are ignored afterwards; edit the file (or use /settings) from then
+      # on. Leave TALON_BOT_TOKEN empty to start with just the companion
+      # app bridge.
+      TALON_BOT_TOKEN: "" # Telegram bot token from @BotFather
+      TALON_ADMIN_USER_ID: "" # your numeric Telegram user id
+      TALON_FRONTEND: "" # blank = telegram if a token is set, else native
+      TALON_BACKEND: "claude" # claude | agy | codex | kilo | opencode | openai-agents
+      # Address your phone uses to reach this NAS; pairing links point here.
+      TALON_BRIDGE_URL: "https://truenas.local:19880"
+
+      # Claude without the interactive sign-in (optional):
+      # ANTHROPIC_API_KEY: ""
+
+    ports:
+      # Native bridge for the Talon companion app and talon-node devices.
+      # TLS with an auto-minted bearer token; drop this line if you only
+      # use Telegram/Discord/WhatsApp. For access from outside, put your
+      # reverse proxy in front with client certificates (docs/mtls.md)
+      # rather than forwarding this port.
+      - "19880:19880"
+
+    volumes:
+      - /mnt/tank/apps/talon:/data
+
+      # Antigravity (backend "agy") — the CLI isn't on npm, so mount a Linux
+      # agy binary stored on a dataset (see docs/truenas.md):
+      # - /mnt/tank/apps/talon-bin/agy:/usr/local/bin/agy:ro
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G

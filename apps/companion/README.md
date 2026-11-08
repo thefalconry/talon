@@ -33,6 +33,15 @@ that speaks the protocol works.
   one itself (silently on a rooted/Shizuku phone, swap-and-relaunch on
   desktop). See [Updates](#updates).
 
+- **Voice mode** (Android) — hands-free conversation with on-device speech,
+  plus an optional on-device neural voice (Kokoro). See
+  [docs/companion-voice.md](../../docs/companion-voice.md).
+
+> **Licence note (Android APK):** the neural voice links espeak-ng (GPL-3.0)
+> through sherpa-onnx, so the Android companion APK is distributed under the
+> GPL-3.0; its corresponding source is this repository. The source files stay
+> Apache-2.0, and the desktop builds are unaffected. See [NOTICE](../../NOTICE).
+
 See [docs/companion-ui.md](../../docs/companion-ui.md) for a visual tour of the
 main surfaces and the reasoning behind their layout.
 
@@ -49,6 +58,38 @@ Developer account), so Gatekeeper warns on first launch. Either:
 
 The DMG art (`assets/dmg/`, rendered by `scripts/render-dmg-background.py`)
 and the volume icon are wired up in `.github/workflows/companion.yml`.
+
+## Installing (Windows)
+
+Grab `talon-companion-windows-setup.exe` from the latest release and run it —
+a standard installer that puts **Talon** under your user profile (no admin
+prompt) with Start-menu and optional desktop shortcuts. Prefer no installer?
+`talon-companion-windows.zip` is the same build unpacked; extract it anywhere
+and run `talon_companion.exe`.
+
+The installer is unsigned, so SmartScreen may warn on first run — choose **More
+info → Run anyway**. Its Inno Setup script lives at
+`installer/windows/talon-companion.iss` and is compiled in
+`.github/workflows/companion.yml`.
+
+## Installing (Linux)
+
+Four options are published for each release:
+
+- **AppImage** (`talon-companion-linux-<version>.AppImage`): standalone portable
+  executable. Make it executable (`chmod +x talon-companion-linux-*.AppImage`)
+  and run it directly on any modern distribution.
+- **Debian / Ubuntu package** (`talon-companion_<version>_amd64.deb`): standard
+  `.deb` package. Install with `sudo dpkg -i talon-companion_*.deb` or
+  `sudo apt install ./talon-companion_*.deb`.
+- **Fedora / RHEL / openSUSE package** (`talon-companion-<version>-1.x86_64.rpm`):
+  standard `.rpm` package. Install with `sudo dnf install ./talon-companion-*.rpm`
+  or `sudo rpm -i talon-companion-*.rpm`.
+- **Portable archive** (`talon-companion-linux-<version>.tar.gz`): unpack anywhere
+  and run `talon_companion`.
+
+Packaging manifests and scripts live under `installer/linux/` and run in
+`.github/workflows/companion.yml`.
 
 ## Updates
 
@@ -68,6 +109,25 @@ is installed, and a managed install the app can't write to (Homebrew, `/opt`,
 `C:\Program Files`) is reported rather than half-overwritten.
 
 Full mechanism: [docs/companion-updates.md](../../docs/companion-updates.md).
+
+## App lock
+
+*Settings → App lock* (off by default) puts a passcode — 6+ digits or a
+password — in front of the app, with Touch ID / Windows Hello / Android
+fingerprint or face as an optional shortcut (Linux: passcode only). The app
+locks on launch and after a chosen time away or idle (default 5 minutes).
+
+- **What it covers:** the UI (every screen, dialog and `talon://pair` prompt
+  waits behind it), the offline chat cache, which is encrypted at rest while
+  the lock is on, and notification text, which is hidden. With *Require unlock
+  for elevated commands*, mesh shell/file/install commands also wait for an
+  approval on the device, and are refused when the app isn't open.
+- **What it doesn't:** the connection and the background mesh keep running
+  while locked, so locking the app never takes the device off the mesh.
+- The passcode is never stored. An Argon2id verifier and a passcode-wrapped
+  data key sit in the platform secure store. Failed attempts back off 1s, 2s,
+  4s and so on up to 60s. *Erase connection after 10 failed attempts* is
+  optional. *Forgot passcode?* resets the lock and the pairing.
 
 ## Running it
 
@@ -129,6 +189,16 @@ screen resets the pin. Local zero-config discovery reads the fingerprint
 from `native-bridge.json` directly, so no first-use adoption is needed
 there.
 
+**Behind a reverse proxy with client certificates** (the Immich setup, see
+[docs/mtls.md](../../docs/mtls.md)):
+
+- **Import certificate** on the connect screen takes a `.p12`/`.pfx` and its
+  password, and the app presents the certificate on every connection. The
+  bridge token is still required as usual.
+- **Local network address** (optional) is used whenever it answers, and the
+  main address otherwise. The app re-checks when the network changes, and the
+  background mesh service re-checks on every reconnect.
+
 ## Protocol
 
 The wire contract lives on the daemon side in
@@ -148,4 +218,5 @@ and is mirrored in Dart under [`lib/src/models/`](lib/src/models). Endpoints:
 | POST | `/control` | Daemon-level actions (`restart`, `dream`) |
 
 All non-`/health` routes accept a bearer token (`Authorization: Bearer …`, or
-`?token=` for the SSE stream) when the daemon is configured with one.
+`?token=` on `GET /events` and `GET /media` only, where a client can't set a
+header) when the daemon is configured with one.

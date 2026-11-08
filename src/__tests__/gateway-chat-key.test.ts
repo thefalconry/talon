@@ -44,12 +44,13 @@ vi.mock("../core/engine/dispatcher.js", () => ({
 }));
 
 import { Gateway } from "../core/engine/gateway.js";
+import { gatewayFetch } from "./helpers/gateway-fetch.js";
 
 let gateway: Gateway;
 let port: number;
 
 async function post(body: Record<string, unknown>): Promise<void> {
-  await fetch(`http://127.0.0.1:${port}/action`, {
+  await gatewayFetch(`http://127.0.0.1:${port}/action`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

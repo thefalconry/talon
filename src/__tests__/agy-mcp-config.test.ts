@@ -75,7 +75,7 @@ afterEach(() => {
 
 const opts = () => ({ configPath, snapshotDir });
 
-const servers = (chatId = "-1001426819337") =>
+const servers = (chatId = "-1009876543210") =>
   buildAgyMcpServers({
     chatId,
     bridgeUrl: "http://127.0.0.1:19876",
@@ -85,7 +85,7 @@ const servers = (chatId = "-1001426819337") =>
 
 describe("agy mcp-config — naming", () => {
   it("slugs a chat id into one safe token", () => {
-    expect(agyScopeSlug("-1001426819337")).toBe("1001426819337");
+    expect(agyScopeSlug("-1009876543210")).toBe("1009876543210");
     expect(agyScopeSlug("wa_dm_353871234567")).toBe("wa-dm-353871234567");
     expect(agyScopeSlug("!!!")).toBe("chat");
   });
@@ -98,21 +98,27 @@ describe("agy mcp-config — naming", () => {
 });
 
 describe("agy mcp-config — building", () => {
+  // Every entry authenticates to the hub with the gateway token.
+  const AUTH = { Authorization: "Bearer vitest-gateway-token" };
+
   it("builds the same membership codex builds, as http entries", () => {
     expect(servers()).toEqual({
-      "__talon__1001426819337__telegram-tools": {
+      "__talon__1009876543210__telegram-tools": {
         disabled: false,
-        serverUrl: "http://127.0.0.1:19876/mcp/talon/telegram/-1001426819337",
+        headers: AUTH,
+        serverUrl: "http://127.0.0.1:19876/mcp/talon/telegram/-1009876543210",
       },
-      "__talon__1001426819337__brave-search": {
+      "__talon__1009876543210__brave-search": {
         disabled: false,
+        headers: AUTH,
         serverUrl:
-          "http://127.0.0.1:19876/mcp/plugin/brave-search/-1001426819337",
+          "http://127.0.0.1:19876/mcp/plugin/brave-search/-1009876543210",
       },
-      "__talon__1001426819337__extras-tools": {
+      "__talon__1009876543210__extras-tools": {
         disabled: false,
+        headers: AUTH,
         serverUrl:
-          "http://127.0.0.1:19876/mcp/plugin/extras-tools/-1001426819337",
+          "http://127.0.0.1:19876/mcp/plugin/extras-tools/-1009876543210",
       },
     });
   });
@@ -144,7 +150,7 @@ describe("agy mcp-config — writing", () => {
   it("adds Talon entries and preserves every foreign entry byte-for-byte", () => {
     const before = readJson();
     const { added, removed } = writeAgyMcpServers(
-      "1001426819337",
+      "1009876543210",
       servers(),
       opts(),
     );
@@ -161,7 +167,7 @@ describe("agy mcp-config — writing", () => {
   });
 
   it("writes through a temp file and leaves no .tmp behind", () => {
-    writeAgyMcpServers("1001426819337", servers(), opts());
+    writeAgyMcpServers("1009876543210", servers(), opts());
     const leftovers = readdirSync(join(dir, "config")).filter((f) =>
       f.includes(".tmp"),
     );
@@ -179,14 +185,14 @@ describe("agy mcp-config — writing", () => {
   });
 
   it("drops entries of its own scope that are no longer wanted", () => {
-    writeAgyMcpServers("1001426819337", servers(), opts());
+    writeAgyMcpServers("1009876543210", servers(), opts());
     const trimmed = Object.fromEntries(
       Object.entries(servers()).filter(([k]) => !k.endsWith("extras-tools")),
     );
-    const { removed } = writeAgyMcpServers("1001426819337", trimmed, opts());
-    expect(removed).toEqual(["__talon__1001426819337__extras-tools"]);
+    const { removed } = writeAgyMcpServers("1009876543210", trimmed, opts());
+    expect(removed).toEqual(["__talon__1009876543210__extras-tools"]);
     expect(Object.keys(readAgyMcpServers(configPath))).not.toContain(
-      "__talon__1001426819337__extras-tools",
+      "__talon__1009876543210__extras-tools",
     );
   });
 
@@ -221,12 +227,12 @@ describe("agy mcp-config — removal and snapshots", () => {
   const snapshotFor = (key: string) => join(snapshotDir, key);
 
   it("removes a scope's entries and their schema snapshot dirs", () => {
-    writeAgyMcpServers("1001426819337", servers(), opts());
+    writeAgyMcpServers("1009876543210", servers(), opts());
     for (const key of Object.keys(servers())) {
       mkdirSync(snapshotFor(key), { recursive: true });
       writeFileSync(join(snapshotFor(key), "check_time.json"), "{}");
     }
-    const removed = removeAgyMcpServers("1001426819337", opts());
+    const removed = removeAgyMcpServers("1009876543210", opts());
     expect(removed).toHaveLength(3);
     for (const key of Object.keys(servers())) {
       expect(existsSync(snapshotFor(key)), key).toBe(false);

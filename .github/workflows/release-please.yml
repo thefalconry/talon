@@ -34,7 +34,7 @@ jobs:
       # disabled everything in release-please-config.json — including the
       # extra-files bump of apps/node/version.txt — from the day the config
       # was added. release-type lives in the config file instead.
-      - uses: googleapis/release-please-action@v5
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
         with:
           token: ${{ secrets.PAT }}

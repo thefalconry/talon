@@ -88,6 +88,26 @@ class MockBridge {
   int downloadSliceBytes = 0;
   Duration downloadSliceGap = Duration.zero;
 
+  /// Per-device credentials (#1042): when on, `/auth/whoami` and
+  /// `/auth/upgrade` behave like a daemon offering the in-band upgrade; when
+  /// off they 404, like a daemon that predates it.
+  bool issueCredentials = false;
+
+  /// When on, `/auth/whoami` asks a per-device credential to rotate.
+  bool requestRotation = false;
+
+  /// Credentials this mock minted — accepted as bearers alongside [token].
+  final List<String> issuedCredentials = [];
+
+  /// Every `/auth/upgrade` body, in order.
+  final List<Map<String, dynamic>> upgradeRequests = [];
+
+  /// The URL and Authorization header of every `/events` request, in order.
+  final List<(Uri, String?)> eventRequests = [];
+
+  /// The bearer of every authenticated request, in order.
+  final List<String?> bearers = [];
+
   int get port => _port;
   String get host => '127.0.0.1';
   Uri get uri => Uri.parse('http://$host:$port');
@@ -156,8 +176,50 @@ class MockBridge {
     if (!_authOk(req)) {
       return _json(req.response, 401, {'ok': false, 'error': 'Unauthorized'});
     }
+    final bearer = _bearer(req);
+    bearers.add(bearer);
 
-    if (req.method == 'GET' && path == '/events') return _openStream(req);
+    if (issueCredentials && req.method == 'GET' && path == '/auth/whoami') {
+      if (bearer == token) {
+        return _json(req.response, 200, {
+          'ok': true,
+          'kind': 'shared',
+          'scopes': ['device', 'client', 'operator'],
+          'action': 'upgrade',
+        });
+      }
+      return _json(req.response, 200, {
+        'ok': true,
+        'kind': 'device',
+        'scopes': ['device', 'client'],
+        'credentialId': bearer?.split('.')[1],
+        'deviceId': 'mock-device',
+        if (requestRotation) 'action': 'rotate',
+      });
+    }
+    if (issueCredentials && req.method == 'POST' && path == '/auth/upgrade') {
+      final body = await _readJson(req);
+      upgradeRequests.add(body);
+      final n = issuedCredentials.length + 1;
+      final id = n.toRadixString(16).padLeft(16, '0');
+      final credential = 'tdc1.$id.${'x' * 42}${n % 10}';
+      issuedCredentials.add(credential);
+      requestRotation = false;
+      return _json(req.response, 200, {
+        'ok': true,
+        'token': credential,
+        'credentialId': id,
+        'deviceId': body['deviceId'],
+        'scopes': ['device', 'client'],
+      });
+    }
+
+    if (req.method == 'GET' && path == '/events') {
+      eventRequests.add(
+        (req.uri, req.headers.value(HttpHeaders.authorizationHeader)),
+      );
+      return _openStream(req);
+    }
     if (req.method == 'GET' && path == '/chats') {
       return _json(req.response, 200, {'chats': chats});
     }
@@ -396,9 +458,18 @@ class MockBridge {
         'startedAt': '2026-01-01T00:00:00.000Z',
       };
 
+  String? _bearer(HttpRequest req) {
+    final header = req.headers.value(HttpHeaders.authorizationHeader);
+    if (header != null && header.startsWith('Bearer ')) {
+      return header.substring('Bearer '.length);
+    }
+    return req.uri.queryParameters['token'];
+  }
+
   bool _authOk(HttpRequest req) {
     final expected = token;
     if (expected == null || expected.isEmpty) return true;
+    if (issuedCredentials.contains(_bearer(req))) return true;
     if (req.headers.value(HttpHeaders.authorizationHeader) ==
         'Bearer $expected') {
       return true;

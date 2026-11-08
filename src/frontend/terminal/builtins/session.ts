@@ -1,7 +1,7 @@
 /** `/reset`, `/resume`, `/rename` — session lifecycle. */
 
 import pc from "picocolors";
-import { formatTimeAgo } from "../renderer.js";
+import { formatRelativeAge } from "../../../util/time.js";
 import { isTerminalChatId } from "../../../core/frontend-runtime/chat-id.js";
 import { resolveModel as coreResolveModel } from "../../../core/models/catalog.js";
 import {
@@ -49,7 +49,7 @@ export const resumeCommand: Command = {
         ? `"${s.info.sessionName}"`
         : pc.dim("(unnamed)");
       const turns = `${s.info.turns} turn${s.info.turns !== 1 ? "s" : ""}`;
-      const ago = formatTimeAgo(s.info.lastActive);
+      const ago = formatRelativeAge(s.info.lastActive);
       const model = s.info.lastModel
         ? (coreResolveModel(s.info.lastModel)?.displayName ?? s.info.lastModel)
         : "";

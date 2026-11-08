@@ -5,6 +5,8 @@
 /// and the `hello` event so a mismatch can be detected.
 library;
 
+import 'html_entities.dart';
+
 const int kBridgeProtocolVersion = 1;
 
 enum Role { user, assistant, system }
@@ -118,6 +120,20 @@ class Attachment {
     final rounded = value < 10 ? value.toStringAsFixed(1) : value.round();
     return '$rounded ${units[unit]}';
   }
+}
+
+/// Display order for a chat's messages: oldest first by timestamp, ties
+/// broken by server id (numeric ids ascending, local/system notes after),
+/// then by id text. A total order, since `List.sort` isn't stable.
+int compareMessageOrder(ClientMessage a, ClientMessage b) {
+  final byTs = a.ts.compareTo(b.ts);
+  if (byTs != 0) return byTs;
+  final na = int.tryParse(a.id);
+  final nb = int.tryParse(b.id);
+  if (na != null && nb != null) return na.compareTo(nb);
+  if (na != null) return -1;
+  if (nb != null) return 1;
+  return a.id.compareTo(b.id);
 }
 
 class ClientMessage {
@@ -405,10 +421,10 @@ class ClientChat {
 
   factory ClientChat.fromJson(Map<String, dynamic> j) => ClientChat(
         id: _string(j['id']),
-        title: _string(j['title'], 'New chat'),
+        title: unescapeHtml(_string(j['title'], 'New chat')),
         createdAt: _int(j['createdAt']),
         lastActive: _int(j['lastActive']),
-        preview: _string(j['preview']),
+        preview: unescapeHtml(_string(j['preview'])),
         model: j['model'] is String ? j['model'] as String : null,
         backend: j['backend'] is String ? j['backend'] as String : null,
         effort: j['effort'] is String ? j['effort'] as String : null,
@@ -692,7 +708,7 @@ class SearchHit {
 
   factory SearchHit.fromJson(Map<String, dynamic> j) => SearchHit(
         chatId: _string(j['chatId']),
-        chatTitle: _string(j['chatTitle']),
+        chatTitle: unescapeHtml(_string(j['chatTitle'])),
         message: ClientMessage.fromJson(_map(j['message'])),
       );
 }

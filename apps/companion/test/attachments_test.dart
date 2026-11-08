@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:talon_companion/src/models/bridge_models.dart';
+import 'package:talon_companion/src/services/attachment_opener.dart';
 import 'package:talon_companion/src/state/composer_attachments.dart';
 import 'package:talon_companion/src/theme.dart';
 import 'package:talon_companion/src/ui/composer.dart';
@@ -216,7 +217,8 @@ void main() {
       final attachments = ComposerAttachments()
         ..uploader =
             uploaderRecording(uploadedNames, streamedBytes: streamedBytes);
-      attachments.addPaths([write('archive.zip', 64).path, write('s.png').path]);
+      attachments
+          .addPaths([write('archive.zip', 64).path, write('s.png').path]);
       List<Attachment>? sentWith;
 
       await tester.pumpWidget(host(Composer(
@@ -231,11 +233,13 @@ void main() {
       // Both staged files are visible, and both went up on staging — before
       // anything was sent.
       expect(find.text('archive.zip'), findsOneWidget);
-      expect(find.bySemanticsLabel(RegExp('Remove archive.zip')),
-          findsOneWidget);
+      expect(
+          find.bySemanticsLabel(RegExp('Remove archive.zip')), findsOneWidget);
       await settle(tester);
       expect(uploadedNames, ['archive.zip', 's.png']);
-      expect(streamedBytes, [64, 32]);
+      // Both uploads run at once, so the smaller file can finish streaming
+      // first; what matters is that each one streamed all of its bytes.
+      expect(streamedBytes, unorderedEquals([64, 32]));
 
       await tester.enterText(find.byType(TextField), 'have a look');
       await tester.pump();
@@ -403,6 +407,139 @@ void main() {
       expect(find.text('shot.png'), findsNothing);
     });
 
+    testWidgets('tapping a chip saves it with the auth header', (tester) async {
+      final fake = _RecordingOpener();
+      AttachmentOpener.instance = fake;
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm3',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        mediaHeaders: const {'Authorization': 'Bearer secret'},
+        files: const [
+          BubbleFile(
+            name: 'logs.zip',
+            sizeLabel: '1.0 MB',
+            mimeType: 'application/zip',
+            url: 'http://host/media?id=logs',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('logs.zip'));
+      await tester.pump();
+
+      expect(fake.calls, hasLength(1));
+      final call = fake.calls.single;
+      expect(call.kind, 'save');
+      expect(call.url, 'http://host/media?id=logs');
+      expect(call.url, isNot(contains('token')));
+      expect(call.headers, {'Authorization': 'Bearer secret'});
+      expect(call.mimeType, 'application/zip');
+
+      // Let the saved banner's 3 s auto-dismiss timer run out.
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('long-pressing a chip opens it instead of saving',
+        (tester) async {
+      final fake = _RecordingOpener();
+      AttachmentOpener.instance = fake;
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm5',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        files: const [
+          BubbleFile(
+            name: 'notes.txt',
+            sizeLabel: '',
+            mimeType: 'text/plain',
+            url: 'http://host/media?id=notes',
+          ),
+        ],
+      )));
+      await tester.longPress(find.text('notes.txt'));
+      await tester.pump();
+
+      expect(fake.calls.single.kind, 'open');
+    });
+
+    testWidgets('a saved file offers to open it', (tester) async {
+      AttachmentOpener.instance = _RecordingOpener();
+      addTearDown(AttachmentOpener.reset);
+      addTearDown(cancelSavedSnackBarTimer);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm6',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        files: const [
+          BubbleFile(
+            name: 'a.pdf',
+            sizeLabel: '',
+            mimeType: 'application/pdf',
+            url: 'http://host/media?id=a',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('a.pdf'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Saved to Download/a.pdf'), findsOneWidget);
+      expect(find.widgetWithText(SnackBarAction, 'Open'), findsOneWidget);
+
+      // Verifies the banner auto-dismisses and fades away after 3 seconds
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+      expect(find.text('Saved to Download/a.pdf'), findsNothing);
+    });
+
+    testWidgets('a failed save says so', (tester) async {
+      AttachmentOpener.instance = _RecordingOpener(fail: true);
+      addTearDown(AttachmentOpener.reset);
+
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm4',
+          chatId: 'c1',
+          role: Role.assistant,
+          text: 'here',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+        files: const [
+          BubbleFile(
+            name: 'x.bin',
+            sizeLabel: '',
+            mimeType: 'application/octet-stream',
+            url: 'http://host/media?id=x',
+          ),
+        ],
+      )));
+      await tester.tap(find.text('x.bin'));
+      await tester.pump();
+      await tester.pump();
+      expect(find.textContaining("Couldn't save x.bin"), findsOneWidget);
+    });
+
     testWidgets('parses attachments off the wire', (tester) async {
       final m = ClientMessage.fromJson({
         'id': '7',
@@ -441,6 +578,64 @@ void main() {
       expect(snap.attachments.map((a) => a.name), ['a.png', 'b.zip']);
     });
 
+    test('a /media link is always fetched from the connected bridge', () {
+      const base = 'http://host:8080';
+      // The connected bridge's own media endpoint.
+      expect(
+          MessageBubble.bridgeMediaUrl(
+              'http://host:8080/media?id=mmuk3t31w', base),
+          'http://host:8080/media?id=mmuk3t31w');
+      // The daemon's public hostname while we're connected over LAN: the id
+      // is re-pointed at our bridge, so the header never leaves our origin.
+      expect(
+          MessageBubble.bridgeMediaUrl(
+              'https://talon.example.in/media?id=mmuk3t337', base),
+          'http://host:8080/media?id=mmuk3t337');
+      // A legacy token in the link is dropped, not forwarded.
+      expect(
+          MessageBubble.bridgeMediaUrl(
+              'https://other/media?id=a%2Fb&token=secret', base),
+          'http://host:8080/media?id=a%2Fb');
+      // A trailing slash on the base doesn't double up.
+      expect(MessageBubble.bridgeMediaUrl('http://x/media?id=q', '$base/'),
+          'http://host:8080/media?id=q');
+      // Not a media link: other path, no id, non-http scheme.
+      expect(
+          MessageBubble.bridgeMediaUrl('http://host:8080/other', base), isNull);
+      expect(
+          MessageBubble.bridgeMediaUrl('http://host:8080/media', base), isNull);
+      expect(
+          MessageBubble.bridgeMediaUrl('ftp://host/media?id=q', base), isNull);
+      // No configured bridge base: nothing is ever treated as in-app.
+      expect(MessageBubble.bridgeMediaUrl('http://host:8080/media?id=q', ''),
+          isNull);
+    });
+
+    testWidgets('selected text in the user bubble uses a visible highlight',
+        (tester) async {
+      await tester.pumpWidget(host(MessageBubble(
+        message: ClientMessage(
+          id: 'm3',
+          chatId: 'c1',
+          role: Role.user,
+          text: 'copy me',
+          ts: DateTime.now().millisecondsSinceEpoch,
+        ),
+        botName: 'Talon',
+      )));
+      await tester.pump();
+      final style =
+          DefaultSelectionStyle.of(tester.element(find.text('copy me')));
+      // Not the theme default (accent at 40%), which is invisible on the
+      // accent bubble.
+      expect(style.selectionColor, MessageBubble.userSelectionColor);
+      expect(
+          style.selectionColor,
+          isNot(Theme.of(tester.element(find.text('copy me')))
+              .textSelectionTheme
+              .selectionColor));
+    });
+
     testWidgets('a text-only message renders no chips', (tester) async {
       await tester.pumpWidget(host(MessageBubble(
         message: ClientMessage(
@@ -456,4 +651,46 @@ void main() {
       expect(find.byIcon(Icons.open_in_new_rounded), findsNothing);
     });
   });
+}
+
+class _OpenCall {
+  final String url;
+  final String mimeType;
+  final Map<String, String> headers;
+  final String kind;
+  const _OpenCall(this.url, this.mimeType, this.headers, {required this.kind});
+}
+
+class _RecordingOpener extends AttachmentOpener {
+  _RecordingOpener({this.fail = false});
+  final bool fail;
+  final calls = <_OpenCall>[];
+
+  @override
+  Future<File> open({
+    required String url,
+    required String name,
+    required String mimeType,
+    Map<String, String> headers = const {},
+  }) async {
+    calls.add(_OpenCall(url, mimeType, headers, kind: 'open'));
+    if (fail) throw const AttachmentException('No app could open it.');
+    return File(name);
+  }
+
+  @override
+  Future<SavedAttachment> save({
+    required String url,
+    required String name,
+    required String mimeType,
+    Map<String, String> headers = const {},
+  }) async {
+    calls.add(_OpenCall(url, mimeType, headers, kind: 'save'));
+    if (fail) throw const AttachmentException('Disk full.');
+    return SavedAttachment(
+      file: File(name),
+      mimeType: mimeType,
+      location: 'Download/$name',
+    );
+  }
 }

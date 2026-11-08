@@ -5,6 +5,7 @@
  */
 
 import { log, logError, logWarn } from "../../../util/log.js";
+import { faultText } from "../../engine/fault-text.js";
 import {
   catchupRunCount,
   missedRunCount,
@@ -147,6 +148,16 @@ export function getHeartbeatStatus(): HeartbeatState | null {
   return readHeartbeatState();
 }
 
+/** Arm the failure backoff so the due check stops re-firing for a while. */
+function backOff(err: unknown): void {
+  const until = hb.failureBackoff.fail(err);
+  logWarn(
+    "heartbeat",
+    `heartbeat.backoff failures=${hb.failureBackoff.failures} ` +
+      `until=${new Date(until).toISOString()} error="${faultText(err)}"`,
+  );
+}
+
 async function executeHeartbeat(trigger: "auto" | "forced"): Promise<void> {
   if (hb.running) return;
 
@@ -175,13 +186,16 @@ async function executeHeartbeat(trigger: "auto" | "forced"): Promise<void> {
         previousRunCount + 1,
       );
       // Only update last_run and increment run_count on success
-      writeHeartbeatState({
+      const persisted = writeHeartbeatState({
         last_run: Date.now(),
         last_started: now,
         status: "idle",
         run_count: previousRunCount + 1,
       });
-      hb.failureBackoff.succeed();
+      // A run whose last_run didn't stick looks overdue to the next due
+      // check, which would run the whole agent again every minute.
+      if (persisted) hb.failureBackoff.succeed();
+      else backOff(new Error("heartbeat state was not persisted"));
       log(
         "heartbeat",
         `Heartbeat #${previousRunCount + 1} complete (${trigger}), log: ${heartbeatLogPath}`,
@@ -197,23 +211,17 @@ async function executeHeartbeat(trigger: "auto" | "forced"): Promise<void> {
       // re-triggering against the same `last_run` forever. Non-timeout errors
       // retry from the previous successful run (no budget consumed).
       const isTimeout = err instanceof HeartbeatTimeoutError;
-      writeHeartbeatState({
+      const persisted = writeHeartbeatState({
         last_run: isTimeout ? Date.now() : previousLastRun,
         last_started: now,
         status: "idle",
         run_count: isTimeout ? previousRunCount + 1 : previousRunCount,
       });
       // Timeouts advance last_run (budget consumed), so the cadence itself
-      // spaces the next attempt. Every other failure retries against the same
-      // last_run — back off so the due check doesn't hammer it every minute.
-      if (!isTimeout) {
-        const until = hb.failureBackoff.fail(err);
-        logWarn(
-          "heartbeat",
-          `Backing off until ${new Date(until).toISOString()} ` +
-            `after ${hb.failureBackoff.failures} consecutive failure(s)`,
-        );
-      }
+      // spaces the next attempt — if that write landed. Every other failure
+      // retries against the same last_run — back off so the due check
+      // doesn't hammer it every minute.
+      if (!isTimeout || !persisted) backOff(err);
       if (trigger === "forced") throw err;
     } finally {
       hb.running = false;

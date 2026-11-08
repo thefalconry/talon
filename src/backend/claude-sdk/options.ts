@@ -32,8 +32,33 @@ import {
 import { toolFingerprint } from "../runtime/cache/cache-telemetry.js";
 import { reportToolFingerprint } from "../runtime/cache/cache-metrics.js";
 import { log, logError } from "../../util/log.js";
+import {
+  GATEWAY_TOKEN_ENV,
+  gatewayToken,
+} from "../../core/engine/gateway-auth.js";
 import { getConfig, getBridgePort } from "./state.js";
-import { ALLOWED_TOOLS_CHAT, EFFORT_MAP } from "./constants.js";
+import {
+  ALLOWED_TOOLS_CHAT,
+  CLAUDE_RETENTION_SETTINGS,
+  EFFORT_MAP,
+  isNativeSubagentTool,
+  nativeSubagentDisallowedTools,
+} from "./constants.js";
+import {
+  isGuestTurn,
+  isGuestPluginAllowed,
+} from "../../core/mcp-hub/guest-scope.js";
+import { VALID_TOOL_FRONTENDS } from "../../core/mcp-hub/talon-server.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  sdkEnvFor,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
+
+/** `telegram-tools`, `whatsapp-tools`, ... — the hub's own frontend servers. */
+function isFrontendToolServerName(name: string): boolean {
+  return name.endsWith("-tools") && VALID_TOOL_FRONTENDS.has(name.slice(0, -6));
+}
 
 /**
  * Built-in SDK tools that Talon's native tool set replaces when
@@ -82,6 +107,8 @@ export function getActiveFrontends(): readonly string[] {
 export type HubMcpEntry = {
   type: "http";
   url: string;
+  /** Gateway bearer token — see `hubAuthHeaders`. */
+  headers: Record<string, string>;
   alwaysLoad?: boolean;
   /** Per-server tool-call timeout in ms (overrides MCP_TOOL_TIMEOUT). */
   timeout?: number;
@@ -95,6 +122,18 @@ export type HubMcpEntry = {
  * SDK's generic MCP timeout, which tells the model nothing actionable.
  */
 const FRONTEND_TOOL_CALL_TIMEOUT_MS = 3_900_000; // 65 min
+
+/**
+ * Hub auth header for the Claude CLI's MCP config. The SDK hands that config
+ * to the CLI on its command line, which other local accounts can read — so
+ * the header carries a `${TALON_GATEWAY_TOKEN}` reference the CLI expands
+ * from its environment (inherited from the daemon), never the value itself.
+ * `gatewayToken()` runs first so the variable is guaranteed to be exported.
+ */
+function hubAuthHeaders(): Record<string, string> {
+  gatewayToken();
+  return { Authorization: `Bearer \${${GATEWAY_TOKEN_ENV}}` };
+}
 
 /**
  * Build the MCP servers map for a chat query.
@@ -120,6 +159,7 @@ export function buildMcpServers(chatId: string): Record<string, HubMcpEntry> {
     servers[`${frontend}-tools`] = {
       type: "http",
       url: talonHubUrl(bridgeUrl, frontend, chatId),
+      headers: hubAuthHeaders(),
       // Always include the frontend's tools in the turn-1 prompt instead of
       // deferring them behind the SDK's tool search. These are the bot's
       // primary surface — it needs `end_turn`/`send`/`react` on EVERY turn to
@@ -145,6 +185,7 @@ export function buildMcpServers(chatId: string): Record<string, HubMcpEntry> {
     servers["brave-search"] = {
       type: "http",
       url: pluginHubUrl(bridgeUrl, "brave-search", chatId),
+      headers: hubAuthHeaders(),
     };
   }
 
@@ -166,6 +207,7 @@ export function buildPluginMcpServers(
     servers[name] = {
       type: "http",
       url: pluginHubUrl(bridgeUrl, name, chatId),
+      headers: hubAuthHeaders(),
     };
   }
   return servers;
@@ -364,8 +406,12 @@ export function buildSdkOptions(
   abortController?: AbortController,
   modelOverride?: string,
   preparedPrompt?: PreparedSystemPrompt,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
 ): BuildSdkOptionsResult {
   const config = getConfig();
+  // The account's login: CLAUDE_CONFIG_DIR for an extra account, nothing
+  // (inherit the daemon's env) for the default one.
+  const env = sdkEnvFor(account);
   const chatSettings = getChatSettings(chatId);
   const activeModel = modelOverride ?? chatSettings.model ?? config.model;
   const activeEffort = chatSettings.effort ?? "adaptive";
@@ -383,14 +429,34 @@ export function buildSdkOptions(
   const { postToolUseFailureHook, postToolBatchHook } =
     buildTurnTerminatorHooks();
 
-  const builtinTools = config.nativeTools
-    ? ALLOWED_TOOLS_CHAT.filter((t) => !NATIVE_REPLACED_BUILTINS.has(t))
-    : [...ALLOWED_TOOLS_CHAT];
+  // Guest turns (non-operator sender) get no SDK built-ins at all — Bash/Read/
+  // Write/Skill live outside the hub, so the hub's guest scope can't hide
+  // them — and only the plugin servers the guest scope allows.
+  const guest = isGuestTurn(chatId);
+  // Claude Code's own `Agent` sub-agents die with the turn and report to
+  // no one; they are withheld unless the deployment opts back in.
+  const allowNativeSubagents = config.allowNativeSubagents === true;
+  const builtinTools = guest
+    ? []
+    : ALLOWED_TOOLS_CHAT.filter(
+        (t) =>
+          !(config.nativeTools && NATIVE_REPLACED_BUILTINS.has(t)) &&
+          (allowNativeSubagents || !isNativeSubagentTool(t)),
+      );
+  const disallowedTools = nativeSubagentDisallowedTools(allowNativeSubagents);
 
-  const mcpServers = {
+  const allServers = {
     ...buildMcpServers(chatId),
     ...buildPluginMcpServers(chatId),
   };
+  const mcpServers = guest
+    ? Object.fromEntries(
+        Object.entries(allServers).filter(
+          ([name]) =>
+            isFrontendToolServerName(name) || isGuestPluginAllowed(name),
+        ),
+      )
+    : allServers;
 
   // Tool definitions render BEFORE the system prompt, so a set that shifts
   // mid-session invalidates the system prompt and every cached message after
@@ -437,6 +503,9 @@ export function buildSdkOptions(
     ...(config.claudeBinary
       ? { pathToClaudeCodeExecutable: config.claudeBinary }
       : {}),
+    ...(env ? { env } : {}),
+    // Keep session transcripts: Talon resumes chats from them.
+    settings: { ...CLAUDE_RETENTION_SETTINGS },
     // Whitelist of SDK built-in tools. Anything not listed (e.g. WebSearch,
     // WebFetch, Monitor, PushNotification, RemoteTrigger, Plan/Worktree/Todo
     // helpers, AskUserQuestion, ScheduleWakeup) is unavailable to the model.
@@ -448,6 +517,9 @@ export function buildSdkOptions(
     // removed too — the owner prefers the native surface without nested
     // agents. Flip the flag back off to restore the built-ins instantly.
     tools: builtinTools,
+    // Explicit deny on top of the whitelist for Claude Code's own sub-agent
+    // tool (`Agent`, formerly `Task`) — unless `allowNativeSubagents`.
+    ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
     ...thinkingConfig,
     mcpServers,
     hooks: {

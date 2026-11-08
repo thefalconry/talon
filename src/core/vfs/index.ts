@@ -12,7 +12,8 @@
  *     skills/     SKILL.md bundles (writable)
  *     scripts/    agent script bodies (writable)
  *     logs/       daily logs (read-only — the daemon writes these)
- *     proc/       task table + event bus ring (synthetic, read-only)
+ *     proc/       task table, event bus ring, and the daemon's own
+ *                 log/errors/alerts views (synthetic, read-only)
  *     plugins/    plugin registry view (synthetic, read-only)
  *
  * The namespace IS the filesystem: it lives at ~/.talon/ns (symlink
@@ -25,10 +26,12 @@
  * grammar in vfs.ts / fusefs.ts; consumers never see it.)
  */
 
-import { dirs } from "../../util/paths.js";
+import { dirs, files } from "../../util/paths.js";
 import { bus } from "../bus/index.js";
+import { activeAlerts } from "../frontend-runtime/alerts.js";
 import { registry } from "../plugin/registry.js";
 import { taskTable } from "../tasks/index.js";
+import { createDiagnosticViews } from "./mounts/diagnostics.js";
 import { createFileMount } from "./mounts/files.js";
 import { createPluginsMount, type PluginView } from "./mounts/plugins.js";
 import { createProcMount } from "./mounts/proc.js";
@@ -95,6 +98,10 @@ function buildDefaultNamespace(): Vfs {
     createProcMount({
       tasks: () => taskTable.list(),
       events: () => bus.recent(0),
+      views: createDiagnosticViews({
+        logPath: files.log,
+        alerts: activeAlerts,
+      }),
     }),
   );
   vfs.mount("plugins", createPluginsMount(pluginViews));

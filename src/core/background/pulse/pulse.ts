@@ -27,6 +27,8 @@ import { formatSmartTimestamp } from "../../../util/time.js";
 let timer: ReturnType<typeof setInterval> | null = null;
 const registeredChats = new Set<string>();
 const lastCheckMessageId = new Map<string, number>();
+/** Chats whose pulse turn is still queued or running. */
+const inFlight = new Set<string>();
 
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 let activeIntervalMs = DEFAULT_INTERVAL_MS;
@@ -126,6 +128,10 @@ async function runPulse(): Promise<void> {
 }
 
 async function pulseChat(chatId: string): Promise<void> {
+  // The pulse turn queues behind the chat's other turns, so it can outlast
+  // the interval. Until it settles the checkpoint hasn't moved, and the next
+  // tick would dispatch the same unread messages a second time.
+  if (inFlight.has(chatId)) return;
   const numericChatId = parseInt(chatId, 10);
   if (isNaN(numericChatId)) {
     logError("pulse", `Invalid chatId: ${chatId}`);
@@ -157,6 +163,7 @@ async function pulseChat(chatId: string): Promise<void> {
     })
     .join("\n");
 
+  inFlight.add(chatId);
   try {
     const prompt =
       `[System: Pulse check — ${unread.length} new message(s) since last check. ` +
@@ -179,5 +186,7 @@ async function pulseChat(chatId: string): Promise<void> {
   } catch (err) {
     logError("pulse", `Chat ${chatId} failed`, err);
     // Don't update lastCheckMessageId — messages will be retried next pulse
+  } finally {
+    inFlight.delete(chatId);
   }
 }

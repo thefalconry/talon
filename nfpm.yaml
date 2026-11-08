@@ -1,4 +1,4 @@
-# nfpm packaging manifest for the standalone Talon binary (.deb).
+# nfpm packaging manifest for the standalone Talon binary (.deb and .rpm).
 # Built per-arch in the `deb` job of publish.yml; VERSION / ARCH are
 # supplied via the environment (nfpm expands ${VAR} in top-level scalar
 # fields like `arch`/`version` natively). NOTE: nfpm does NOT expand
@@ -8,19 +8,20 @@
 # templating `src` per-arch.
 #
 # Talon is a self-contained `bun build --compile` binary — no Node runtime
-# dependency — so there are no Debian `depends`. Backends (claude, codex,
-# …) are still expected on PATH at runtime, same as the npm install.
+# dependency — so there are no `depends` for either format. Backends
+# (claude, codex, …) are still expected on PATH at runtime, same as the npm
+# install.
 name: talon
 arch: ${ARCH}
 version: ${VERSION}
 section: utils
 priority: optional
-maintainer: Dylan Neve <noreply@github.com>
+maintainer: The Falconry <noreply@github.com>
 description: |
   Multi-frontend AI agent with full tool access, streaming, cron jobs, and plugins.
   Self-contained standalone binary (no Node.js runtime required).
-vendor: Dylan Neve
-homepage: https://github.com/dylanneve1/talon
+vendor: The Falconry
+homepage: https://github.com/thefalconry/talon
 license: MIT
 contents:
   - src: dist/talon-bin

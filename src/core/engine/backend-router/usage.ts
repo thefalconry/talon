@@ -34,9 +34,13 @@ export interface BackendUsageSnapshot {
 /** The reason a backend has no plan windows to show. */
 function noteFor(id: string, headroom: BackendHeadroom): string {
   const backend = getPooledBackend(id);
-  if (!backend) return "not running";
-  if (!backend.usage?.getPlanUsage) return "no plan limits on this backend";
+  // An idle backend is booted transiently for the plan read (see
+  // headroom.ts), so reaching here without windows means it really has none
+  // to report — not that it is "not running".
+  if (backend && !backend.usage?.getPlanUsage)
+    return "no plan limits on this backend";
   if (headroom.source === "ledger") return "tracked against a local budget";
+  if (headroom.source === "none") return "no usage information available";
   return "no usage information available";
 }
 

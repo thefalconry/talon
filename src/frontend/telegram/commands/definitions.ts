@@ -52,6 +52,10 @@ export const TELEGRAM_COMMANDS: ReadonlyArray<{
     command: "backup",
     description: "Snapshots and checkpoints; /backup restore <id> (admin)",
   },
+  {
+    command: "secret",
+    description: "Store a password via a one-time link, not the chat (admin)",
+  },
   { command: "plugins", description: "List loaded plugins" },
   { command: "help", description: "All commands and features" },
 ];

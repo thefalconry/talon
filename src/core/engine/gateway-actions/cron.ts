@@ -133,6 +133,9 @@ export const cronHandlers: SharedActionHandlers = {
         : null,
       endAt !== undefined ? `ends: ${new Date(endAt).toISOString()}` : null,
       spec.catchup ? `catch-up: ${spec.catchup}` : null,
+      spec.timeoutMs !== undefined
+        ? `timeout: ${Math.round(spec.timeoutMs / 1000)}s`
+        : null,
     ]
       .filter(Boolean)
       .join(", ");
@@ -173,6 +176,8 @@ export const cronHandlers: SharedActionHandlers = {
       if (j.catchup && j.catchup !== "skip")
         bounds.push(`catch-up: ${j.catchup}`);
       if (j.model) bounds.push(`model: ${j.model}`);
+      if (j.timeoutMs !== undefined)
+        bounds.push(`timeout: ${Math.round(j.timeoutMs / 1000)}s`);
       return [
         `- ${j.name} (${status})`,
         `  ID: ${j.id}`,

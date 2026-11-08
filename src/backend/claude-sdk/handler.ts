@@ -38,7 +38,11 @@ import { applyRetryDecisionStream } from "../runtime/turn/handle-retry.js";
 import { getConfig } from "./state.js";
 import { buildSdkOptions, getActiveFrontends } from "./options.js";
 import { waitForMcpServersReady } from "./mcp-ready.js";
-import { invalidatePlanUsage } from "./plan-usage.js";
+import { invalidatePlanUsage } from "./usage/plan-usage.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
 import { frontendsForChat } from "../runtime/frontends.js";
 import { rollUpTurnCache } from "../runtime/cache/cache-metrics.js";
 import {
@@ -83,10 +87,10 @@ import {
 // The SDK's PostToolBatch hook is the canonical loop-terminator — it returns
 // `{ continue: false }` after `end_turn`/`send`, and the SDK is supposed to
 // emit a `result` SDKMessage and close the async iterator immediately after.
-// In practice (observed 2026-05-19 14:52Z, chat 352042062, contextTokens=251464,
-// numApiCalls=50) the SDK can emit `result` and then ghost — the for-await loop
-// stays parked forever, holding the dispatcher context and the typing-indicator
-// pulse for hours until someone manually `/restart`s.
+// In practice (observed 2026-05-19 on a ~250k-token, 50-API-call turn) the
+// SDK can emit `result` and then ghost — the for-await loop stays parked
+// forever, holding the dispatcher context and the typing-indicator pulse for
+// hours until someone manually `/restart`s.
 //
 // Workaround: arm a short timer the moment `result` is processed. If the
 // iterator hasn't closed by the grace deadline, abort the controller and
@@ -217,7 +221,27 @@ export function getActiveQuery(chatId: string): Query | undefined {
 
 // ── Internal state passed across recursive retry calls ──────────────────────
 
-type InternalState = { flowRetries?: number; errorRetried?: boolean };
+/**
+ * Carried into every recursive retry. `account` is the Claude login the
+ * turn runs as (absent = the default `claude` backend); retries spread the
+ * state, so a retry can never land on a different account.
+ */
+type InternalState = {
+  flowRetries?: number;
+  errorRetried?: boolean;
+  account?: ClaudeRunAccount;
+};
+
+function internalBackendId(state: InternalState): string {
+  return state.account?.backendId ?? "claude";
+}
+
+/** The chat-turn entry point for one account's backend instance. */
+export function runChatTurnAs(
+  account: ClaudeRunAccount,
+): (params: ChatRunParams) => AsyncIterable<AgentEvent> {
+  return (params) => runChatTurn(params, { account });
+}
 
 // ── Stream translation ──────────────────────────────────────────────────────
 
@@ -275,6 +299,7 @@ type StreamContext = {
   model: string;
   /** tool_use id → tool name for calls announced this turn. */
   pendingTools: Map<string, string>;
+  account: ClaudeRunAccount;
 };
 
 /**
@@ -296,7 +321,7 @@ function* translateAssistantMessage(
   }
 
   for (const tool of result.tools) {
-    recordToolCall(chatId, tool.name, "claude");
+    recordToolCall(chatId, tool.name, ctx.account.backendId);
     const norm = captureDeliveredText(tool.name, tool.input);
     if (norm) state.deliveredTextNorms.push(norm);
     if (isTurnTerminator(tool.name, tool.input)) {
@@ -372,7 +397,7 @@ async function* consumeSdkStream(
     // the next /status reads them again instead of showing pre-turn
     // figures.
     if (isRateLimitEvent(message)) {
-      invalidatePlanUsage();
+      invalidatePlanUsage(ctx.account.configDir);
       continue;
     }
     if (isResult(message)) {
@@ -452,9 +477,10 @@ function accountFailedClaudeTurn(
   live: LiveUsage,
   model: string,
   durationMs: number,
+  backend = "claude",
 ): void {
   accountFailedTurn({
-    backend: "claude",
+    backend,
     chatId,
     state,
     durationMs,
@@ -468,6 +494,29 @@ function accountFailedClaudeTurn(
           cacheRead: live.cacheRead,
           cacheWrite: live.cacheWrite,
         },
+  });
+}
+
+function recordCompletedClaudeTurn(
+  chatId: string,
+  backend: string,
+  state: StreamState,
+  durationMs: number,
+  model: string,
+): void {
+  accountTurn({
+    chatId,
+    backend,
+    state,
+    durationMs,
+    model,
+    sessionId: state.newSessionId,
+    context: {
+      contextTokens: state.contextTokens,
+      contextWindow: state.contextWindow,
+      numApiCalls: state.numApiCalls,
+      costUsd: state.costUsd,
+    },
   });
 }
 
@@ -578,6 +627,7 @@ async function* runTurnStream(inputs: {
       watchdog,
       model: inputs.sdkModel,
       pendingTools: new Map(),
+      account: inputs.internal.account ?? DEFAULT_CLAUDE_ACCOUNT,
     });
     // The SDK doesn't throw on API errors — it converts them into a
     // synthetic assistant message and finishes the turn with an error-
@@ -659,6 +709,7 @@ export async function* runChatTurn(
 ): AsyncIterable<AgentEvent> {
   const config = getConfig();
   const { chatId, text } = params;
+  const backendId = internalBackendId(_internal);
   const session = getSession(chatId);
   const t0 = Date.now();
 
@@ -669,10 +720,7 @@ export async function* runChatTurn(
   // would instruct a tool that doesn't exist. Empty in terminal mode,
   // where no delivery tools exist and the strict tool-only contract must
   // not be asserted.
-  const frontend: string | undefined = frontendsForChat(
-    chatId,
-    getActiveFrontends(),
-  )[0];
+  const frontend = frontendsForChat(chatId, getActiveFrontends())[0];
 
   // Frozen per-session prompt (keyed by session epoch) — stable across
   // turns so the provider's prompt-cache prefix survives other chats'
@@ -694,6 +742,7 @@ export async function* runChatTurn(
     abortController,
     params.model.id,
     preparedPrompt,
+    _internal.account,
   );
   const prompt = buildTurnPrompt(params, frontend, session.turns, _internal);
   log("agent", `[${chatId}] <- (${text.length} chars)`);
@@ -735,7 +784,14 @@ export async function* runChatTurn(
   // The recursive retry stream already yielded its own usage + completed.
   if (outcome.kind === "retried") return;
   if (outcome.kind === "failed") {
-    accountFailedClaudeTurn(chatId, state, live, activeModel, Date.now() - t0);
+    accountFailedClaudeTurn(
+      chatId,
+      state,
+      live,
+      activeModel,
+      Date.now() - t0,
+      backendId,
+    );
     yield outcome.event;
     return;
   }
@@ -743,20 +799,7 @@ export async function* runChatTurn(
   if (active.interrupted) closeInterruptedTurn(state, live);
 
   const durationMs = Date.now() - t0;
-  accountTurn({
-    chatId,
-    backend: "claude",
-    state,
-    durationMs,
-    model: activeModel,
-    sessionId: state.newSessionId,
-    context: {
-      contextTokens: state.contextTokens,
-      contextWindow: state.contextWindow,
-      numApiCalls: state.numApiCalls,
-      costUsd: state.costUsd,
-    },
-  });
+  recordCompletedClaudeTurn(chatId, backendId, state, durationMs, activeModel);
   nameSessionFromFirstMessage({
     chatId,
     text,

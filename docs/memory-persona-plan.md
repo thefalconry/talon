@@ -60,7 +60,7 @@ one markdown file.
 **1.7 Persona is an adjective list.** `prompts/identity.md` opens with "Sharp,
 witty, and warm." That describes ten thousand assistants. It never changes, never
 differs per person, and — decisively — is not connected to memory. The evolving
-file that *could* personalize (`workspace/identity.md`) is six lines of NPUW facts
+file that *could* personalize (`workspace/identity.md`) is six lines of work-project facts
 with no voice at all. Meanwhile voice is duplicated and drifting across
 `telegram.md` / `discord.md` / `teams.md` / `terminal.md` / `native.md`.
 
@@ -91,7 +91,7 @@ over ~15 nodes is noise. And the *best case* output of the whole pipeline is
 - [conf +0.42] "verbatim quote"
 ```
 
-— a few things Dylan once said, ranked by an arithmetic score, formatted as a
+— a few things Ada once said, ranked by an arithmetic score, formatted as a
 debug dump. `SELECT text FROM directives ORDER BY recency * weight LIMIT 8` gets
 you 95% of that in one line.
 
@@ -239,7 +239,7 @@ That is why memory ships before persona, not beside it.
   voice drift in 1.7.
 - **Relationship** — derived, per-subject, mechanical. The lens as a query over
   `relationship` + `directive` + `preference` rows for whoever is talking, rendered
-  verbatim. "How I show up with Dylan" ≠ "how I show up with a stranger in a
+  verbatim. "How I show up with Ada" ≠ "how I show up with a stranger in a
   group."
 - **Stance** — per-turn, enforced. Run `critic.ts` on drafted output: log-only
   telemetry first, then a single targeted retry on the strongest classifier.

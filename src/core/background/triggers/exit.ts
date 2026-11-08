@@ -25,6 +25,54 @@ import {
   WARDEN_GRACE_SLACK_MS,
 } from "./state.js";
 import { bufferAsPayload, fireWake } from "./output.js";
+import { raiseAlert, resolveAlert } from "../../frontend-runtime/alerts.js";
+import { faultText } from "../../engine/fault-text.js";
+
+/** Exit codes that mean the command itself could not run. */
+const CANNOT_RUN_CODES: Readonly<Record<number, string>> = {
+  126: "command not executable",
+  127: "command not found",
+};
+
+/**
+ * Tell the operator about a trigger that broke rather than finished: its
+ * command could not run (exit 126/127) or the process died on a signal
+ * nobody sent it (a crash, the OOM killer — Talon's own kills set the
+ * status before the exit lands, so they never reach `errored`). An
+ * ordinary non-zero exit is the script's own verdict and already reaches
+ * the chat as a wake. A clean fire clears an earlier alert for the id.
+ */
+function alertOnExit(
+  t: Trigger,
+  status: TriggerStatus,
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  output: string[],
+): void {
+  const key = `trigger.${t.id}`;
+  if (status === "fired") {
+    resolveAlert(key, `Trigger "${t.name}" is firing normally again.`);
+    return;
+  }
+  if (status !== "errored") return;
+  const cause =
+    signal !== null
+      ? `crashed (${signal})`
+      : code !== null && CANNOT_RUN_CODES[code]
+        ? `could not run its command (exit ${code}: ${CANNOT_RUN_CODES[code]})`
+        : null;
+  if (!cause) return;
+  const last = output.at(-1);
+  log(
+    "triggers",
+    `trigger.broken id=${t.id} name="${t.name}" code=${code} signal=${signal} cause="${cause}"`,
+  );
+  raiseAlert(
+    key,
+    `Trigger "${t.name}" [${t.id}] ${cause}${last ? `: ${faultText(last)}` : "."}`,
+    { severity: "warn" },
+  );
+}
 
 export function handleTimeout(trigger: Trigger): void {
   timeouts.delete(trigger.id);
@@ -177,6 +225,7 @@ export async function finalizeExit(
     "triggers",
     `Exited "${t.name}" [${id}] code=${code} signal=${signal} → ${status}`,
   );
+  alertOnExit(t, status, code, signal, buffered);
 
   appendDailyLog(
     "Triggers",
@@ -211,6 +260,11 @@ export async function finalizeExit(
 
 export function failTrigger(t: Trigger, message: string): void {
   logError("triggers", `Failed to spawn ${t.id}: ${message}`);
+  raiseAlert(
+    `trigger.${t.id}`,
+    `Trigger "${t.name}" [${t.id}] failed to start: ${faultText(message)}`,
+    { severity: "warn" },
+  );
   updateTrigger(t.id, {
     status: "errored",
     lastError: message,

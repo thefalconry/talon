@@ -7,6 +7,7 @@ import type { Bot, Context } from "grammy";
 import { appendDailyLog } from "../../../storage/daily-log.js";
 import { log, logWarn } from "../../../util/log.js";
 import { getSenderName } from "./context.js";
+import { groupListing, warnLegacyGroup } from "./group-access.js";
 import {
   dmUsers,
   accessConfig,
@@ -33,13 +34,26 @@ export function setAccessControl(cfg: {
   blockedUsers?: number[];
   adminUserId?: number;
 }): void {
-  accessConfig.allowedUserIds = cfg.allowedUsers?.length
-    ? new Set(cfg.allowedUsers)
-    : null;
+  accessConfig.allowedUserIds = resolveAllowedUsers(cfg);
   accessConfig.blockedUserIds = cfg.blockedUsers?.length
     ? new Set(cfg.blockedUsers)
     : null;
   accessConfig.adminId = cfg.adminUserId ?? 0;
+}
+
+/**
+ * The DM allowlist. Never "everyone": an unset `allowedUsers` defaults to the
+ * admin alone, and the admin is always on the list so an allowlist that
+ * forgot them cannot lock the operator out. No admin and no allowlist is an
+ * empty list — nobody.
+ */
+function resolveAllowedUsers(cfg: {
+  allowedUsers?: number[];
+  adminUserId?: number;
+}): Set<number> {
+  const allowed = new Set(cfg.allowedUsers ?? []);
+  if (cfg.adminUserId) allowed.add(cfg.adminUserId);
+  return allowed;
 }
 
 /**
@@ -55,19 +69,20 @@ function isBlocked(senderId: number | undefined): boolean {
   return accessConfig.blockedUserIds.has(senderId);
 }
 
-/**
- * Check if a DM user is allowed. Returns true if no whitelist is set.
- */
+/** Check if a DM user is on the allowlist (see `resolveAllowedUsers`). */
 function isDmAllowed(senderId: number | undefined): boolean {
-  if (!accessConfig.allowedUserIds) return true;
   return senderId !== undefined && accessConfig.allowedUserIds.has(senderId);
 }
 
 /**
  * Check if the admin is a member of a group. Caches results for 10 minutes.
  */
-async function isAdminInGroup(bot: Bot, chatId: number): Promise<boolean> {
-  if (!accessConfig.adminId) return true; // no admin configured, allow all groups
+export async function isAdminInGroup(
+  bot: Bot,
+  chatId: number,
+): Promise<boolean> {
+  // No admin configured: no group can prove the operator is present — deny.
+  if (!accessConfig.adminId) return false;
   const cached = verifiedGroups.get(chatId);
   if (cached !== undefined && cached.expiresAt > Date.now()) {
     return cached.isMember;
@@ -146,9 +161,56 @@ export async function isAccessAllowed(
     return false;
   }
 
-  if (await isAdminInGroup(bot, ctx.chat.id)) return true;
+  // No admin configured: no group is trusted, listed or not.
+  const listing = accessConfig.adminId ? groupListing(ctx.chat.id) : "unlisted";
+  if (listing === "listed") return true;
+  if (listing === "legacy" && (await isAdminInGroup(bot, ctx.chat.id))) {
+    warnLegacyGroup(ctx.chat.id, (ctx.chat as { title?: string }).title);
+    return true;
+  }
   await notifyUnauthorized(bot, ctx, "group");
   return false;
+}
+
+/**
+ * True when the update is a /command or an inline-button press.
+ *
+ * Both are handled by `bot.command` / `bot.callbackQuery` handlers that
+ * run before — and independently of — the message handlers, so the
+ * message-path access check never sees them.
+ */
+export function isCommandOrCallback(ctx: Context): boolean {
+  if (ctx.callbackQuery) return true;
+  const msg = ctx.message ?? ctx.editedMessage;
+  if (!msg) return false;
+  const entities = msg.entities ?? msg.caption_entities ?? [];
+  return entities.some((e) => e.type === "bot_command" && e.offset === 0);
+}
+
+/**
+ * Gate every /command and button press behind the same access check as
+ * ordinary messages (denylist, DM whitelist, group admin membership).
+ *
+ * Without this, a sender outside `allowedUsers` who DMs the bot is refused
+ * for plain text but can still run /model, /settings, /status, /mesh,
+ * /plugins, /memory and press any inline button, because those handlers
+ * are registered with grammy directly and never pass through
+ * `isAccessAllowed`. Must be installed BEFORE registerCommands and
+ * registerCallbacks so it sees the update first.
+ */
+export function registerCommandAccessGate(bot: Bot): void {
+  bot.use(async (ctx, next) => {
+    if (!isCommandOrCallback(ctx)) return next();
+    if (await isAccessAllowed(ctx, bot)) return next();
+    if (ctx.callbackQuery) {
+      try {
+        await ctx.answerCallbackQuery();
+      } catch {
+        /* stale query — ignore */
+      }
+    }
+    // Dropped: not passed to any command or callback handler.
+  });
 }
 
 /**

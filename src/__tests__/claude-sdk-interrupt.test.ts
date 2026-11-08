@@ -208,7 +208,7 @@ async function drainChatTurn(chatId: string, opts: { stop: boolean }) {
     chatId,
     model: makeBareModelRef("claude", "default"),
     text: "hello",
-    senderName: "Dylan",
+    senderName: "Ada",
     isGroup: false,
   })) {
     events.push(event);

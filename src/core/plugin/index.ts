@@ -7,10 +7,7 @@
  *   - `loader`   — load/validate/register plugins, init hooks, query helpers
  *   - `builtins` — built-in plugin loading + hot-reload
  *   - `actions`  — gateway-action routing through plugins
- *   - `mcp`      — MCP server config assembly for the Claude Agent SDK
- *
- * Re-exports the same public surface the old single-file module exposed,
- * including the `_deps` test seam.
+ *   - `mcp`      — MCP server spec assembly for the hub
  */
 
 export { _deps } from "./registry.js";

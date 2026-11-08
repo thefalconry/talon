@@ -8,9 +8,7 @@
  *   - Renderer NEVER touches readline. Only this file does.
  *
  * `start()` returns once that prompt is drawn — the frontend lifecycle
- * contract (core/frontend-runtime/capabilities.ts). It used to park on a
- * promise that never resolved, which is why the composition root had to
- * special-case the terminal and start it without awaiting.
+ * contract (core/frontend-runtime/capabilities.ts).
  */
 
 import pc from "picocolors";
@@ -33,8 +31,15 @@ import {
   type CommandContext,
 } from "./commands.js";
 import { buildCacheDisplay } from "../presentation/status-context.js";
+import { LOCAL_OPERATOR_SENDER } from "../../core/mcp-hub/guest-scope.js";
 
 // ── State ────────────────────────────────────────────────────────────────────
+
+/** The terminal is driven by the operator at the keyboard. */
+const TERMINAL_SENDER = {
+  senderName: "User",
+  senderKeys: [LOCAL_OPERATOR_SENDER],
+} as const;
 
 let terminalChatId = "";
 let terminalNumericId = 0;
@@ -224,7 +229,7 @@ export function createTerminalFrontend(
             chatId: terminalChatId,
             numericChatId: terminalNumericId,
             prompt: text,
-            senderName: "User",
+            ...TERMINAL_SENDER,
             isGroup: false,
             source: "message",
             onEvent: async (event) => {

@@ -27,7 +27,7 @@ beforeEach(() => {
 const stubParams = {
   chatId: "test-chat",
   text: "hi",
-  senderName: "Dylan",
+  senderName: "Ada",
   isGroup: false,
 };
 

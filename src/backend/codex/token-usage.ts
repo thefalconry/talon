@@ -29,8 +29,8 @@
  */
 
 import { readFile, readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { userHome } from "../../util/fs-path.js";
 
 export interface CodexLastTokenUsage {
   /** Last API call's prompt size = current context fill in tokens. */
@@ -71,7 +71,7 @@ interface CodexTokenTotals {
  *       "rate_limit_reached_type": null
  *     }
  *
- *   Exhausted (the silent-exit case on Dylan's free ChatGPT OAuth):
+ *   Exhausted (the silent-exit case on Ada's free ChatGPT OAuth):
  *     {
  *       "limit_id": "premium",
  *       "primary": null,
@@ -120,7 +120,7 @@ export interface CodexRolloutSnapshot {
  * Codex CLI resolves its data directory.
  */
 function codexHome(): string {
-  return process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  return process.env.CODEX_HOME ?? join(userHome(), ".codex");
 }
 
 /**
@@ -242,7 +242,7 @@ export async function readLastTokenCount(
  * Returns `null` only when the file can't be found or no `token_count`
  * event exists in it. Returns `{ usage: undefined, rateLimits: {...} }`
  * when a usage-exhausted turn writes a `token_count` event with
- * `info: null` but populated rate_limits (the literal shape on Dylan's
+ * `info: null` but populated rate_limits (the literal shape on Ada's
  * exhausted OAuth account, 2026-05-21).
  */
 export async function readLastRolloutSnapshot(

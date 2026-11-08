@@ -9,7 +9,7 @@
       "daemon": "5.0.0",
       "config": {
         "model": "claude-sonnet-5",
-        "workspace": "/home/dylan/talon",
+        "workspace": "/home/ada/talon",
         "claudeBinary": "/usr/local/bin/claude",
         "backend": "claude"
       }
@@ -33,8 +33,8 @@
           "selectable": true
         },
         "text": "find the fox",
-        "senderName": "Dylan",
-        "senderHandle": "dylanneve",
+        "senderName": "Ada",
+        "senderHandle": "thefalconry",
         "isGroup": false,
         "messageId": 2001,
         "retrievedMemory": "#1 [fact] the fox is in protocol/"
@@ -48,7 +48,7 @@
       "params": {
         "prompt": "Summarise today's commits.",
         "systemPrompt": "You are Talon's heartbeat.",
-        "workspace": "/home/dylan/talon",
+        "workspace": "/home/ada/talon",
         "model": "claude-sonnet-5",
         "reasoningEffort": "low",
         "contextLabel": "heartbeat"

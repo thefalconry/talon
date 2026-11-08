@@ -1,17 +1,11 @@
 /**
- * Discord middleware — wires up message events to handlers.ts.
+ * Discord middleware — wires up message events to handlers/.
  *
- * Equivalent to src/frontend/telegram/middleware.ts. We attach a single
- * messageCreate listener that filters out bots/system messages and delegates
- * to handleMessage. We also push every message into the in-memory history
- * buffer so /admin commands and /status reflect real activity.
- *
- * Discord-specific behavior:
- *  - We don't have a separate "my_chat_member" event; instead, when the bot
- *    is removed from a guild we get `guildDelete`. The handler in index.ts
- *    handles that to revoke access.
- *  - Every guild message gets the chat registered for pulse so periodic
- *    check-ins work (DMs are excluded because we always respond).
+ * A single messageCreate listener filters out bots/system messages and
+ * delegates to handleMessage. Every message is also pushed into the
+ * in-memory history buffer so /admin commands and /status reflect real
+ * activity, and every guild message registers its chat for pulse (DMs are
+ * excluded because we always respond).
  */
 
 import type { Client, Message } from "discord.js";
@@ -21,10 +15,12 @@ import { pushMessage } from "../../storage/history.js";
 import { registerChat } from "../../core/background/pulse/pulse.js";
 import { deriveNumericChatId } from "../../core/frontend-runtime/chat-id.js";
 import { handleMessage, getSenderName } from "./handlers/index.js";
+import { applyInboundRedaction } from "../../core/secrets/redact.js";
+import { log } from "../../util/log.js";
 
 export function registerMiddleware(client: Client, config: TalonConfig): void {
   client.on("messageCreate", (msg: Message) => {
-    // Ignore self/bots/system here too — handlers.ts will check again, but
+    // Ignore self/bots/system here too — handleMessage checks again, but
     // we don't even want to record those in history.
     if (msg.author.bot || msg.system) return;
     if (msg.author.id === client.user?.id) return;
@@ -35,6 +31,8 @@ export function registerMiddleware(client: Client, config: TalonConfig): void {
       : `discord_dm_${msg.author.id}`;
 
     if (isGroup) registerChat(chatId);
+
+    redactCredentials(msg, chatId, !isGroup, config);
 
     // Push to history buffer — text or attachment placeholder
     const numericMessageId = deriveNumericChatId(msg.id);
@@ -85,4 +83,30 @@ export function registerMiddleware(client: Client, config: TalonConfig): void {
       /* logged inside */
     });
   });
+}
+
+/**
+ * Rewrite a credential out of `msg.content` before history, the handler or
+ * the model sees it (core/secrets/redact.ts), then delete the original and
+ * nudge toward /secret as configured. Delete/notice are best-effort.
+ */
+function redactCredentials(
+  msg: Message,
+  chatId: string,
+  isDm: boolean,
+  config: TalonConfig,
+): void {
+  if (!msg.content) return;
+  const r = applyInboundRedaction(msg.content, {
+    chatKey: chatId,
+    isDm,
+    config: config.redaction,
+  });
+  if (!r.redacted) return;
+  msg.content = r.text;
+  log("discord", `[${chatId}] Redacted a credential from an inbound message`);
+  if (r.deleteOriginal && msg.deletable) msg.delete().catch(() => {});
+  if (r.notice && "send" in msg.channel) {
+    msg.channel.send(r.notice).catch(() => {});
+  }
 }

@@ -18,11 +18,19 @@ lives in ~/.talon/keys/."""
 # entry is a vendor-documentation example (AKIAIOSFODNN7EXAMPLE,
 # ghp_ABCDEF..., xoxb-1234...) and grants nothing anywhere.
 #
-# Note both paths live in ONE [allowlist] table: gitleaks 8.24 ignores the
+# Third exception: protocol/fixtures/auth_v1.json holds sample per-device
+# bridge credentials (`tdc1.<id>.<secret>`) so all three implementations can
+# assert the wire shapes against the same bytes. The secrets are base64 of
+# "Bogus-fixture-secret-not-a-real-…"-style strings, were never minted by a
+# daemon, and authenticate nothing.
+#
+# Note all paths live in ONE [allowlist] table: gitleaks 8.24 ignores the
 # [[allowlists]] array form, so a second table would silently disable the
 # first exception rather than add to it (verified locally against the full
 # --log-opts=--all history).
 paths = [
   '''apps/companion/test/fixtures/.*\.pem''',
+  '''apps/companion/test/fixtures/.*\.p12''',
   '''src/__tests__/secret-scan\.test\.ts''',
+  '''protocol/fixtures/auth_v1\.json''',
 ]

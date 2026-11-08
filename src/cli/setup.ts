@@ -26,11 +26,9 @@ const trimmedOrUndefined = (raw: string) => raw.trim() || undefined;
 /**
  * Await a clack prompt; on Esc/Ctrl-C say so and leave the wizard.
  *
- * Every prompt used to be followed by the same four-line `isCancel` guard,
- * and because `@clack/core` narrows `isCancel` to its own unique symbol
- * the unguarded remainder still needed an `as string` cast. clack only
- * ever resolves a symbol to mean "cancelled", so narrowing on `typeof`
- * here removes both.
+ * clack only ever resolves a symbol to mean "cancelled", so narrowing on
+ * `typeof` replaces a per-prompt `isCancel` guard and the `as` cast that
+ * `@clack/core`'s own unique-symbol narrowing would still need.
  *
  * The answer type is subtracted with `Exclude` rather than inferred from a
  * `Promise<T | symbol>` parameter: clack 1.8.1 retyped `CANCEL_SYMBOL` as a
@@ -94,6 +92,20 @@ type TelegramAnswers = Pick<
   "botToken" | "adminId" | "apiId" | "apiHash"
 >;
 
+/**
+ * The Telegram admin id is required: it is the bot's owner (admin commands)
+ * and the default DM allowlist. The daemon refuses to start without it.
+ */
+export function validateTelegramAdminId(
+  value: string | undefined,
+): string | undefined {
+  const v = value?.trim() ?? "";
+  if (!v) return "Required — the bot answers only its admin (and allowedUsers)";
+  if (!/^\d+$/.test(v) || Number(v) <= 0 || !Number.isSafeInteger(Number(v)))
+    return "Must be your numeric Telegram user ID";
+  return undefined;
+}
+
 async function askTelegram(config: Config): Promise<TelegramAnswers> {
   const botToken = await askOrExit(
     p.text({
@@ -110,8 +122,9 @@ async function askTelegram(config: Config): Promise<TelegramAnswers> {
   const adminId = await askOrExit(
     p.text({
       message: "Your Telegram user ID",
-      placeholder: "optional — message @userinfobot to find yours",
+      placeholder: "message @userinfobot to find yours",
       initialValue: config.adminUserId ? String(config.adminUserId) : "",
+      validate: validateTelegramAdminId,
     }),
   );
 
@@ -620,16 +633,44 @@ export type SetupAnswers = {
 };
 
 /**
+ * Admin + DM allowlist for the saved config. With Telegram on, the admin id
+ * is the one just entered, and an empty allowlist defaults to that admin —
+ * a fresh bot answers its owner and no one else. With Telegram off, both are
+ * left as they were (other surfaces read `adminUserId` too).
+ */
+function telegramAccess(
+  existing: Config,
+  answers: SetupAnswers,
+  telegramOn: boolean,
+): Pick<Config, "adminUserId" | "allowedUsers"> {
+  const adminUserId = answers.adminId
+    ? parseInt(answers.adminId, 10) || undefined
+    : undefined;
+  if (!telegramOn || adminUserId === undefined) {
+    return {
+      adminUserId: adminUserId ?? existing.adminUserId,
+      allowedUsers: existing.allowedUsers,
+    };
+  }
+  return {
+    adminUserId,
+    allowedUsers: existing.allowedUsers?.length
+      ? existing.allowedUsers
+      : [adminUserId],
+  };
+}
+
+/**
  * Fold the wizard's answers onto the existing config.
  *
  * Extracted from `runSetup` so the merge is testable without driving the
  * prompts — the behaviour that matters here is what it *doesn't* touch.
- * The wizard models roughly half of ~/.talon/config.json; it used to
- * rebuild the file from its own named fields alone, which silently
- * deleted every other key (whatsapp, native, soul, memory, github,
- * heartbeat/dream, allowlists, plugin blocks…). Spreading `existing`
- * first keeps them. Fields below still override, and an explicit
- * `undefined` still deletes, because `saveConfig` strips undefined.
+ * The wizard models roughly half of ~/.talon/config.json. Spreading
+ * `existing` first keeps every key it does not model (whatsapp, native,
+ * memory, github, heartbeat/dream, allowlists, plugin blocks…) — building
+ * from the named fields alone silently deletes them. Fields below still
+ * override, and an explicit `undefined` still deletes, because
+ * `saveConfig` strips undefined.
  */
 export function buildSetupConfig(
   existing: Config,
@@ -674,9 +715,7 @@ export function buildSetupConfig(
     concurrency: existing.concurrency,
     pulse: answers.pulse,
     pulseIntervalMs: existing.pulseIntervalMs,
-    adminUserId: answers.adminId
-      ? parseInt(answers.adminId, 10) || undefined
-      : undefined,
+    ...telegramAccess(existing, answers, on("telegram")),
     apiId: answers.apiId,
     apiHash: answers.apiHash,
     maxMessageLength: existing.maxMessageLength,

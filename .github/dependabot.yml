@@ -4,6 +4,15 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    # Supply-chain cooldown: a freshly published version is where a
+    # hijacked maintainer account shows up, and it is usually yanked within
+    # days. Wait before proposing anything (production and dev alike —
+    # dev tooling runs in CI next to the release secrets).
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 5
     open-pull-requests-limit: 10
     ignore:
       # 0.3.198–0.3.200 ship a broken sdk.d.ts: SDKMessage references
@@ -26,8 +35,6 @@ updates:
       # #634 bumped it the next day, silently killing the plugin. Bump BOTH
       # sides together by hand; see src/plugins/playwright/index.ts.
       - dependency-name: "@playwright/mcp"
-    reviewers:
-      - "dylanneve1"
     labels:
       - "dependencies"
     groups:
@@ -46,6 +53,11 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    # Workflows pin actions to commit SHAs (with a `# vX.Y.Z` comment that
+    # Dependabot keeps in step); the cooldown gives a bad tag time to be
+    # noticed before it is proposed.
+    cooldown:
+      default-days: 5
     open-pull-requests-limit: 5
     labels:
       - "dependencies"

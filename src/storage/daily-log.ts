@@ -11,7 +11,7 @@ import {
   unlinkSync,
 } from "node:fs";
 import { resolve } from "node:path";
-import { log as logInfo, logError } from "../util/log.js";
+import { log as logInfo, logError, logWarn } from "../util/log.js";
 import { dirs } from "../util/paths.js";
 import { toYMD } from "../util/time.js";
 
@@ -115,56 +115,52 @@ export function todayLogDate(): string {
 /** Matches YYYY-MM-DD.md filenames strictly. */
 const DAILY_FILE_RE = /^\d{4}-\d{2}-\d{2}\.md$/;
 
+/**
+ * Unlink YYYY-MM-DD.md files in `dir` dated before `cutoff`. Never
+ * throws; a missing dir is the normal first-run case, anything else
+ * (unreadable dir, a file that won't unlink) is logged.
+ */
+function pruneDatedFiles(dir: string, cutoff: string, what: string): void {
+  let deleted = 0;
+  let failed = 0;
+  let firstFailure = "";
+  try {
+    if (!existsSync(dir)) return;
+    for (const file of readdirSync(dir)) {
+      if (!DAILY_FILE_RE.test(file) || file >= cutoff) continue;
+      try {
+        unlinkSync(resolve(dir, file));
+        deleted++;
+      } catch (err) {
+        if (failed++ === 0) firstFailure = `${file}: ${errText(err)}`;
+      }
+    }
+  } catch (err) {
+    logWarn("workspace", `${what} cleanup failed dir=${dir}: ${errText(err)}`);
+  }
+  if (deleted > 0) {
+    logInfo("workspace", `Cleaned up ${deleted} old ${what}(s)`);
+  }
+  if (failed > 0) {
+    logWarn(
+      "workspace",
+      `Could not remove ${failed} old ${what}(s) dir=${dir}; first=${firstFailure}`,
+    );
+  }
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Remove daily logs older than MAX_LOG_DAYS. Called on startup. */
 export function cleanupOldLogs(): void {
-  try {
-    if (existsSync(LOGS_DIR)) {
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - MAX_LOG_DAYS);
-      const cutoffStr = localDateKey(cutoff);
-
-      let deleted = 0;
-      for (const file of readdirSync(LOGS_DIR)) {
-        if (DAILY_FILE_RE.test(file) && file < cutoffStr) {
-          try {
-            unlinkSync(resolve(LOGS_DIR, file));
-            deleted++;
-          } catch {
-            /* skip */
-          }
-        }
-      }
-      if (deleted > 0) {
-        logInfo("workspace", `Cleaned up ${deleted} old daily log(s)`);
-      }
-    }
-  } catch {
-    /* skip */
-  }
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - MAX_LOG_DAYS);
+  pruneDatedFiles(LOGS_DIR, localDateKey(cutoff), "daily log");
 
   // Clean up old daily memory files (independent of logs dir)
-  try {
-    const dailyMemDir = dirs.dailyMemory;
-    if (!existsSync(dailyMemDir)) return;
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - MAX_LOG_DAYS);
-    const cutoffMem = toYMD(cutoffDate);
-
-    let deletedMem = 0;
-    for (const file of readdirSync(dailyMemDir)) {
-      if (DAILY_FILE_RE.test(file) && file < cutoffMem) {
-        try {
-          unlinkSync(resolve(dailyMemDir, file));
-          deletedMem++;
-        } catch {
-          /* skip */
-        }
-      }
-    }
-    if (deletedMem > 0) {
-      logInfo("workspace", `Cleaned up ${deletedMem} old daily memory file(s)`);
-    }
-  } catch {
-    /* skip */
-  }
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - MAX_LOG_DAYS);
+  pruneDatedFiles(dirs.dailyMemory, toYMD(cutoffDate), "daily memory file");
 }

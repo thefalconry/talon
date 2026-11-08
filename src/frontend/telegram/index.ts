@@ -6,13 +6,18 @@
  * core gateway so MCP tool calls route to Telegram API.
  */
 
-import { Bot, InputFile, API_CONSTANTS } from "grammy";
+import { Bot, GrammyError, InputFile, API_CONSTANTS } from "grammy";
 import { autoRetry } from "@grammyjs/auto-retry";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { TalonConfig } from "../../core/config/index.js";
+import {
+  TELEGRAM_ADMIN_REQUIRED,
+  type TalonConfig,
+} from "../../core/config/index.js";
 import type { ContextManager } from "../../core/types.js";
 import type { Gateway } from "../../core/engine/gateway.js";
 import { runUntilStopped } from "../../core/frontend-runtime/run-loop.js";
+import { pollDeadline } from "./polling/poll-deadline.js";
+import { pollHealth } from "./polling/poll-health.js";
 import { createTelegramActionHandler, sendText } from "./actions/index.js";
 import { ambientThreadId } from "./topics.js";
 import { initUserClient, disconnectUserClient } from "./userbot.js";
@@ -21,9 +26,13 @@ import {
   setAdminUserId,
   telegramCommandMenu,
 } from "./commands/index.js";
-import { setAccessControl } from "./handlers/index.js";
+import {
+  setAccessControl,
+  registerCommandAccessGate,
+} from "./handlers/index.js";
 import { registerMiddleware } from "./middleware.js";
-import { confirmUpdates } from "./update-offset.js";
+import { setAllowedGroups } from "./handlers/group-access.js";
+import { confirmUpdates } from "./polling/update-offset.js";
 import { registerCallbacks } from "./callbacks/index.js";
 import { log, logError } from "../../util/log.js";
 
@@ -40,6 +49,56 @@ export type TelegramFrontend = {
   stop: () => Promise<void>;
 };
 
+/** The slice of a grammY BotError's context the error log reads. */
+type UpdateContext = {
+  update?: { update_id?: number };
+  chat?: { id?: number };
+};
+
+// ── Access ──────────────────────────────────────────────────────────────────
+
+/**
+ * Install the admin id, DM allowlist and group allowlist before anything
+ * else starts.
+ * Config loading already refuses a Telegram setup without an admin; this
+ * covers any other path that hands the frontend a config — without an admin
+ * there is no owner, so the bot must not run at all.
+ */
+function applyAccessControl(config: TalonConfig): void {
+  if (!config.adminUserId) throw new Error(TELEGRAM_ADMIN_REQUIRED);
+  setAdminUserId(config.adminUserId, config.operatorIds);
+  setAccessControl({
+    allowedUsers: config.allowedUsers,
+    blockedUsers: config.blockedUsers,
+    adminUserId: config.adminUserId,
+  });
+  setAllowedGroups(config.allowedGroups);
+}
+
+/**
+ * The bot's last-resort middleware error handler: log which update in which
+ * chat failed, and exit when Telegram says the token itself is bad.
+ */
+function onBotError(err: unknown): void {
+  const ctx = (err as { ctx?: UpdateContext } | null)?.ctx;
+  logError(
+    "bot",
+    `Unhandled bot error update=${ctx?.update?.update_id ?? "?"} chat=${ctx?.chat?.id ?? "?"}`,
+    err,
+  );
+  // Judge the token by Telegram's error code, never the message text:
+  // a handler's ordinary 400 ("message to edit not found", "chat not
+  // found") must not take the whole daemon down.
+  const cause = (err as { error?: unknown } | null)?.error ?? err;
+  if (
+    cause instanceof GrammyError &&
+    (cause.error_code === 401 || cause.error_code === 404)
+  ) {
+    logError("bot", "Bot token appears invalid — shutting down");
+    process.exit(1);
+  }
+}
+
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 export function createTelegramFrontend(
@@ -47,8 +106,13 @@ export function createTelegramFrontend(
   gateway: Gateway,
 ): TelegramFrontend {
   const bot = new Bot(config.botToken!);
+  // Installed first so it sits innermost: every retry autoRetry makes
+  // gets a fresh deadline rather than sharing one.
+  bot.api.config.use(pollDeadline());
   bot.api.config.use(apiThrottler());
   bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 60 }));
+  // Outermost: judges each poll by the result grammY finally sees.
+  bot.api.config.use(pollHealth());
 
   const context: ContextManager = {
     acquire: (chatId: number, stringId?: string) =>
@@ -78,6 +142,8 @@ export function createTelegramFrontend(
     getBridgePort: () => gateway.getPort(),
 
     async init() {
+      applyAccessControl(config);
+
       // Register Telegram action handler with the core gateway
       gateway.registerFrontendHandler(
         "telegram",
@@ -87,13 +153,9 @@ export function createTelegramFrontend(
       const port = await gateway.start(19876);
       log("bot", `Gateway started on port ${port}`);
 
-      setAdminUserId(config.adminUserId);
-      setAccessControl({
-        allowedUsers: config.allowedUsers,
-        blockedUsers: config.blockedUsers,
-        adminUserId: config.adminUserId,
-      });
-
+      // Gate /commands and button presses behind the DM whitelist and
+      // group check BEFORE any command/callback handler is registered.
+      registerCommandAccessGate(bot);
       registerCommands(bot, config, gateway);
       registerMiddleware(bot, config);
       registerCallbacks(bot, config, gateway);
@@ -120,14 +182,7 @@ export function createTelegramFrontend(
     },
 
     async start() {
-      bot.catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logError("bot", "Unhandled bot error", err);
-        if (/unauthorized|401|not found|404/i.test(msg)) {
-          logError("bot", "Bot token appears invalid — shutting down");
-          process.exit(1);
-        }
-      });
+      bot.catch(onBotError);
       // Beyond grammY's defaults: `chat_join_request` feeds the moderation
       // tool's pending-join cache (inert unless the bot admins an
       // approval-gated chat).

@@ -90,6 +90,7 @@ const ALL_TOOLS_ORDER = [
   "remove_device",
   "get_device_status",
   "device_exec",
+  "device_computer",
   "device_list_dir",
   "device_read_file",
   "device_write_file",
@@ -99,6 +100,10 @@ const ALL_TOOLS_ORDER = [
   "update_node",
   "get_node_binary",
   "make_node_install_link",
+  // Companion pairing (the agent twin of /mesh pair) sits beside the node
+  // installer it mirrors: one deliberate cache miss, taken with a release
+  // that restarts the daemon (and so cools every live prefix) anyway.
+  "make_companion_pair_link",
   "send_via",
   "whatsapp_account",
   "moderate",
@@ -113,12 +118,22 @@ const ALL_TOOLS_ORDER = [
   "kill_agent",
   "report_result",
   "message_parent",
+  // Peer channel (2026-09-25). Inserted beside the other agent-side tools
+  // rather than appended at the end of the catalogue: grouping is worth one
+  // deliberate cache miss, and the release that ships it restarts the daemon
+  // anyway, so every live prefix is cold at that point regardless.
+  "list_peers",
+  "message_peer",
   "check_inbox",
   // Appended for the backup subsystem — at the END, so the prompt-cache
   // prefix of every live chat survives the addition.
   "create_checkpoint",
   "list_checkpoints",
   "backup_status",
+  // Pre-flight lane (feat/agent-preflight) — appended at the end.
+  "run_preflight",
+  // Secret drop (feat/secret-drop) — appended at the end.
+  "request_secret",
 ];
 
 describe("ALL_TOOLS registry", () => {

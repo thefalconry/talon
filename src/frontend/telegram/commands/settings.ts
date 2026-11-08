@@ -30,7 +30,6 @@ import {
   renderEffortRows,
   renderModelMenuText,
   renderModelMenuKeyboard,
-  type SettingsButton,
 } from "../render/menu.js";
 import {
   buildModelMenuViewForChat,
@@ -175,6 +174,17 @@ function registerEffortCommand(bot: Bot, { config, gateway }: RegisterDeps) {
       config,
     });
 
+    // Reset first: adaptive needs no model levels, so it must stay
+    // reachable on a model that registers none.
+    if (arg === "reset" || arg === "default" || arg === "adaptive") {
+      setChatEffort(cid, undefined);
+      await ctx.reply(
+        "Effort reset to <b>adaptive</b> (model decides when to think)",
+        { parse_mode: "HTML" },
+      );
+      return;
+    }
+
     if (reasoning.levels.length === 0) {
       const modelText = reasoning.activeModel
         ? `<code>${escapeHtml(formatModelLabel(reasoning.activeModel))}</code>`
@@ -198,15 +208,6 @@ function registerEffortCommand(bot: Bot, { config, gateway }: RegisterDeps) {
           ),
         },
       });
-      return;
-    }
-
-    if (arg === "reset" || arg === "default" || arg === "adaptive") {
-      setChatEffort(cid, undefined);
-      await ctx.reply(
-        "Effort reset to <b>adaptive</b> (model decides when to think)",
-        { parse_mode: "HTML" },
-      );
       return;
     }
 
@@ -311,36 +312,6 @@ function registerSettingsCommand(bot: Bot, { config, gateway }: RegisterDeps) {
       reasoning.levels,
     );
     const pulseOn = isPulseEnabled(cid);
-    let modelButtons: Array<SettingsButton> | undefined;
-    let pager:
-      | {
-          page: number;
-          totalPages: number;
-          filter: "all" | "free";
-          freeCount: number;
-          totalCount: number;
-          provider?: string;
-        }
-      | undefined;
-    let view: "models" | "groups" = "models";
-    let activeProvider: string | undefined;
-    if (settingsBe?.models?.getSettingsPresentation && resolvedSettingsModel) {
-      const pres = await settingsBe.models?.getSettingsPresentation(
-        resolvedSettingsModel,
-      );
-      modelButtons = pres.modelButtons;
-      pager = {
-        page: pres.page,
-        totalPages: pres.totalPages,
-        filter: pres.filter,
-        freeCount: pres.freeCount,
-        totalCount: pres.totalCount,
-        provider: pres.provider,
-      };
-      view = pres.view;
-      activeProvider = pres.provider;
-    }
-
     await ctx.reply(
       renderSettingsText(
         activeModel,
@@ -352,14 +323,11 @@ function registerSettingsCommand(bot: Bot, { config, gateway }: RegisterDeps) {
         parse_mode: "HTML",
         reply_markup: {
           inline_keyboard: renderSettingsKeyboard(
-            activeModel,
+            resolvedSettingsModel,
             effortName,
             pulseOn,
-            modelButtons,
-            pager,
-            view,
-            activeProvider,
             reasoning.levels,
+            Boolean(settingsBe?.models?.getSettingsPresentation),
           ),
         },
       },

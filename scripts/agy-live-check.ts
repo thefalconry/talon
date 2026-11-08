@@ -26,7 +26,7 @@ import { join } from "node:path";
 const REAL = join(homedir(), ".gemini", "config", "mcp_config.json");
 const TMP = "/tmp/agy-live/mcp_config.copy.json";
 const SNAPDIR = join(homedir(), ".gemini", "antigravity-cli", "mcp");
-const CHAT = "-1001426819337";
+const CHAT = "-1009876543210";
 const BRIDGE = `http://127.0.0.1:${
   (
     JSON.parse(
@@ -34,6 +34,14 @@ const BRIDGE = `http://127.0.0.1:${
     ) as { port: number }
   ).port
 }`;
+
+// The gateway (and its MCP hub) require the daemon's bearer token.
+const HEADERS = {
+  Authorization: `Bearer ${readFileSync(
+    join(homedir(), ".talon", "keys", "gateway-token"),
+    "utf-8",
+  ).trim()}`,
+};
 
 const keysOf = (p: string) =>
   Object.keys(
@@ -59,6 +67,7 @@ async function main() {
   // Frontends list is empty here; add the one hub server the brief names.
   servers["__talon__live__extras-tools"] = {
     disabled: false,
+    headers: HEADERS,
     serverUrl: `${BRIDGE}/mcp/plugin/extras-tools/${CHAT}`,
   };
   const dry = mcp.writeAgyMcpServers("live", servers, {
@@ -80,13 +89,14 @@ async function main() {
   const live = mcp.writeAgyMcpServers("live", {
     "__talon__live__extras-tools": {
       disabled: false,
+      headers: HEADERS,
       serverUrl: `${BRIDGE}/mcp/plugin/extras-tools/${CHAT}`,
     },
   });
   console.log("PHASE2 registered:", live.added);
 
   const child = proc.ensureChild("live-check", {
-    binary: "/home/dylan/.local/bin/agy",
+    binary: "/home/ada/.local/bin/agy",
     cwd: "/tmp/agy-live",
     model: "gemini-3.8-flash-high",
     addDirs: ["/tmp/agy-live"],
@@ -99,7 +109,7 @@ async function main() {
   const state = { allResponseText: "", currentBlockText: "" };
   const result = await child.runTurn(
     "Call the check_time tool on the MCP server named " +
-      "__talon__live__extras-tools with timezone Europe/Dublin, then reply " +
+      "__talon__live__extras-tools with timezone Europe/London, then reply " +
       "with ONLY the time it returns (HH:MM:SS). Do not use run_command.",
     {
       onStep: (step) => {

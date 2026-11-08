@@ -404,6 +404,8 @@ export interface PlanDisplay {
   windows: PlanWindowDisplay[];
   /** Set only when the account still has one-shot rate-limit resets left. */
   resetsAvailable: number | undefined;
+  /** Deadline for the soonest-expiring banked reset, when the plan reports one. */
+  resetsExpireLabel?: string;
   /** Set only when the figures have aged, e.g. "12m ago". */
   ageLabel: string | undefined;
 }
@@ -432,6 +434,9 @@ export function buildPlanDisplay(
   return {
     plan: usage.plan,
     resetsAvailable: usage.resetsAvailable,
+    resetsExpireLabel: usage.resetsAvailable
+      ? planResetLabel(usage.resetsExpireAt)
+      : undefined,
     ageLabel:
       age > PLAN_STALE_AFTER_MS
         ? formatRelativeAge(usage.fetchedAt)

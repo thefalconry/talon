@@ -15,6 +15,8 @@ import {
   statSync,
   existsSync,
   createReadStream,
+  chmodSync,
+  rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +29,6 @@ import {
   DEFAULT_WORKSPACE_INCLUDE,
 } from "../core/backup/plan.js";
 import {
-  selectPrunable,
   listLocalManifests,
   pruneLocal,
   snapshotDir,
@@ -40,7 +41,12 @@ const SETTINGS: BackupSettings = {
   intervalHours: 6,
   keepLocal: 12,
   keepRemote: 30,
+  keepDaily: 7,
+  keepWeekly: 4,
+  keepCheckpoints: 10,
   includePalace: true,
+  loginSessions: "local",
+  includeSessions: true,
   workspaceInclude: DEFAULT_WORKSPACE_INCLUDE,
   extraPaths: [],
   checkpointBeforeUpdate: true,
@@ -226,6 +232,48 @@ describe("buildSnapshot", () => {
     expect(members.some((m) => m.startsWith("extra/1"))).toBe(false);
   });
 
+  it("skips a file that vanishes between the walk and the archive", async () => {
+    const home = fakeHome();
+    const manifest = await buildSnapshot({
+      kind: "backup",
+      settings: SETTINGS,
+      home,
+      // Runs after the walk, before the state part is written.
+      copyDatabase: (dest) => {
+        rmSync(join(home, "workspace", "memory", "memory.md"));
+        copyDatabase(dest);
+      },
+    });
+    const members = await membersOf(
+      join(snapshotDir(manifest.id, home), "state.tar.zst"),
+    );
+    expect(members).not.toContain("workspace/memory/memory.md");
+    expect(members).toContain("workspace/identity.md");
+    expect(members).toContain("db/talon.db");
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "skips an unreadable palace file instead of failing the snapshot",
+    async () => {
+      const home = fakeHome();
+      writeFileSync(join(home, "workspace", "palace", "locked.bin"), "x");
+      chmodSync(join(home, "workspace", "palace", "locked.bin"), 0o000);
+      const manifest = await buildSnapshot({
+        kind: "backup",
+        settings: SETTINGS,
+        home,
+        copyDatabase,
+      });
+      const palace = manifest.parts.find((p) => p.name.startsWith("palace-"));
+      expect(palace).toBeDefined();
+      const members = await membersOf(
+        join(snapshotDir(manifest.id, home), palace!.name),
+      );
+      expect(members).toContain("workspace/palace/node-1.json");
+      expect(members).not.toContain("workspace/palace/locked.bin");
+    },
+  );
+
   it("leaves no directory behind when a build fails", async () => {
     const home = fakeHome();
     const before = (await listLocalManifests(home)).length;
@@ -244,23 +292,52 @@ describe("buildSnapshot", () => {
 });
 
 describe("retention", () => {
-  const snap = (id: string, createdAt: number, pinned = false) => ({
-    id,
-    createdAt,
-    pinned,
+  const NEWEST_ONLY = {
+    keepLast: 1,
+    keepDaily: 0,
+    keepWeekly: 0,
+    keepCheckpoints: 10,
+  };
+
+  it("stamps verifiedAt on a snapshot whose parts read back", async () => {
+    const home = fakeHome();
+    const manifest = await buildSnapshot({
+      kind: "backup",
+      settings: { ...SETTINGS, includePalace: false },
+      home,
+      copyDatabase,
+    });
+    expect(manifest.verifiedAt).toBeGreaterThan(0);
+    const [onDisk] = await listLocalManifests(home);
+    expect(onDisk.verifiedAt).toBe(manifest.verifiedAt);
   });
 
-  it("keeps the newest N unpinned and never counts pinned against the budget", () => {
-    const all = [
-      snap("e", 5),
-      snap("d", 4, true),
-      snap("c", 3),
-      snap("b", 2),
-      snap("a", 1, true),
-    ];
-    expect(selectPrunable(all, 2).map((s) => s.id)).toEqual(["b"]);
-    expect(selectPrunable(all, 99)).toEqual([]);
-    expect(selectPrunable(all, 1).map((s) => s.id)).toEqual(["c", "b"]);
+  it("does not count an unpinned checkpoint against the scheduled budget", async () => {
+    const home = fakeHome();
+    const settings = { ...SETTINGS, includePalace: false };
+    const older = await buildSnapshot({
+      kind: "backup",
+      settings,
+      home,
+      copyDatabase,
+    });
+    const newer = await buildSnapshot({
+      kind: "backup",
+      settings,
+      home,
+      copyDatabase,
+    });
+    const checkpoint = await buildSnapshot({
+      kind: "checkpoint",
+      label: "manual",
+      settings,
+      home,
+      copyDatabase,
+    });
+    const removed = await pruneLocal(NEWEST_ONLY, home);
+    expect(removed).toEqual([older.id]);
+    expect(existsSync(snapshotDir(newer.id, home))).toBe(true);
+    expect(existsSync(snapshotDir(checkpoint.id, home))).toBe(true);
   });
 
   it("deletes the pruned directories and keeps pinned ones", async () => {
@@ -287,7 +364,7 @@ describe("retention", () => {
       copyDatabase,
     });
 
-    const removed = await pruneLocal(1, home);
+    const removed = await pruneLocal(NEWEST_ONLY, home);
     expect(removed).toEqual([first.id]);
     expect(existsSync(snapshotDir(first.id, home))).toBe(false);
     expect(existsSync(snapshotDir(pinned.id, home))).toBe(true);

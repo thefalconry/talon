@@ -32,8 +32,22 @@ const {
   resetModelCache,
   getCachedModels,
 } = await import("../backend/agy/models.js");
-const { toAgyEffort, effortSuffixOf, modelIdStem, applyEffortToModelId } =
-  await import("../backend/agy/effort.js");
+const {
+  toAgyEffort,
+  effortSuffixOf,
+  modelIdStem,
+  applyEffortToModelId,
+  composeAgyModelSelection,
+  selectAgyRun,
+} = await import("../backend/agy/effort.js");
+const { isMissingBinary, catalogForSelection } =
+  await import("../backend/agy/models.js");
+
+/** Verbatim `agy models` from agy 1.4.4 (the Gemini 4 Argon release). */
+const TSV_144 = readFileSync(
+  join(import.meta.dirname, "fixtures", "agy", "models-1.4.4.tsv"),
+  "utf-8",
+);
 
 const TSV = readFileSync(
   join(import.meta.dirname, "fixtures", "agy", "models.tsv"),
@@ -288,7 +302,8 @@ describe("agy effort mapping", () => {
 
   it("never invents an id the CLI would reject", () => {
     const ids = parseAgyModels(TSV).map((m) => m.id);
-    // 3.1 Pro has no -medium sibling: keep the id, let --effort speak.
+    // 3.1 Pro has no -medium sibling: keep the id (composeAgyModelSelection
+    // then drops the level rather than pair it with a conflicting suffix).
     expect(applyEffortToModelId("gemini-3.1-pro-high", "medium", ids)).toBe(
       "gemini-3.1-pro-high",
     );
@@ -300,5 +315,148 @@ describe("agy effort mapping", () => {
     expect(applyEffortToModelId("gemini-3.7-flash-high", undefined, ids)).toBe(
       "gemini-3.7-flash-high",
     );
+  });
+});
+
+describe("agy model/effort composition (agy >= 1.4 rejects conflicting pairs)", () => {
+  const ids = parseAgyModels(TSV_144).map((m) => m.id);
+
+  it("parses the 1.4.4 catalog, Argon included", () => {
+    const models = parseAgyModels(TSV_144);
+    expect(models).toHaveLength(13);
+    const argon = models.find((m) => m.id === "gemini-4-argon-high");
+    expect(argon).toMatchObject({
+      displayName: "Gemini 4 Argon (High)",
+      provider: "google",
+      defaultReasoningLevel: "high",
+      supportedReasoningLevels: ["low", "medium", "high"],
+    });
+    expect(
+      models.find((m) => m.id === "gpt-oss-120b-medium")
+        ?.supportedReasoningLevels,
+    ).toEqual(["medium"]);
+  });
+
+  it("suffixed id + a different effort → the sibling slug, no --effort", () => {
+    // The production failure: --model gemini-3.8-flash-high --effort medium.
+    expect(
+      composeAgyModelSelection("gemini-3.8-flash-high", "medium", ids),
+    ).toEqual({ model: "gemini-3.8-flash-medium", effort: undefined });
+    expect(
+      composeAgyModelSelection("gemini-4-argon-medium", "low", ids),
+    ).toEqual({ model: "gemini-4-argon-low", effort: undefined });
+  });
+
+  it("suffixed id + the same effort → the id, no redundant --effort", () => {
+    expect(
+      composeAgyModelSelection("gemini-3.8-flash-high", "high", ids),
+    ).toEqual({ model: "gemini-3.8-flash-high", effort: undefined });
+  });
+
+  it("suffixed id whose sibling is not offered → keep the id, drop the level", () => {
+    expect(composeAgyModelSelection("gpt-oss-120b-medium", "low", ids)).toEqual(
+      { model: "gpt-oss-120b-medium", effort: undefined, dropped: "low" },
+    );
+    // Cold catalog: never guess — the pair would be rejected.
+    expect(
+      composeAgyModelSelection("gemini-3.8-flash-high", "medium", []),
+    ).toEqual({
+      model: "gemini-3.8-flash-high",
+      effort: undefined,
+      dropped: "medium",
+    });
+  });
+
+  it("bare id + effort → --effort (the CLI accepts the stem form)", () => {
+    expect(composeAgyModelSelection("gemini-3.8-flash", "low", ids)).toEqual({
+      model: "gemini-3.8-flash",
+      effort: "low",
+    });
+    expect(composeAgyModelSelection("claude-sonnet-5-5", "high", [])).toEqual({
+      model: "claude-sonnet-5-5",
+      effort: "high",
+    });
+  });
+
+  it("no effort → the id untouched, no --effort", () => {
+    expect(
+      composeAgyModelSelection("gemini-3.8-flash-high", undefined, ids),
+    ).toEqual({ model: "gemini-3.8-flash-high", effort: undefined });
+  });
+
+  it("never yields a suffixed id with a different --effort, for any input", () => {
+    const models = parseAgyModels(TSV_144);
+    const levels = [
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ] as const;
+    for (const catalog of [models, []]) {
+      for (const id of [...ids, "gemini-3.8-flash", "claude-sonnet-5-5"]) {
+        for (const level of [...levels, undefined]) {
+          const { model, effort } = selectAgyRun(id, level, catalog);
+          const suffix = effortSuffixOf(model);
+          if (suffix && effort) expect(effort).toBe(suffix);
+        }
+      }
+    }
+  });
+});
+
+describe("agy run selection", () => {
+  const models = parseAgyModels(TSV_144);
+
+  it("drops a level agy cannot express, and says so", () => {
+    expect(selectAgyRun("gemini-4-argon-high", "xhigh", models)).toEqual({
+      model: "gemini-4-argon-high",
+      effort: undefined,
+      dropped: "xhigh",
+    });
+  });
+
+  it("drops a level the model does not offer", () => {
+    expect(selectAgyRun("gpt-oss-120b-medium", "high", models)).toEqual({
+      model: "gpt-oss-120b-medium",
+      effort: undefined,
+      dropped: "high",
+    });
+  });
+
+  it("treats an id the catalog doesn't list as offering low/medium/high", () => {
+    expect(selectAgyRun("claude-sonnet-5-5", "high", models)).toEqual({
+      model: "claude-sonnet-5-5",
+      effort: "high",
+    });
+  });
+
+  it("probes a cold catalog for selection, then serves it cached", async () => {
+    stubModelsOutput(TSV_144);
+    const catalog = await catalogForSelection();
+    expect(selectAgyRun("gemini-3.8-flash-high", "low", catalog)).toEqual({
+      model: "gemini-3.8-flash-low",
+      effort: undefined,
+    });
+    await catalogForSelection();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("agy missing-binary detection", () => {
+  it("recognises node and bun spellings of a missing executable", () => {
+    expect(
+      isMissingBinary(
+        Object.assign(new Error("spawn agy ENOENT"), { code: "ENOENT" }),
+      ),
+    ).toBe(true);
+    expect(
+      isMissingBinary(new Error('Executable not found in $PATH: "agy"')),
+    ).toBe(true);
+    expect(
+      isMissingBinary(new Error("exited 1: Eligibility check failed")),
+    ).toBe(false);
   });
 });

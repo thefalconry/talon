@@ -11,6 +11,7 @@
  * queried independently in SQL.
  */
 
+import { logWarn } from "../../util/log.js";
 import { getDatabase, inTransaction } from "../db.js";
 import { chatSettingsSql } from "../sql/statements.generated.js";
 import type { ReasoningEffortLevel } from "../../types/effort.js";
@@ -102,8 +103,13 @@ export function all(): Array<{ chatId: string; settings: ChatSettings }> {
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         result.push({ chatId: row.chat_id, settings: parsed });
       }
-    } catch {
-      /* skip unparseable row */
+    } catch (err) {
+      // Skip the unparseable row; the chat silently falls back to
+      // defaults otherwise.
+      logWarn(
+        "settings",
+        `Skipped corrupt chat settings chat=${row.chat_id}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
   return result;

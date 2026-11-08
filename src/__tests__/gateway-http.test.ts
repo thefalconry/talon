@@ -51,6 +51,18 @@ vi.mock("../storage/cron.js", () => ({
   loadCronJobs: vi.fn(),
 }));
 
+const accountsAdmin = vi.hoisted(() => ({
+  listClaudeAccountsWithStatus: vi.fn(async () => [
+    { id: "claude", label: "Claude", status: "signed in" },
+  ]),
+  addClaudeAccount: vi.fn(async (req: { name?: string }) => ({
+    ok: true,
+    account: { id: `claude-${req.name ?? "2"}` },
+  })),
+  removeClaudeAccount: vi.fn(async () => ({ ok: true, chatsMoved: 0 })),
+}));
+vi.mock("../core/auth/claude-accounts-admin.js", () => accountsAdmin);
+
 vi.mock("write-file-atomic", () => ({
   default: { sync: vi.fn() },
 }));
@@ -58,6 +70,7 @@ vi.mock("write-file-atomic", () => ({
 import { Gateway } from "../core/engine/gateway.js";
 import { bus } from "../core/bus/index.js";
 import { taskTable } from "../core/tasks/index.js";
+import { gatewayFetch } from "./helpers/gateway-fetch.js";
 
 let gateway: Gateway;
 let port: number;
@@ -93,7 +106,7 @@ beforeEach(() => {
 async function post(
   body: Record<string, unknown>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
-  const resp = await fetch(`http://127.0.0.1:${port}/action`, {
+  const resp = await gatewayFetch(`http://127.0.0.1:${port}/action`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -107,7 +120,7 @@ async function post(
 describe("gateway HTTP server", () => {
   describe("health endpoint", () => {
     it("returns health JSON", async () => {
-      const resp = await fetch(`http://127.0.0.1:${port}/health`);
+      const resp = await gatewayFetch(`http://127.0.0.1:${port}/health`);
       expect(resp.status).toBe(200);
       const data = (await resp.json()) as Record<string, unknown>;
       expect(data.ok).toBeDefined();
@@ -120,7 +133,7 @@ describe("gateway HTTP server", () => {
     it("GET /tasks lists the task table", async () => {
       const task = taskTable.begin({ kind: "heartbeat", label: "#1" });
       try {
-        const resp = await fetch(`http://127.0.0.1:${port}/tasks`);
+        const resp = await gatewayFetch(`http://127.0.0.1:${port}/tasks`);
         expect(resp.status).toBe(200);
         const data = (await resp.json()) as {
           ok: boolean;
@@ -140,7 +153,7 @@ describe("gateway HTTP server", () => {
       const abort = vi.fn();
       const task = taskTable.begin({ kind: "dream", label: "test", abort });
       try {
-        const resp = await fetch(`http://127.0.0.1:${port}/tasks/kill`, {
+        const resp = await gatewayFetch(`http://127.0.0.1:${port}/tasks/kill`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: task.id }),
@@ -154,7 +167,7 @@ describe("gateway HTTP server", () => {
     });
 
     it("POST /tasks/kill reports unknown ids", async () => {
-      const resp = await fetch(`http://127.0.0.1:${port}/tasks/kill`, {
+      const resp = await gatewayFetch(`http://127.0.0.1:${port}/tasks/kill`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: 999_999 }),
@@ -164,19 +177,78 @@ describe("gateway HTTP server", () => {
     });
 
     it("POST /tasks/kill rejects malformed bodies", async () => {
-      const invalidJson = await fetch(`http://127.0.0.1:${port}/tasks/kill`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "not json{{{",
-      });
+      const invalidJson = await gatewayFetch(
+        `http://127.0.0.1:${port}/tasks/kill`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "not json{{{",
+        },
+      );
       expect(invalidJson.status).toBe(400);
 
-      const nonIntegerId = await fetch(`http://127.0.0.1:${port}/tasks/kill`, {
+      const nonIntegerId = await gatewayFetch(
+        `http://127.0.0.1:${port}/tasks/kill`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: "7" }),
+        },
+      );
+      expect(nonIntegerId.status).toBe(400);
+    });
+  });
+
+  describe("claude accounts", () => {
+    const post = (path: string, body: string) =>
+      gatewayFetch(`http://127.0.0.1:${port}${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: "7" }),
+        body,
       });
-      expect(nonIntegerId.status).toBe(400);
+
+    it("GET /claude-accounts lists every account with its status", async () => {
+      const resp = await gatewayFetch(
+        `http://127.0.0.1:${port}/claude-accounts`,
+      );
+      expect(await resp.json()).toEqual({
+        ok: true,
+        accounts: [{ id: "claude", label: "Claude", status: "signed in" }],
+      });
+    });
+
+    it("POST /claude-accounts/add passes the name through", async () => {
+      const resp = await post("/claude-accounts/add", '{"name":"work"}');
+      expect(await resp.json()).toEqual({
+        ok: true,
+        account: { id: "claude-work" },
+      });
+      expect(accountsAdmin.addClaudeAccount).toHaveBeenLastCalledWith({
+        name: "work",
+        label: undefined,
+      });
+    });
+
+    it("POST /claude-accounts/remove deletes credentials unless told not to", async () => {
+      await post("/claude-accounts/remove", '{"id":"claude-2"}');
+      expect(accountsAdmin.removeClaudeAccount).toHaveBeenLastCalledWith(
+        "claude-2",
+        { deleteCredentials: true },
+      );
+      await post(
+        "/claude-accounts/remove",
+        '{"id":"claude-2","deleteCredentials":false}',
+      );
+      expect(accountsAdmin.removeClaudeAccount).toHaveBeenLastCalledWith(
+        "claude-2",
+        { deleteCredentials: false },
+      );
+    });
+
+    it("rejects malformed bodies", async () => {
+      expect((await post("/claude-accounts/add", "nope{")).status).toBe(400);
+      expect((await post("/claude-accounts/add", "[1]")).status).toBe(400);
+      expect((await post("/claude-accounts/remove", "{}")).status).toBe(400);
     });
   });
 
@@ -191,7 +263,7 @@ describe("gateway HTTP server", () => {
         outputTokens: 0,
       });
 
-      const all = await fetch(`http://127.0.0.1:${port}/events/recent`);
+      const all = await gatewayFetch(`http://127.0.0.1:${port}/events/recent`);
       expect(all.status).toBe(200);
       const allBody = (await all.json()) as {
         ok: boolean;
@@ -200,7 +272,7 @@ describe("gateway HTTP server", () => {
       expect(allBody.ok).toBe(true);
       expect(allBody.events.some((e) => e.id === published.id)).toBe(true);
 
-      const after = await fetch(
+      const after = await gatewayFetch(
         `http://127.0.0.1:${port}/events/recent?since=${published.id}`,
       );
       const afterBody = (await after.json()) as {
@@ -212,19 +284,19 @@ describe("gateway HTTP server", () => {
 
   describe("404 handling", () => {
     it("returns 404 for unknown paths", async () => {
-      const resp = await fetch(`http://127.0.0.1:${port}/nonexistent`);
+      const resp = await gatewayFetch(`http://127.0.0.1:${port}/nonexistent`);
       expect(resp.status).toBe(404);
     });
 
     it("returns 404 for GET /action", async () => {
-      const resp = await fetch(`http://127.0.0.1:${port}/action`);
+      const resp = await gatewayFetch(`http://127.0.0.1:${port}/action`);
       expect(resp.status).toBe(404);
     });
   });
 
   describe("malformed requests", () => {
     it("returns 400 for invalid JSON", async () => {
-      const resp = await fetch(`http://127.0.0.1:${port}/action`, {
+      const resp = await gatewayFetch(`http://127.0.0.1:${port}/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "not valid json{{{",
@@ -470,14 +542,14 @@ describe("gateway HTTP server", () => {
       // gateway's falsy guard or by sign-handling.
       const { body } = await post({
         action: "send_message",
-        _chatId: "-1001426819337",
-        chat_id: -1001426819337,
+        _chatId: "-1009876543210",
+        chat_id: -1009876543210,
         text: "hello supergroup",
       });
       expect(body.ok).toBe(true);
       expect(mockFrontendHandler).toHaveBeenCalledWith(
-        expect.objectContaining({ chat_id: -1001426819337 }),
-        -1001426819337,
+        expect.objectContaining({ chat_id: -1009876543210 }),
+        -1009876543210,
       );
     });
 
@@ -665,7 +737,7 @@ describe("gateway health endpoint — old activity shows minutes ago (line 211 F
       msSinceLastMessage: 5 * 60_000, // 5 minutes ago → > 60000
     });
 
-    const resp = await fetch(`http://127.0.0.1:${port}/health`);
+    const resp = await gatewayFetch(`http://127.0.0.1:${port}/health`);
     const data = (await resp.json()) as Record<string, unknown>;
     expect(data.lastActivity).toMatch(/m ago$/);
   });
@@ -721,5 +793,26 @@ describe("gateway port retry — EADDRINUSE", () => {
       await gw.stop();
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
     }
+  });
+});
+
+describe("gateway health endpoint — active alerts", () => {
+  it("lists the raised alerts for an authenticated caller", async () => {
+    const { raiseAlert, resetAlertsForTest } =
+      await import("../core/frontend-runtime/alerts.js");
+    resetAlertsForTest(async () => {});
+    raiseAlert("disk.low", "Disk almost full: 800 MiB free", {
+      severity: "critical",
+    });
+    const resp = await gatewayFetch(`http://127.0.0.1:${port}/health`);
+    const data = (await resp.json()) as Record<string, unknown>;
+    expect(data.alerts).toEqual([
+      expect.objectContaining({
+        key: "disk.low",
+        severity: "critical",
+        message: "Disk almost full: 800 MiB free",
+      }),
+    ]);
+    resetAlertsForTest();
   });
 });

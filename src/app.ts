@@ -6,7 +6,7 @@
  * are loaded dynamically — only the selected platform's dependencies are required.
  */
 
-import { getFrontends } from "./core/config/index.js";
+import { ConfigFileError, getFrontends } from "./core/config/index.js";
 import { startUploadCleanup, stopUploadCleanup } from "./core/vfs/workspace.js";
 import { flushDatabase } from "./storage/db.js";
 import { getActiveCount, stopAllTurns } from "./core/engine/dispatcher.js";
@@ -26,7 +26,11 @@ import {
   runStartupCatchup,
 } from "./core/background/cron/scheduler.js";
 import { shutdownTriggers } from "./core/background/triggers/index.js";
-import { shutdownAgents } from "./core/agents/index.js";
+import {
+  interruptAgentsForRestart,
+  resumeAgentsAfterRestart,
+  shutdownAgents,
+} from "./core/agents/index.js";
 import { stopBackupScheduler } from "./core/backup/index.js";
 import { pruneSettledTriggers } from "./storage/triggers.js";
 import { startWatchdog, stopWatchdog } from "./util/watchdog.js";
@@ -40,7 +44,14 @@ import {
   crashCleanup,
   crashStep,
   handleUncaughtException,
+  handleUnhandledRejection,
 } from "./core/daemon/crash.js";
+import { writeCrashMarker } from "./core/daemon/crash-marker.js";
+import {
+  announceLastCrash,
+  startHealthAlerts,
+  stopHealthAlerts,
+} from "./core/daemon/health-alerts.js";
 import { log, logError, logWarn } from "./util/log.js";
 import { bootPhase, bootReport } from "./core/daemon/boot-timer.js";
 import {
@@ -67,6 +78,8 @@ import {
   writePidRecord,
   removePidRecordIfOwnedBy,
 } from "./core/daemon/pidfile.js";
+import { stampDaemonOwner } from "./core/daemon/pidfile.js";
+import { clearStopMarker } from "./core/daemon/watchdog/stop-marker.js";
 import {
   recordBootMetrics,
   startResourceSampler,
@@ -88,6 +101,27 @@ if (process.argv.includes(BOOT_SMOKE_FLAG)) {
   process.exit(0);
 }
 
+// One daemon per install. This runs before anything with a side effect
+// (restore, database, pidfile, trigger resume), because a second daemon
+// does damage in each of them — see checkSingleInstance in core/daemon/discovery.ts.
+{
+  const { checkSingleInstance, describeRefusal } =
+    await import("./core/daemon/discovery.js");
+  const verdict = await checkSingleInstance();
+  if (!verdict.ok) {
+    const message = describeRefusal(verdict.instance);
+    logError("bot", message);
+    console.error(`talon: ${message}`);
+    process.exit(1);
+  }
+}
+// This process is the daemon now, however it was launched: an earlier
+// `talon stop` no longer holds, so the watchdog may supervise it again.
+clearStopMarker();
+// Every child spawned from here on names this daemon as its owner, so an
+// orphan sweep can tell a dead daemon's leftovers from a live one's runs.
+stampDaemonOwner();
+
 /**
  * A `/backup restore <id>` from chat writes ~/.talon/restore-pending.json
  * and restarts. It is applied HERE, before anything else: every store
@@ -98,10 +132,18 @@ if (process.argv.includes(BOOT_SMOKE_FLAG)) {
  *
  * Never throws: a failed restore still boots the daemon (with the reason
  * in the log and the request deleted, so the next boot is normal).
+ * Returns the confirmation line and who asked for it, so it can be sent
+ * back to that chat once the frontends are up.
  */
-async function applyStagedRestore(): Promise<string | null> {
+async function applyStagedRestore(): Promise<{
+  text: string;
+  requestedBy?: string;
+  frontend?: string;
+} | null> {
   const { applyPendingRestore, readRestorePending } =
     await import("./core/backup/index.js");
+  const { formatRestoreNotice } =
+    await import("./core/backup/restore/notice.js");
   if (!(await readRestorePending())) return null;
   const { loadConfig } = await import("./core/config/index.js");
   const { resolveBackupSettings } = await import("./core/backup/plan.js");
@@ -111,17 +153,87 @@ async function applyStagedRestore(): Promise<string | null> {
     beforeApply: closeDatabase,
   });
   if (!report) return null;
-  return (
-    `♻️ Restored snapshot ${report.id}` +
-    (report.checkpointId
-      ? ` (previous state saved as checkpoint ${report.checkpointId})`
-      : "")
-  );
+  return {
+    text: formatRestoreNotice(report),
+    requestedBy: report.requestedBy,
+    frontend: report.frontend,
+  };
 }
 
-const restoreReport = await bootPhase("staged restore", applyStagedRestore);
+/**
+ * A present-but-invalid config.json is fatal at startup: print the file
+ * path and every problem, then exit non-zero. Booting on defaults instead
+ * would put the daemon in a surprising state (wrong frontend, no plugins).
+ */
+async function withConfigGuard<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof ConfigFileError) {
+      logError("config", err.message);
+      console.error(`talon: ${err.message}`);
+      process.exit(1);
+    }
+    throw err;
+  }
+}
 
-const { config } = await bootPhase("bootstrap", () => bootstrap());
+const restoreReport = await withConfigGuard(() =>
+  bootPhase("staged restore", applyStagedRestore),
+);
+
+/**
+ * The first boot of a new version (a Docker/TrueNAS image pull, an npm or
+ * binary upgrade — anything but `/update`, which checkpoints itself) takes
+ * a pinned `pre-upgrade <old>→<new>` checkpoint HERE: after a staged
+ * restore, before bootstrap opens the stores and the backend reconcile or
+ * any migration runs against them. A failed checkpoint alerts the admin
+ * and still boots, but with the destructive boot steps skipped.
+ *
+ * Never throws.
+ */
+async function checkpointIfUpgraded(): Promise<{ safe: boolean }> {
+  try {
+    const { checkpointOnVersionChange } =
+      await import("./core/backup/index.js");
+    const { loadConfig } = await import("./core/config/index.js");
+    const { resolveBackupSettings } = await import("./core/backup/plan.js");
+    const { talonVersion } = await import("./util/version.js");
+    const result = await checkpointOnVersionChange({
+      settings: resolveBackupSettings(loadConfig().backup),
+      version: talonVersion(),
+    });
+    return { safe: result.status !== "failed" };
+  } catch (err) {
+    if (err instanceof ConfigFileError) throw err;
+    logError("backup", "Pre-upgrade version check failed", err);
+    const { raiseAlert } = await import("./core/frontend-runtime/alerts.js");
+    raiseAlert(
+      "backup.upgrade-checkpoint",
+      `The boot-time version check / pre-upgrade checkpoint crashed: ${String(err)}. Booted without it; boot-time cleanup skipped.`,
+      { severity: "critical" },
+    );
+    return { safe: false };
+  }
+}
+
+const upgrade = await withConfigGuard(() =>
+  bootPhase("upgrade checkpoint", checkpointIfUpgraded),
+);
+
+const { config } = await withConfigGuard(() =>
+  bootPhase("bootstrap", () =>
+    bootstrap({ skipDestructiveSteps: !upgrade.safe }),
+  ),
+);
+
+// Before any backend resumes a session: carry Claude transcripts over a
+// Talon-home move (their project slug is the cwd), and in a container
+// alert when a backend's session store isn't on a persistent volume.
+await bootPhase("storage layout", async () => {
+  const { runStorageLayoutChecks } = await import("./core/layout/index.js");
+  await runStorageLayoutChecks(config as unknown as Record<string, unknown>);
+});
 
 // Record this process as the daemon. The gateway port is appended once
 // the gateway binds (it may fall back from the default on EADDRINUSE).
@@ -131,6 +243,17 @@ writePidRecord({ pid: process.pid, startedAt: bootedAt });
 // ── Create gateway + frontend ─────────────────────────────────────────────────
 
 const gateway = new Gateway("daemon");
+// Fail rather than fall back when the gateway port belongs to another
+// daemon: a fallback port is how a second daemon went unnoticed.
+gateway.setPortInUseCheck(async (port) => {
+  const { probeHealth } = await import("./core/daemon/discovery.js");
+  const health = await probeHealth(port);
+  return health?.app === "talon" &&
+    health.mode === "daemon" &&
+    health.pid !== process.pid
+    ? `gateway port ${port} is held by another Talon daemon (pid ${String(health.pid)})`
+    : undefined;
+});
 gateway.onStarted((port) =>
   writePidRecord({ pid: process.pid, port, startedAt: bootedAt }),
 );
@@ -232,6 +355,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   log("shutdown", `${signal} received, shutting down gracefully...`);
+  // Park running sub-agents before anything is torn down: stopping the
+  // frontends and the backend pool aborts their runs, and an agent that is
+  // not parked first would record that abort as its death. Parked agents
+  // stay `running` in the store and the next boot resumes them.
+  crashStep("sub-agent park", () => interruptAgentsForRestart());
 
   const deadlineAt = Date.now() + SHUTDOWN_TIMEOUT_MS;
   const forceTimer = setTimeout(() => {
@@ -324,11 +452,12 @@ async function gracefulShutdown(signal: string): Promise<void> {
     triggerPruneTimer = null;
   });
   await shutdownStep("triggers", shutdownTriggers);
-  // Sub-agents are isolated one-shot runs: aborting them is all the daemon
-  // can do, and their parents are gone with the process anyway.
+  // Sub-agents were parked at the top of the shutdown; this aborts whatever
+  // is still running so the process can exit. They resume on the next boot.
   await shutdownStep("sub-agents", shutdownAgents);
   await shutdownStep("watchdog", stopWatchdog);
   await shutdownStep("resource sampler", stopResourceSampler);
+  await shutdownStep("health alerts", stopHealthAlerts);
   await shutdownStep("upload cleanup", stopUploadCleanup);
   await shutdownStep("mcp hub", async () => {
     const { shutdownHub } = await import("./core/mcp-hub/index.js");
@@ -361,12 +490,7 @@ process.on("uncaughtException", (err) =>
   handleUncaughtException(err, crashHooks),
 );
 
-process.on("unhandledRejection", (reason) => {
-  logWarn(
-    "bot",
-    `Unhandled rejection: ${reason instanceof Error ? reason.message : reason}`,
-  );
-});
+process.on("unhandledRejection", handleUnhandledRejection);
 
 // ── Start ────────────────────────────────────────────────────────────────────
 
@@ -424,16 +548,36 @@ async function main(): Promise<void> {
   // what follows runs while the daemon is alive — not, as it once did,
   // hours later during shutdown.
   await bootPhase("frontends start", () => startFrontends(frontends));
+  // Sub-agents the previous process left running come back now that their
+  // tools (gateway, frontends) and their parents' wake path are up.
+  // Fire-and-forget: a slow backend acquisition must not hold the boot.
+  resumeAgentsAfterRestart().catch((err) =>
+    logError("agents", "resume after restart failed", err),
+  );
   // Phase 0 accounting (docs/ts-migration-plan.md): the boot is over the
   // moment the frontends are listening, so the totals are folded into the
   // metrics store here, from the same uptime figure the log line prints.
-  // A restore applied at boot happened before any frontend existed, so the
-  // operator hears about it here, on the first channel that can carry it.
+  // A restore applied at boot happened before any frontend existed, so it
+  // is reported here, on the first channels that can carry it: the chat
+  // that asked for it, or the admin's primary chat when that one can't be
+  // reached. Not awaited — delivery may retry while a frontend finishes
+  // connecting, and the boot shouldn't wait on a courtesy message.
   if (restoreReport) {
     const { notifyAdmin } =
       await import("./core/frontend-runtime/admin-notify.js");
-    await notifyAdmin(restoreReport);
+    const { deliverRestoreNotice } =
+      await import("./core/backup/restore/notice.js");
+    void deliverRestoreNotice({
+      text: restoreReport.text,
+      requester: restoreReport,
+      notifyAdmin,
+    });
   }
+  // Same reasoning for a crash: the process that died couldn't say so,
+  // so the marker it left is announced now. The probes start here too —
+  // an alert raised before a frontend can carry it is wasted.
+  announceLastCrash();
+  startHealthAlerts();
 
   const bootMs = Math.round(process.uptime() * 1000);
   recordBootMetrics(bootMs);
@@ -447,6 +591,7 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   crashCleanup(crashHooks);
+  crashStep("crash marker", () => writeCrashMarker("startup", err));
   crashStep("startup report", () =>
     logError("bot", "Fatal startup error", err),
   );

@@ -38,8 +38,9 @@ vi.mock("../core/background/heartbeat/index.js", () => ({
   stopHeartbeatTimer: vi.fn(),
 }));
 
-const { applyConfigUpdate, configSnapshot, persistConfigPatch, EDITABLE } =
+const { applyConfigUpdate, configSnapshot, EDITABLE } =
   await import("../frontend/native/surface/settings.js");
+const { persistConfigPatch } = await import("../core/config/persist.js");
 const { setTimezone } = await import("../util/time.js");
 const { startPulseTimer, stopPulseTimer } =
   await import("../core/background/pulse/pulse.js");
@@ -123,10 +124,10 @@ describe("applyConfigUpdate", () => {
 
   it("applies the timezone live, and clears it on an empty string", () => {
     const config = fakeConfig();
-    applyConfigUpdate(config, { timezone: " Europe/Dublin " });
-    expect(config.timezone).toBe("Europe/Dublin");
-    expect(setTimezone).toHaveBeenLastCalledWith("Europe/Dublin");
-    expect(onDisk().timezone).toBe("Europe/Dublin");
+    applyConfigUpdate(config, { timezone: " Europe/London " });
+    expect(config.timezone).toBe("Europe/London");
+    expect(setTimezone).toHaveBeenLastCalledWith("Europe/London");
+    expect(onDisk().timezone).toBe("Europe/London");
 
     applyConfigUpdate(config, { timezone: "" });
     expect(config.timezone).toBeUndefined();
@@ -175,10 +176,19 @@ describe("persistConfigPatch", () => {
     expect(readFileSync(configFile, "utf-8").endsWith("\n")).toBe(true);
   });
 
-  it("starts from empty when the file is corrupt rather than throwing", () => {
+  it("refuses to write over a corrupt file, leaving it byte-for-byte intact", () => {
+    // A hand-edit typo must not turn the next companion toggle into
+    // "config.json is now just { fresh: 1 }" — tokens and all gone.
     persistConfigPatch({ keep: true });
-    writeFileSync(configFile, "{not json");
-    persistConfigPatch({ fresh: 1 });
-    expect(onDisk()).toEqual({ fresh: 1 });
+    writeFileSync(configFile, '{"botToken": "secret",');
+    expect(() => persistConfigPatch({ fresh: 1 })).toThrow(/left untouched/);
+    expect(readFileSync(configFile, "utf-8")).toBe('{"botToken": "secret",');
+  });
+
+  it("refuses to write over a file whose top level is not an object", () => {
+    persistConfigPatch({ keep: true });
+    writeFileSync(configFile, "[1, 2]");
+    expect(() => persistConfigPatch({ fresh: 1 })).toThrow(/left untouched/);
+    expect(readFileSync(configFile, "utf-8")).toBe("[1, 2]");
   });
 });

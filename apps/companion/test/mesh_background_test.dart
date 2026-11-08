@@ -1,7 +1,59 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:talon_companion/src/services/mesh_background.dart';
+import 'package:talon_companion/src/services/network_watch.dart';
 
 void main() {
+  group('event-stream liveness', () {
+    final t0 = DateTime(2026, 9, 30, 12);
+    const idle = Duration(seconds: 70);
+
+    test('a stream never opened is not "dead"', () {
+      expect(streamLooksDead(null, t0, idle), isFalse);
+    });
+
+    test('a stream silent past the idle deadline is dead', () {
+      expect(
+        streamLooksDead(t0, t0.add(const Duration(seconds: 30)), idle),
+        isFalse,
+      );
+      expect(
+        streamLooksDead(t0, t0.add(const Duration(seconds: 71)), idle),
+        isTrue,
+      );
+    });
+
+    test('alive is stamped from the stream, not the registration', () {
+      final now = t0.add(const Duration(seconds: 50)).millisecondsSinceEpoch;
+      expect(
+        meshAliveStamp(streamLastRx: t0, connected: true, nowMs: now),
+        t0.millisecondsSinceEpoch,
+      );
+      // Registration succeeded but no stream is up: no stamp at all.
+      expect(
+        meshAliveStamp(streamLastRx: t0, connected: false, nowMs: now),
+        isNull,
+      );
+      expect(
+        meshAliveStamp(streamLastRx: null, connected: true, nowMs: now),
+        isNull,
+      );
+    });
+  });
+
+  group('networkKey', () {
+    test('is order-independent and distinguishes interfaces', () {
+      expect(
+        networkKey([ConnectivityResult.wifi, ConnectivityResult.mobile]),
+        networkKey([ConnectivityResult.mobile, ConnectivityResult.wifi]),
+      );
+      expect(
+        networkKey([ConnectivityResult.wifi]),
+        isNot(networkKey([ConnectivityResult.mobile])),
+      );
+    });
+  });
+
   group('evaluateMeshForegroundHealth', () {
     test('does not bounce during the fresh-start grace window', () {
       final health = evaluateMeshForegroundHealth(

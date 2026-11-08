@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { OneShotAgentParams } from "../core/types.js";
 import type { Backend } from "../core/agent-runtime/capabilities.js";
 import { stubBackend } from "./helpers/stub-backend.js";
+import { logWarn as logWarnMock } from "../util/log.js";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
@@ -460,6 +461,36 @@ describe("dream failure backoff", () => {
     maybeStartDream(); // still overdue, but inside the backoff window
     await new Promise((r) => setTimeout(r, 10));
     expect(runOneShotAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("logs the backoff with the failure count and the cause", async () => {
+    runOneShotAgentMock.mockRejectedValue(new Error("backend exploded"));
+    await expect(forceDream()).rejects.toThrow("backend exploded");
+    const line = vi
+      .mocked(logWarnMock)
+      .mock.calls.map((c) => String(c[1]))
+      .find((l) => l.startsWith("dream.backoff"));
+    expect(line).toMatch(
+      /^dream\.backoff failures=1 until=\S+Z error="backend exploded"$/,
+    );
+  });
+
+  it("arms when a successful run's state write is lost", async () => {
+    // kvSet logs and swallows a failed write (full disk): the run completes
+    // but last_run never reaches the store, so the dream still looks overdue.
+    const persist = kvSetMock.getMockImplementation();
+    kvSetMock.mockImplementation(() => {});
+    try {
+      await expect(forceDream()).resolves.toBeUndefined();
+      expect(dreamFailureBackoff.active()).toBe(true);
+
+      runOneShotAgentMock.mockClear();
+      maybeStartDream(); // the next message must not run it all again
+      await new Promise((r) => setTimeout(r, 10));
+      expect(runOneShotAgentMock).not.toHaveBeenCalled();
+    } finally {
+      kvSetMock.mockImplementation(persist!);
+    }
   });
 
   it("lets forceDream bypass the window and clears it on success", async () => {

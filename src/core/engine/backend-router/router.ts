@@ -2,7 +2,7 @@
  * Plan-aware backend routing for background work.
  *
  * Background work — `spawn_agent` sub-agents, cron `query` jobs, the
- * heartbeat — used to inherit whichever backend the chat happened to be on.
+ * heartbeat — would otherwise inherit whichever backend the chat is on.
  * On a multi-subscription install that is a good way to burn one plan to its
  * ceiling while another sits idle. When nothing is pinned, this picks the
  * backend with the most headroom instead.
@@ -22,11 +22,21 @@
  * budget (`backendBudgets`), which is both an opt-in and the only way it
  * would have a headroom signal. The caller's own backend is always in the
  * running, so there is always an answer.
+ *
+ * Never between accounts of one provider. Backends in the caller's account
+ * group (the `claude` backend and each extra Claude account) are not
+ * candidates, and an extra account is never a candidate for anyone else's
+ * work either (`explicitOnly`): the router may move work from Claude to
+ * Codex when Claude is spent, but never from one Claude subscription to
+ * another, nor pick between them. Which account
+ * runs a piece of work is always an explicit choice — config, a `/backend`
+ * switch, or a tool's `backend` argument (docs/claude-accounts.md).
  */
 
 import type { TalonConfig } from "../../config/index.js";
 import type { ReasoningEffortLevel } from "../../types.js";
 import { log } from "../../../util/log.js";
+import { isRoutingAlternate } from "../../agent-runtime/backend-registry.js";
 import {
   acquireBackendInstance,
   getPoolConfig,
@@ -139,6 +149,10 @@ function isCandidate(
   chatBackendId: string,
 ): boolean {
   if (id === chatBackendId) return true;
+  // Another login of the caller's own provider is never an alternate, nor
+  // is an explicit-only backend (every extra Claude account): no automatic
+  // failover or rotation between subscriptions of one provider.
+  if (!isRoutingAlternate(id, chatBackendId)) return false;
   const pooled = getPooledBackend(id);
   if (pooled) return Boolean(pooled.background);
   return hasBudget(config, id);

@@ -35,6 +35,7 @@ vi.mock("../core/engine/dispatcher.js", () => ({
 }));
 
 import { Gateway } from "../core/engine/gateway.js";
+import { gatewayFetch } from "./helpers/gateway-fetch.js";
 
 let gateway: Gateway | null = null;
 
@@ -45,7 +46,7 @@ afterEach(async () => {
 
 /** The port /health claims to be listening on. */
 async function healthPort(port: number): Promise<number> {
-  const res = await fetch(`http://127.0.0.1:${port}/health`);
+  const res = await gatewayFetch(`http://127.0.0.1:${port}/health`);
   const body = (await res.json()) as { port: number };
   return body.port;
 }

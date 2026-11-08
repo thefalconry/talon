@@ -23,7 +23,10 @@ type Config struct {
 	// Bridge is the base URL of the daemon's native bridge,
 	// e.g. "https://100.64.0.1:19880".
 	Bridge string `json:"bridge"`
-	// Token is the bridge bearer token (same one companion apps pair with).
+	// Token is the bridge bearer: this node's own per-device credential
+	// (tdc1.…, minted into the installer), or — on nodes installed before
+	// per-device credentials — the shared bridge token, which the node
+	// trades for its own credential in band and rewrites here.
 	Token string `json:"token"`
 	// Name is the device name shown across the mesh. Defaults to hostname.
 	Name string `json:"name,omitempty"`
@@ -35,6 +38,20 @@ type Config struct {
 	// the DER, exactly as /health reports it). Empty = trust-on-first-use:
 	// the first successful connect records it, later connects require it.
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// StrictTLS turns trust-on-first-use off: the node connects only over
+	// https to a bridge whose fingerprint is already configured, and never
+	// adopts one it has not been given. Off by default.
+	StrictTLS bool `json:"strictTls,omitempty"`
+	// Endpoints are the other ways to reach the bridge, as the daemon last
+	// advertised them (endpoints.go). Bridge is always tried first; these
+	// are fallbacks, and every one must present the pinned certificate.
+	// Written by the node; an edit here is replaced on the next change.
+	Endpoints []Endpoint `json:"endpoints,omitempty"`
+	// EndpointsVersion is the daemon's version tag for Endpoints.
+	EndpointsVersion string `json:"endpointsVersion,omitempty"`
+	// Policy is the host owner's local limit on what the mesh may do here
+	// (see Policy). Editable only in this file.
+	Policy Policy `json:"policy"`
 
 	// Path the config was loaded from (not serialized).
 	Path string `json:"-"`
@@ -63,6 +80,7 @@ func mustLoadConfig(args []string) *Config {
 	token := fs.String("token", "", "bridge bearer token")
 	name := fs.String("name", "", "device name")
 	fingerprint := fs.String("fingerprint", "", "pinned bridge cert SHA-256")
+	strictTLS := fs.Bool("strict-tls", false, "require a configured fingerprint (no trust-on-first-use)")
 	_ = fs.Parse(args)
 
 	cfg := &Config{Path: *configPath}
@@ -96,6 +114,14 @@ func mustLoadConfig(args []string) *Config {
 
 	cfg.Bridge = strings.TrimRight(strings.TrimSpace(cfg.Bridge), "/")
 	dirty := false
+	// --strict-tls (or --strict-tls=false) is persisted, so an installed
+	// service keeps the mode it was installed with.
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "strict-tls" && cfg.StrictTLS != *strictTLS {
+			cfg.StrictTLS = *strictTLS
+			dirty = true
+		}
+	})
 	if cfg.Name == "" {
 		host, err := os.Hostname()
 		if err != nil || host == "" {
@@ -134,8 +160,31 @@ func (c *Config) Validate() error {
 			"no bearer token — pass --token or set \"token\" in the config",
 		)
 	}
+	return c.validateStrictTLS(u.Scheme)
+}
+
+// validateStrictTLS refuses a strict-TLS config that would have to trust an
+// unpinned certificate (or none at all, over plain http).
+func (c *Config) validateStrictTLS(scheme string) error {
+	if !c.StrictTLS {
+		return nil
+	}
+	if scheme != "https" {
+		return fmt.Errorf("strict TLS is on but the bridge URL %q is not https", c.Bridge)
+	}
+	if c.Fingerprint == "" {
+		return errStrictNoPin
+	}
 	return nil
 }
+
+// errStrictNoPin is the refusal when strict TLS has no fingerprint to pin.
+var errStrictNoPin = errors.New(
+	"strict TLS is on but no bridge fingerprint is configured — refusing to " +
+		"trust the first certificate seen. Pass --fingerprint <sha256> (the " +
+		"bridge's /health and `talon status` show it) or set \"fingerprint\" in the " +
+		"config; or turn strict TLS off (--strict-tls=false) to allow trust-on-first-use",
+)
 
 // Save writes the config file 0600 (it holds the bearer token), creating
 // the parent directory as needed.

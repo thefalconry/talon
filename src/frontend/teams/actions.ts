@@ -7,6 +7,9 @@ import type { Gateway } from "../../core/engine/gateway.js";
 import { buildAdaptiveCard, splitTeamsMessage } from "./formatting.js";
 import { log, logError } from "../../util/log.js";
 import { proxyFetch } from "./proxy-fetch.js";
+import { createDeliveryTracker, trackDeliveries } from "../health/delivery.js";
+
+const delivery = createDeliveryTracker("teams", "Teams", "teams");
 
 /**
  * POST an Adaptive Card to the Power Automate workflow webhook URL.
@@ -32,7 +35,10 @@ export function createTeamsActionHandler(
   webhookUrl: string,
   gateway: Gateway,
 ): FrontendActionHandler {
-  return async (body, chatId): Promise<ActionResult | null> => {
+  const dispatch: FrontendActionHandler = async (
+    body,
+    chatId,
+  ): Promise<ActionResult | null> => {
     const action = body.action as string;
 
     switch (action) {
@@ -100,6 +106,7 @@ export function createTeamsActionHandler(
         return null;
     }
   };
+  return trackDeliveries(delivery, dispatch);
 }
 
 export { postToTeams };

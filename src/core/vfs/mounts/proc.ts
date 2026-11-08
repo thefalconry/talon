@@ -5,6 +5,8 @@
  *   proc/
  *     tasks/<id>   one task table record, pretty JSON
  *     events       the event bus ring, JSON Lines (newest last)
+ *     <view>       any extra text views the index wires (log, errors,
+ *                  alerts — see ./diagnostics.ts)
  *
  * Providers are injected so the mount is a pure projection — the index
  * wires the real task table and bus, tests wire fixtures. Sizes and
@@ -20,6 +22,8 @@ import { vfsError, vfsOk } from "../types.js";
 export interface ProcMountDeps {
   tasks: () => readonly TaskRecord[];
   events: () => readonly PublishedEvent[];
+  /** Extra read-only text files at the proc root, name → renderer. */
+  views?: Readonly<Record<string, () => string>>;
 }
 
 const DIR = (path: string, name: string): VfsStat => ({
@@ -54,6 +58,13 @@ function renderEvents(events: readonly PublishedEvent[]): string {
 }
 
 export function createProcMount(deps: ProcMountDeps): VfsMount {
+  const views: Readonly<Record<string, () => string>> = Object.assign(
+    Object.create(null) as Record<string, () => string>,
+    deps.views,
+  );
+  const viewStats = (): VfsStat[] =>
+    Object.keys(views).map((name) => fileStat(name, views[name]()));
+
   function taskById(id: string): TaskRecord | undefined {
     if (!/^\d+$/.test(id)) return undefined;
     return deps.tasks().find((task) => task.id === Number(id));
@@ -66,6 +77,7 @@ export function createProcMount(deps: ProcMountDeps): VfsMount {
       const events = deps.events();
       return vfsOk(fileStat("events", renderEvents(events), events.at(-1)?.at));
     }
+    if (views[rel]) return vfsOk(fileStat(rel, views[rel]()));
     const taskId = rel.startsWith("tasks/") ? rel.slice("tasks/".length) : null;
     if (taskId !== null && !taskId.includes("/")) {
       const task = taskById(taskId);
@@ -78,7 +90,9 @@ export function createProcMount(deps: ProcMountDeps): VfsMount {
   }
 
   return {
-    description: "Live daemon state: task table and event bus ring",
+    description: deps.views
+      ? "Live daemon state: task table, event bus ring, daemon log views"
+      : "Live daemon state: task table and event bus ring",
     writable: false,
 
     stat: resolveNode,
@@ -89,6 +103,7 @@ export function createProcMount(deps: ProcMountDeps): VfsMount {
         return vfsOk([
           DIR("tasks", "tasks"),
           fileStat("events", renderEvents(events), events.at(-1)?.at),
+          ...viewStats(),
         ]);
       }
       if (rel === "tasks") {
@@ -112,6 +127,7 @@ export function createProcMount(deps: ProcMountDeps): VfsMount {
 
     read(rel) {
       if (rel === "events") return vfsOk(renderEvents(deps.events()));
+      if (views[rel]) return vfsOk(views[rel]());
       if (rel.startsWith("tasks/")) {
         const task = taskById(rel.slice("tasks/".length));
         if (!task) return vfsError("not-found");

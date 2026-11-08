@@ -42,9 +42,9 @@ import { ALL_TOOLS } from "../core/tools/index.js";
 import type { ActionResult } from "../core/types.js";
 
 /** A DM chat key — `chatScope` reads a positive Telegram id as a DM. */
-const DM_CHAT = "352042062";
+const DM_CHAT = "424242420";
 /** A Telegram supergroup: negative id. */
-const GROUP_CHAT = "-1001426819337";
+const GROUP_CHAT = "-1009876543210";
 
 let seq = 0;
 /** Unique subject per test — the worker-shared DB persists across tests. */
@@ -76,11 +76,11 @@ describe("remember", () => {
       action: "remember",
       kind: "fact",
       subject,
-      text: "Dylan ships on Fridays",
+      text: "Ada ships on Fridays",
     });
     expect(result.ok).toBe(true);
     expect(result.line).toBe(
-      `#${result.id} [fact] ${subject}: Dylan ships on Fridays`,
+      `#${result.id} [fact] ${subject}: Ada ships on Fridays`,
     );
     const row = getMemory(result.id as number)!;
     expect(row.trust).toBe("agent");
@@ -156,20 +156,20 @@ describe("remember", () => {
       action: "remember",
       kind: "fact",
       subject,
-      text: "Dylan lives in London",
+      text: "Ada lives in London",
     });
     const replaced = await act({
       action: "remember",
       kind: "fact",
       subject,
-      text: "Dylan lives in Lisbon",
+      text: "Ada lives in Lisbon",
       replace_id: first.id,
     });
     expect(replaced.ok).toBe(true);
     expect(getMemory(first.id as number)!.supersededBy).toBe(replaced.id);
     const live = liveRows(subject);
     expect(live).toHaveLength(1);
-    expect(live[0]!.text).toBe("Dylan lives in Lisbon");
+    expect(live[0]!.text).toBe("Ada lives in Lisbon");
   });
 
   it("stores a separate claim when force is set", async () => {

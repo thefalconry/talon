@@ -1,15 +1,17 @@
 /**
  * Teams frontend runtime — the state every module shares.
  *
- * `createTeamsFrontend` used to hold all of this as closure variables, with
- * the poll loop and the slash commands nested inside `.start`. It is now one
- * explicit object, constructed once, that each module (chat-discovery,
+ * One explicit object, constructed once, that each module (chat-discovery,
  * poll, commands, turn, outbound) takes as its first parameter.
  */
 
 import type { TalonConfig } from "../../core/config/index.js";
 import type { Gateway } from "../../core/engine/gateway.js";
 import type { GraphClient } from "./graph.js";
+import { createOutage, type Outage } from "../health/outage.js";
+
+/** Graph polling must fail this long before `teams.poll` is raised. */
+const POLL_OUTAGE_MS = 10 * 60_000;
 
 export type TeamsRuntime = {
   readonly config: TalonConfig;
@@ -25,9 +27,10 @@ export type TeamsRuntime = {
   pollTimer: ReturnType<typeof setInterval> | null;
   /** Newest message id already handled — the poll loop cuts at it. */
   lastSeenMessageId: string | null;
-  myUserId: string | null;
   /** Re-entrancy guard: a slow poll never overlaps the next tick. */
   polling: boolean;
+  /** Failed Graph fetches, and the `teams.poll` alert they raise. */
+  readonly pollOutage: Outage;
 };
 
 export function createTeamsRuntime(
@@ -45,7 +48,13 @@ export function createTeamsRuntime(
     graphClient: null,
     pollTimer: null,
     lastSeenMessageId: null,
-    myUserId: null,
     polling: false,
+    pollOutage: createOutage({
+      key: "teams.poll",
+      thresholdMs: POLL_OUTAGE_MS,
+      describe: (err, mins) =>
+        `Teams polling has failed for ${mins} min: ${err}. Messages are not being received.`,
+      recovered: "Teams polling is working again.",
+    }),
   };
 }

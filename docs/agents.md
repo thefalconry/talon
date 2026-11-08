@@ -7,7 +7,8 @@
 
 This is deliberately **not** the Claude SDK's sub-agent feature. Talon owns
 the mechanism so it works identically on `claude`, `codex`, `kilo`,
-`opencode` — anything with a `background` capability — and so a chat on one
+`opencode`, `agy`, `openai-agents` — anything with a `background`
+capability — and so a chat on one
 backend can delegate to an agent on another.
 
 ## The model
@@ -19,10 +20,21 @@ other agent work started. It has:
 - a **brief** — the entire context it gets, because it has no conversation
   history and no shared scratchpad;
 - a **parent**, which is either a chat or another sub-agent;
-- its own **backend and model**, defaulting to the parent's backend and that
-  backend's default model;
+- its own **backend and model**. Unpinned, a child of another agent
+  inherits its parent's backend _and_ model, so a tree stays where its root
+  was put; a top-level spawn starts from the chat's backend (the router may
+  move it to one with more headroom) and that backend's default model. An
+  optional `agents.allowedBackends` allowlist bounds both;
 - a **mailbox** its parent can put instructions in;
-- a hard **timeout**, a **task-table** entry, and a per-run markdown log at
+- a private **scratch dir**, `$TMPDIR/talon-agents/<id>/` (`/tmp/talon-agents/<id>/`
+  on Linux), created when the run starts and exported as `TMPDIR` / `TMP` /
+  `TEMP` to its shells and tools (backends that take a per-run environment
+  — the Claude SDK and OpenAI Agents today; others see it named in the
+  agent's brief). It
+  survives a daemon restart, is removed when the agent settles `done`, and
+  is kept on any other outcome so the work it left can be inspected;
+- an optional hard **timeout** (none by default), a **no-progress
+  watchdog**, a **task-table** entry, and a per-run markdown log at
   `~/.talon/workspace/logs/agents/<id>.md`.
 
 Spawning returns immediately with the id. The parent keeps working; the
@@ -67,6 +79,34 @@ A result reported before a kill or a timeout is kept: the parent gets the
 partial answer plus the terminal state. **Every** terminal state is
 delivered — silence is never an outcome.
 
+**Work survives a cut-short run.** While an agent runs, Talon keeps a small
+trail of it (`core/agents/trail.ts`): its last three `message_parent` notes,
+its last three assistant texts, and the files it wrote or edited (scraped
+from the run log — Claude-style `Write`/`Edit` tool calls and Codex file
+changes; best-effort). When a run ends `killed`, `timed_out` or `failed`,
+the parent's wake-up carries that trail under the error, so it can pick up
+from where the agent stopped instead of starting over.
+
+### Timeouts and the watchdog
+
+There is **no hard timeout by default**: a run ends when it reports, is
+killed, or stalls. A spawn may still pass `timeout_s` (floored at 30s), a
+deployment may set `agents.defaultTimeoutMs` for spawns that pass none, and
+`agents.maxTimeoutMs` caps every run when set.
+
+What ends a run that has gone quiet is the **no-progress watchdog**
+(`core/agents/watchdog.ts`). Any run-log line (a tool call, a tool result)
+or assistant text is a sign of life. With `agents.stallTimeoutMs = N`
+(default 15 min):
+
+1. after **N** of silence the agent gets a `[Watchdog]` note in its mailbox;
+2. after **2N** its parent gets an interim note (it can `send_to_agent` or
+   `kill_agent`);
+3. after **3N** the run is aborted and settles `timed_out` with
+   `stalled: …` as its error, plus its trail.
+
+Any activity starts the ladder over. `stallTimeoutMs: 0` disables it.
+
 When an agent settles, its own still-running children are killed. Their
 reports would have nowhere to go, so leaving them running only spends tokens.
 
@@ -100,8 +140,8 @@ is waiting.
 
 Parent-side (available in every chat, and inside an `agent:*` run):
 
-- `spawn_agent({ brief, label, backend?, model?, effort?, timeout_s? })` →
-  `{ agent_id, backend, model }`
+- `spawn_agent({ brief, label, backend?, model?, effort?, timeout_s?, preflight? })` →
+  `{ agent_id, backend, model }` — `preflight` see [Pre-flight lane](#pre-flight-lane)
 - `list_agents()` — this chat's agents, descendants included
 - `agent_status({ agent_id })` — everything but the brief
 - `wait_for_agent({ agent_id, timeout_s ≤ 120 })`
@@ -112,11 +152,126 @@ Agent-side (refused anywhere but an `agent:*` context):
 
 - `report_result({ summary, details? })` — exactly once per run
 - `message_parent({ text })`
+- `list_peers({ scope? })` — `"siblings"` (default): the agents sharing its
+  parent; `"tree"`: every live agent rooted in the same chat (parent agent,
+  children, siblings, cousins), each with how it relates to the caller
+- `message_peer({ agent_id, text })` — a note into any live agent in the
+  caller's tree, addressed by id or by exact label (a label two live agents
+  share is refused as ambiguous)
 - `check_inbox()`
 
 Visibility is scoped the way triggers are scoped to their chat: a chat sees
 the agents rooted in it, an agent sees its own descendants, and an id from
-another chat is simply "not found".
+another chat is simply "not found". **Messaging** reaches further than
+control: an agent can `message_peer` anything in its own tree, but can only
+`kill_agent` / `wait_for_agent` its own descendants, and nothing rooted in
+another chat is ever addressable.
+
+## Pre-flight lane
+
+Agents that open PRs run the light CI suite locally and push only when it is
+green, so GitHub Actions becomes the confirmer of a change rather than the
+first compiler it meets.
+
+**The lane** is `scripts/preflight.sh` (`npm run preflight`). It mirrors the
+`lint` job in `ci.yml` plus the unit tests touched by the diff:
+
+| step            | what                                                      |
+| --------------- | --------------------------------------------------------- |
+| `typecheck`     | `tsc --noEmit`                                            |
+| `lint`          | oxlint                                                    |
+| `format`        | `prettier --check`                                        |
+| `depcruise`     | architecture boundaries                                   |
+| `knip`          | dead code                                                 |
+| `ratchets`      | ratchet gates                                             |
+| `function-size` | function-size ratchet                                     |
+| `tree`          | tree ratchet                                              |
+| `only-skip`     | no `.only()` / `.skip()` left in tests                    |
+| `tests`         | `vitest related <changed src>` — tests importing the diff |
+| `gitleaks`      | secrets in `<base>..HEAD`; skipped with a note if absent  |
+
+Every step runs even after one fails, so one pass shows everything red. It
+prints one verdict line (`preflight: GREEN in 94s …` / `RED — failed: knip,
+tests`) and writes `.preflight/last.json` (verdict, per-step status and
+duration, failing steps) plus one `.preflight/<step>.log` per step; exit 0 is
+green, 1 is red. `PREFLIGHT_BASE` (default `origin/main`) is the diff base,
+`PREFLIGHT_SKIP=knip,tests` skips steps, `PREFLIGHT_QUIET=1` keeps step
+output in the logs only. It needs a `node_modules` in the checkout — make
+the worktree with `scripts/worktree.mjs` (below) rather than `npm ci`.
+
+The changed set is everything since the merge-base with the base, plus
+staged, unstaged and untracked work. A change to `package-lock.json`,
+`vitest.config.ts` or the test harness (`src/__tests__/setup/`) runs the whole
+unit suite; a change with nothing under `src/` runs no tests. Tests under
+`src/__tests__/integration/` are left to CI (some reach live services). A hub module
+(e.g. `core/types.ts`) makes `vitest related` pick up most of the suite, so
+the lane is slower there — which is exactly when it is worth waiting for.
+
+It is not the whole of CI: functional/integration suites, native builds,
+coverage and the Windows/macOS matrix still only run on GitHub.
+
+### Worktrees with shared node_modules
+
+A plain `git worktree add` + `npm ci` costs ~1.2 GB per checkout (about
+500 MB of it the bundled claude and codex binaries); four agents doing that
+at once once filled the host disk. `scripts/worktree.mjs` (`npm run
+worktree --`) gives each worktree a `node_modules` made of hardlinks into one
+shared store per lockfile:
+
+```sh
+node scripts/worktree.mjs add /tmp/fix-foo fix/foo   # new branch off origin/main
+node scripts/worktree.mjs add /tmp/fix-foo fix/foo --base origin/release
+node scripts/worktree.mjs link [dir] [--force]       # existing checkout
+node scripts/worktree.mjs remove /tmp/fix-foo        # remove + prune the store
+node scripts/worktree.mjs prune [--max-age-days 3] [--dry-run]
+```
+
+The store lives at `~/.cache/talon-node-modules/<hash>/node_modules`
+(`TALON_NM_STORE` overrides), keyed by the sha256 of `package-lock.json` plus
+platform, arch and Node major. The first worktree for a lockfile builds the
+entry once: a real copy (reflink when the filesystem supports it) of any
+worktree of the repo whose lockfile hashes the same, else `npm ci` into the
+store. Every later worktree is `cp -al` of it — about 15 MB of directory
+entries and seconds instead of 1.2 GB and a minute. `prune` drops entries no
+worktree uses that have not been linked for `--max-age-days`.
+
+Safety: a hardlink shares the inode, so an in-place write through one link
+would change every worktree.
+
+- Store files are `chmod a-w`, so an in-place write fails with `EACCES`
+  instead of corrupting other worktrees. Unlink, rename and
+  `rm -rf node_modules` still work, because each worktree's directories are
+  its own.
+- Mutable state is never shared. `node_modules/.cache`, `.vite`,
+  `.vite-temp` and `.vitest` (vitest, vite, prettier and babel caches) are left
+  out of the store and get created fresh per worktree. npm's hidden lockfile
+  `node_modules/.package-lock.json` is copied, not linked.
+- The store never shares inodes with the prod checkout: it is seeded by a
+  copy, so a worktree cannot reach the running daemon's dependencies.
+- The pre-flight lane itself writes nothing into existing `node_modules`
+  files: tsc runs `--noEmit`, there is no prettier or knip cache, and vitest's
+  results cache goes to a fresh `node_modules/.vite`. The package has no
+  `postinstall`/`prepare` script and no workspaces or `file:` links.
+- Changing dependencies in a worktree: run `npm ci` (or `npm install <pkg>`).
+  npm removes and re-extracts packages instead of writing into them, so the
+  store is untouched. The worktree then has a private `node_modules`.
+- Root ignores file modes, so do not run agents' builds as root against a
+  store.
+
+**Wiring into sub-agents.** `spawn_agent` takes `preflight?: boolean`. Unset,
+it defaults on for any brief that mentions a PR (`PR`, `PRs`, "pull
+request") and off otherwise. When on, the activation prompt ends with a
+standing instruction: before every `git push`, run `npm run preflight` (or
+call `run_preflight`), push only when green, and if a red step is genuinely
+out of scope say which one and why in the PR body.
+
+**`run_preflight({ cwd? })`** runs the lane in the checkout that contains
+`cwd` (its git root; default the workspace) on the daemon host, capped at
+10 minutes, and returns the verdict, the step table and the last 30 lines of
+every failing step's log. A red lane is a successful tool call with a red
+verdict; the tool errors only when it could not run (no such directory, no
+`scripts/preflight.sh` in that checkout, the lane died without a summary, or
+it timed out). It is callable from a chat and from inside an agent run.
 
 ## Tool surface inside an agent
 
@@ -144,16 +299,46 @@ the decision to talk to a human is made.
 "agents": {
   "maxConcurrent": 6,
   "maxDepth": 2,
-  "defaultTimeoutMs": 900000
+  "stallTimeoutMs": 900000,
+  "maxTimeoutMs": 7200000,
+  "allowedBackends": ["claude", "codex"],
+  "minHeadroomPct": 25
 }
 ```
 
-- `maxConcurrent` (default 6) — live agents daemon-wide. Each is a real
-  backend run, so this is the token-spend lever. Claimed synchronously at
-  registration, so concurrent spawns cannot both slip past it.
+- `maxConcurrent` (default 6, 1–64) — live agents daemon-wide, children
+  included. Each is a real backend run, so this is the token-spend lever.
+  Claimed synchronously at registration, so concurrent spawns cannot both
+  slip past it. A refused spawn's error names `agents.maxConcurrent`.
 - `maxDepth` (default 2) — `0` = chats only, `2` = chat → agent → agent.
-- `defaultTimeoutMs` (default 15 min) — per-spawn `timeout_s` is clamped to
-  [30s, 60min] at the tool boundary.
+- `defaultTimeoutMs` (optional, unset = none) — hard timeout for a spawn
+  that passes no `timeout_s`. Per-spawn values are floored at 30s.
+- `maxTimeoutMs` (optional, unset = none) — global ceiling on every run's
+  hard timeout, including spawns that set none.
+- `stallTimeoutMs` (default 15 min, 0 = off) — the watchdog step: ping at
+  N, warn the parent at 2N, kill at 3N.
+- `allowedBackends` (optional, unset = any) — backend ids a sub-agent may
+  run on. `spawn_agent` refuses a backend outside it, whether named or
+  inherited, with an error naming the list; a routed choice outside it
+  falls back to the inherited backend instead of failing.
+- `minHeadroomPct` (default 25, 0 = off) — the headroom guard. A spawn is
+  refused when the backend it would actually run on has less than this
+  percent of measured plan headroom left (the same reading `plan_usage`
+  and the router use; a backend whose credentials were rejected or whose
+  run breaker is open counts as 0%). The error states the headroom and the
+  window's reset time. It is checked on the final backend, so it covers an
+  explicit `backend` or `model` too — those skip routing, and without the
+  guard a model pinning `model: "opus"` on every spawn walks straight into
+  a nearly spent plan. A backend with no headroom signal at all (no plan
+  API, no `backendBudgets` entry) is allowed. `spawn_agent` takes
+  `force: true` to bypass it.
+
+On the Claude backend, Claude Code's own in-process sub-agent tool (`Agent`,
+`Task` on older builds) is disabled by default (`allowNativeSubagents:
+false` at the top level of the config). Those sub-agents live inside one
+turn and die with it without reporting, and none of the caps above apply to
+them; `spawn_agent` is the delegation mechanism. Set
+`"allowNativeSubagents": true` to give the model the built-in tool back.
 
 There is no on/off switch: a deployment that wants no fan-out sets
 `maxConcurrent: 1, maxDepth: 0`.
@@ -169,14 +354,41 @@ There is no on/off switch: a deployment that wants no fan-out sets
   (ids, states, counts; never text). The journal persists them, so
   `talon events --history` answers across restarts.
 - **Run logs** — `~/.talon/workspace/logs/agents/<id>.md`, one per run, with
-  the brief in its header and the full tool transcript below.
+  the brief in its header and the full tool transcript below. A resumed
+  run appends to the same log under a `resumed after daemon restart` rule.
+
+## Surviving a daemon restart
+
+A restart does not kill a sub-agent. Every spawn is mirrored to the
+`agents` table in `talon.db` (brief, parent, backend, model, effort,
+timeout, cwd, backend session id, undrained inbox, report, state) and kept
+current on every lifecycle change.
+
+- **Shutdown parks, it does not kill.** The first step of a graceful
+  shutdown — before the frontends and the backend pool go down — stamps
+  every live agent as interrupted (charging its elapsed time against its
+  timeout). The abort that follows leaves the row `running` and does not
+  wake the parent. A crash leaves the row `running` too.
+- **Boot resumes.** Once the frontends are listening,
+  `resumeAgentsAfterRestart` walks every `queued`/`running` row, parents
+  before children, and brings each back under its original id (so its
+  tool session, run log and parent edges are unchanged):
+  - on a backend that can resume a conversation (Claude SDK session id,
+    Codex thread id — `BackgroundRunner.supportsResume`) with a recorded
+    session, the run continues that conversation with a short note: it was
+    interrupted at _time_, check the state of anything that was
+    mid-flight, drain `check_inbox`, report once;
+  - otherwise it starts a fresh conversation with the original brief plus
+    the tail of its previous run log, told to continue rather than redo.
+- **Bounds.** A run with a hard timeout gets what it had left (at least 10
+  minutes); an uncapped run stays uncapped. An agent whose report had already landed is settled and
+  delivered without rerunning. An agent interrupted more than
+  `MAX_AGENT_RESUMES` (3) times, or down for more than 24 hours, or whose
+  backend is gone, settles as `failed` and its parent is told why.
+  Settled rows are pruned after 7 days.
 
 ## Deliberately not done
 
-- **No persistence of live runs across restart.** An agent is a live run and
-  a daemon restart ends every run; a persisted row could only describe work
-  that no longer exists. Same reasoning as the task table. What _happened_
-  is durable: every `agent.*` event is journalled.
 - **No batching or coalescing of wake-ups.** Several settlements arriving
   while a chat is busy become several queued turns, and the weaver
   serialises per chat. Triggers already behave this way and the model

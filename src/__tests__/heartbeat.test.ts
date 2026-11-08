@@ -138,6 +138,8 @@ vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend: chooseBackendMock,
   resolveRoutedModel: resolveRoutedModelMock,
   recordBackendRunUsage: vi.fn(),
+  recordBackendRunFailure: vi.fn(),
+  recordBackendRunSuccess: vi.fn(),
 }));
 
 vi.mock(
@@ -907,6 +909,26 @@ describe("heartbeat failure backoff (behavioral)", () => {
     // …and retries once the stated reset has passed.
     await vi.advanceTimersByTimeAsync(3 * 60 * 1000); // ~00:33
     expect(runOneShotAgentMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not re-run every due check when a successful run's state write is lost", async () => {
+    mockOverdueState();
+    runOneShotAgentMock.mockResolvedValue(undefined);
+    // kvSet logs and swallows a failed write (full disk): the run completes
+    // but last_run never reaches the store.
+    const persist = kvSetMock.getMockImplementation();
+    kvSetMock.mockImplementation(() => {});
+    try {
+      startHeartbeatTimer(60);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000 + 100); // startup delay
+      expect(runOneShotAgentMock).toHaveBeenCalledTimes(1);
+
+      // The old behaviour re-ran the whole agent on every minute due check.
+      await vi.advanceTimersByTimeAsync(4 * 60 * 1000);
+      expect(runOneShotAgentMock).toHaveBeenCalledTimes(1);
+    } finally {
+      kvSetMock.mockImplementation(persist!);
+    }
   });
 
   it("clears the backoff after a successful run", async () => {

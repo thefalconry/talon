@@ -24,7 +24,7 @@ function baseParams(): ChatRunParams {
     chatId: "chat-1",
     model: makeBareModelRef("claude", "stub-model"),
     text: "ping",
-    senderName: "Dylan",
+    senderName: "Ada",
   };
 }
 

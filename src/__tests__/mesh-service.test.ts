@@ -8,7 +8,7 @@
  *     and the no-transport fast path
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import {
   mkdtemp,
   readFile as fsReadFile,
@@ -71,6 +71,7 @@ describe("mesh tool availability", () => {
         "update_node",
         "get_node_binary",
         "make_node_install_link",
+        "make_companion_pair_link",
         "remove_device",
       ]) {
         expect(names).toContain(tool);
@@ -830,7 +831,18 @@ describe("MeshService exec + filesystem channel", () => {
     expect(installParams?.path).toBe(
       "/sdcard/Download/talon-companion-update.apk",
     );
+    // No rollback unless asked: the default shape is what old builds accept.
+    expect(installParams).not.toHaveProperty("allow_downgrade");
     expect(res.text).toContain("staged the update");
+
+    const rollback = await service.updateDeviceApp(
+      "phone",
+      apk,
+      undefined,
+      true,
+    );
+    expect(rollback.ok).toBe(true);
+    expect(installParams?.allow_downgrade).toBe(true);
   });
 
   it("update_device refuses a device without the install_apk capability", async () => {
@@ -1221,6 +1233,51 @@ describe("MeshService hardening", () => {
     expect("target" in exact && exact.target.id).toBe("a");
   });
 
+  it("resolves devices by id prefix when 6 or more characters match uniquely", async () => {
+    const service = await tempService();
+    await service.register({
+      id: "d011287b-0a24-4a51-bffd-129855b85f39",
+      name: "Fedora Linux",
+      platform: "linux",
+      appVersion: "5.12.0",
+    });
+    await service.register({
+      id: "e98a1234-5678-9abc-def0-123456789abc",
+      name: "Fedora Linux",
+      platform: "linux",
+      appVersion: "5.12.0",
+    });
+
+    const res = service.resolveDevice("d01128");
+    expect("target" in res && res.target.id).toBe(
+      "d011287b-0a24-4a51-bffd-129855b85f39",
+    );
+
+    const bothRes = service.resolveDevice("Fedora Linux");
+    expect("error" in bothRes && bothRes.error).toContain("matches 2 devices");
+    expect("error" in bothRes && bothRes.error).toContain("Use the device id.");
+  });
+
+  it("gateway meshHandlers accept deviceId as an alternative to device", async () => {
+    const service = await tempService();
+    setMeshService(service);
+    await service.register({
+      id: "device-uuid-123456",
+      name: "Workstation",
+      platform: "linux",
+      appVersion: "5.12.0",
+    });
+
+    const res = await meshHandlers.get_device_status(
+      { action: "get_device_status", deviceId: "device-uuid-123456" } as any,
+      1,
+      undefined,
+      "1",
+    );
+    expect(res.ok).toBe(false);
+    expect(res.text).toContain("Workstation");
+  });
+
   it("clamps oversized exec output with an explicit truncation marker", async () => {
     const service = await tempService({ commandTimeoutMs: 2_000 });
     await service.register({
@@ -1260,12 +1317,12 @@ describe("MeshService hardening", () => {
 describe("MeshService registry hygiene", () => {
   const mac = (id: string): Record<string, unknown> => ({
     id,
-    name: "Dylan's MacBook Pro",
+    name: "Ada's MacBook Pro",
     platform: "macos",
     appVersion: "1.0.0",
   });
 
-  it("evicts an offline same-name duplicate when a fresh install registers", async () => {
+  it("preserves offline same-name devices when another device registers", async () => {
     const service = await tempService();
     await service.storeLocation({
       deviceId: "mac-old",
@@ -1273,16 +1330,14 @@ describe("MeshService registry hygiene", () => {
       lon: -6.2,
       ts: Date.now() - 10 * 60_000,
     });
-    // Old install last beat 10 minutes ago — well past the presence timeout.
-    // (Registered after the location: storeLocation counts as a heartbeat
-    // and would otherwise refresh lastSeen to now.)
     await service.register(mac("mac-old"), Date.now() - 10 * 60_000);
     await service.register(mac("mac-new"));
 
     const { devices } = await service.list();
-    expect(devices.map((d) => d.id)).toEqual(["mac-new"]);
-    // The ghost's location went with it.
-    expect(await service.getLocation("mac-old")).toBeUndefined();
+    expect(devices.map((d) => d.id).sort()).toEqual(["mac-new", "mac-old"]);
+    // Both devices exist independently; offline device's location is preserved.
+    expect(await service.getLocation("mac-old")).toBeDefined();
+    expect((await service.getLocation("mac-old"))?.lat).toBe(53.1);
   });
 
   it("keeps an ONLINE same-name doppelganger (two live devices may share a name)", async () => {
@@ -1325,7 +1380,7 @@ describe("MeshService registry hygiene", () => {
       "1",
     );
     expect(res.ok).toBe(true);
-    expect(res.text).toContain("Removed Dylan's MacBook Pro [id: mac-old]");
+    expect(res.text).toContain("Removed Ada's MacBook Pro [id: mac-old]");
     // Offline removal carries no re-register warning.
     expect(res.text).not.toContain("re-registers");
 
@@ -1390,6 +1445,12 @@ describe("MeshService registry bounds", () => {
     expect(devices).toHaveLength(1);
   });
 
+  // 130 sequential registrations each do a real, awaited fs write (mkdtemp +
+  // write + rename) — comfortably fast normally, but this is the one test in
+  // the file with enough of them that heavy disk/CPU contention from a
+  // full-suite run can push it past the default 15s testTimeout even though
+  // nothing is actually wrong. See the identical rationale in
+  // vitest.config.ts for the global timeout bump.
   it("caps the registry, evicting the least-recently-seen device", async () => {
     const service = await tempService();
     // 130 registrations into a 128-device registry, oldest first: the two
@@ -1413,7 +1474,45 @@ describe("MeshService registry bounds", () => {
     expect(ids.has("node-1")).toBe(false);
     expect(ids.has("node-2")).toBe(true);
     expect(ids.has("node-129")).toBe(true);
-  });
+  }, 30_000);
+
+  it("breaks a last-seen tie deterministically instead of picking an arbitrary survivor", async () => {
+    const service = await tempService();
+    // Three devices registered with the EXACT same lastSeen (a real
+    // possibility: a bulk backfill, or two heartbeats landing in the same
+    // millisecond) followed by 127 devices with strictly newer timestamps —
+    // 130 total against a 128 cap, so the tied group must supply both
+    // evictions. Eviction breaks the tie by registration order (earlier
+    // registration = staler), so node-0 and node-1 (registered first among
+    // the tied trio) go and node-2 (registered last among them) survives —
+    // deterministically, not by however `Array.prototype.sort` happens to
+    // handle equal keys.
+    const tiedTs = Date.now() - 200 * 60_000;
+    for (const id of ["node-0", "node-1", "node-2"]) {
+      await service.register(
+        { id, name: id, platform: "linux", appVersion: "1.0.0" },
+        tiedTs,
+      );
+    }
+    for (let i = 3; i < 130; i++) {
+      await service.register(
+        {
+          id: `node-${i}`,
+          name: `Node ${i}`,
+          platform: "linux",
+          appVersion: "1.0.0",
+        },
+        tiedTs + (i - 2) * 60_000,
+      );
+    }
+    const { devices } = await service.list();
+    expect(devices).toHaveLength(128);
+    const ids = new Set(devices.map((d) => d.id));
+    expect(ids.has("node-0")).toBe(false);
+    expect(ids.has("node-1")).toBe(false);
+    expect(ids.has("node-2")).toBe(true);
+    expect(ids.has("node-129")).toBe(true);
+  }, 30_000);
 
   it("bounds locations reported by ids that never registered", async () => {
     const service = await tempService();
@@ -1565,6 +1664,35 @@ describe("MeshService node provisioning", () => {
     expect(calls).toEqual(["linux/arm64"]);
   });
 
+  it("always sends the digest, and allow_downgrade only when asked", async () => {
+    const { resolver } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    await registerNode(service);
+    const sent: Record<string, unknown>[] = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) => {
+        if (cmd.name === "update_node") sent.push(cmd.params);
+        queueMicrotask(() =>
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+          }),
+        );
+      },
+    });
+
+    expect((await service.updateNodeBinary("srv")).ok).toBe(true);
+    expect(
+      (await service.updateNodeBinary("srv", undefined, undefined, true)).ok,
+    ).toBe(true);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(sent[0]).not.toHaveProperty("allow_downgrade");
+    expect(sent[1]?.allow_downgrade).toBe(true);
+  });
+
   it("asks for an explicit binary when the node never advertised arch", async () => {
     const service = await tempService();
     await registerNode(service, { arch: undefined });
@@ -1605,15 +1733,131 @@ describe("MeshService node provisioning", () => {
     );
 
     const token = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
-    const install = service.openNodeInstall(token);
+    const install = await service.openNodeInstall(token);
     expect(install?.filename).toBe("install-talon-node.sh");
     expect(install?.script).toContain("bearer-secret");
-    expect(service.openNodeInstall(token)).toBeNull();
+    expect(await service.openNodeInstall(token)).toBeNull();
     expect(service.openNodeBinary(token)).toEqual({
       path: binaryPath,
       size: 16,
     });
     expect(service.openNodeBinary(token)).toBeNull();
+  });
+
+  it("pins install links to the bridge key and refuses shell-unsafe URLs", async () => {
+    const { resolver } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    const pin = "pL1+qb9HTMRZJmuC/bB/ZI9d302BYrrqiVuRyW+DGrU=";
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "100.64.0.7",
+      port: 19880,
+      token: "bearer-secret",
+      fingerprint: "cd".repeat(32),
+      spkiPin: pin,
+    });
+
+    const pinned = await service.makeNodeInstallLink("linux", "amd64");
+    expect(pinned.text).toContain(`--pinnedpubkey "sha256//${pin}"`);
+
+    for (const bad of [
+      'https://x/"; id; "',
+      "https://x/$(id)",
+      "https://x/`id`",
+      "file:///etc/passwd",
+    ]) {
+      const refused = await service.makeNodeInstallLink(
+        "linux",
+        "amd64",
+        undefined,
+        bad,
+      );
+      expect(refused.ok).toBe(false);
+      expect(refused.text).toContain("bridge_url must be a plain http(s) URL");
+    }
+
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "0.0.0.0",
+      port: 19880,
+      token: "bearer-secret",
+      publicUrl: "https://talon.example/$(reboot)",
+    });
+    const badPublic = await service.makeNodeInstallLink("linux", "amd64");
+    expect(badPublic.ok).toBe(false);
+    expect(badPublic.text).toContain("native.publicUrl must be");
+  });
+
+  it("mints an auto-detect link that resolves the binary from the host's reported platform", async () => {
+    const { resolver, binaryPath, calls } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "0.0.0.0",
+      port: 19880,
+      token: "bearer-secret",
+      fingerprint: "cd".repeat(32),
+      publicUrl: "https://mesh.example.org/",
+    });
+
+    const minted = await service.makeNodeInstallLink(undefined, undefined);
+    expect(minted.ok).toBe(true);
+    expect(minted.text).toContain(
+      'curl -fsSk "https://mesh.example.org/node/install?provision=',
+    );
+    expect(minted.text).toContain('&os=$(uname -s)&arch=$(uname -m)" | sh');
+    expect(minted.text).toContain("$env:PROCESSOR_ARCHITECTURE");
+    // Nothing is resolved until the host reports in.
+    expect(calls).toEqual([]);
+
+    const token = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
+    // A platform with no build fails loudly and leaves the grant unspent.
+    const refused = await service.openNodeInstall(token, "Plan9", "mips");
+    expect(refused?.script).toContain("exit 1");
+    expect(refused?.script).toContain("refused");
+    expect(service.openNodeBinary(token)).toBeNull();
+
+    const install = await service.openNodeInstall(token, "Linux", "aarch64");
+    expect(calls).toEqual(["linux/arm64"]);
+    expect(install?.filename).toBe("install-talon-node.sh");
+    expect(install?.script).toContain(`SHA="${"ab".repeat(32)}"`);
+    expect(install?.script).toContain("for linux/arm64");
+    expect(await service.openNodeInstall(token, "Linux", "aarch64")).toBeNull();
+    expect(service.openNodeBinary(token)).toEqual({
+      path: binaryPath,
+      size: 16,
+    });
+    expect(service.openNodeBinary(token)).toBeNull();
+  });
+
+  it("auto links serve the PowerShell installer to a Windows host", async () => {
+    const { resolver, calls } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "100.64.0.7",
+      port: 19880,
+      token: "bearer-secret",
+    });
+    const minted = await service.makeNodeInstallLink("", "");
+    const token = /provision=([A-Za-z0-9_-]+)/.exec(minted.text)![1]!;
+    const install = await service.openNodeInstall(token, "windows", "AMD64");
+    expect(calls).toEqual(["windows/amd64"]);
+    expect(install?.filename).toBe("install-talon-node.ps1");
+  });
+
+  it("rejects a half-specified target instead of guessing", async () => {
+    const { resolver } = await stubResolver();
+    const service = await tempService({ nodeBinaryResolver: resolver });
+    service.setBridgeInfo({
+      scheme: "https",
+      host: "100.64.0.7",
+      port: 19880,
+      token: "bearer-secret",
+    });
+    const half = await service.makeNodeInstallLink("linux", undefined);
+    expect(half.ok).toBe(false);
+    expect(half.text).toContain("No talon-node target");
   });
 
   it("refuses install links when the bridge is loopback-only or absent", async () => {
@@ -1631,5 +1875,227 @@ describe("MeshService node provisioning", () => {
     const loopback = await service.makeNodeInstallLink("linux", "amd64");
     expect(loopback.ok).toBe(false);
     expect(loopback.text).toContain("loopback");
+  });
+});
+
+/**
+ * A command for a device that is between streams (the daemon restarted, the
+ * device is reconnecting) used to go nowhere and burn its whole timeout.
+ * The transport now says "no live connection", the mesh holds the command,
+ * and either delivers it when the device's stream returns or fails fast.
+ */
+describe("MeshService command hold across a reconnect", () => {
+  /** A transport whose device is offline until `connect()`; it answers ok. */
+  function reconnectingTransport(service: MeshService) {
+    let connected = false;
+    const offers: string[] = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) => {
+        offers.push(cmd.id);
+        if (!connected) return false;
+        queueMicrotask(() =>
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            message: `ran ${cmd.name}`,
+          }),
+        );
+        return true;
+      },
+    });
+    return {
+      offers,
+      connect: () => {
+        connected = true;
+        service.deviceConnected("phone");
+      },
+    };
+  }
+
+  async function phone(service: MeshService) {
+    await registerPhone(service);
+    const { devices } = await service.list();
+    return devices.find((d) => d.id === "phone")!;
+  }
+
+  it("delivers a command sent while the device has no live stream once it reconnects", async () => {
+    const service = await tempService({ commandHoldMs: 2_000 });
+    const device = await phone(service);
+    const transport = reconnectingTransport(service);
+
+    const pending = service.sendCommand(device, "ring", {}, 5_000);
+    setTimeout(() => transport.connect(), 50);
+    const result = await pending;
+
+    expect(result).toMatchObject({ ok: true, message: "ran ring" });
+    // Offered once (refused), then again when the stream came back.
+    expect(transport.offers).toHaveLength(2);
+    expect(new Set(transport.offers).size).toBe(1);
+  });
+
+  it("fails fast, saying it was not delivered, when the device stays away", async () => {
+    const service = await tempService({ commandHoldMs: 80 });
+    const device = await phone(service);
+    reconnectingTransport(service);
+
+    const started = Date.now();
+    const result = await service.sendCommand(device, "ring", {}, 5_000);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("no live connection to the bridge");
+    expect(result.message).toContain('"ring" was not delivered');
+    // The hold window, not the 5 s command timeout.
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it("does not send a command after it has failed", async () => {
+    const service = await tempService({ commandHoldMs: 40 });
+    const device = await phone(service);
+    const transport = reconnectingTransport(service);
+
+    const result = await service.sendCommand(device, "ring", {}, 5_000);
+    expect(result.ok).toBe(false);
+    transport.connect();
+    expect(transport.offers).toHaveLength(1);
+  });
+
+  it("leaves a held command alone when a different device reconnects", async () => {
+    const service = await tempService({ commandHoldMs: 2_000 });
+    const device = await phone(service);
+    const transport = reconnectingTransport(service);
+
+    const pending = service.sendCommand(device, "ring", {}, 5_000);
+    service.deviceConnected("laptop");
+    expect(transport.offers).toHaveLength(1);
+    transport.connect();
+    expect((await pending).ok).toBe(true);
+  });
+
+  it("never holds longer than the command's own timeout", async () => {
+    const service = await tempService({ commandHoldMs: 60_000 });
+    const device = await phone(service);
+    reconnectingTransport(service);
+
+    const started = Date.now();
+    const result = await service.sendCommand(device, "status", {}, 100);
+    expect(result.message).toContain("was not delivered");
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  /**
+   * A device back with only a moment of the timeout left could run the
+   * command after the caller was told it failed, and a retry would run it
+   * twice. Held commands stop being deliverable max(3 s, 10%) before the
+   * deadline and fail as undelivered instead.
+   */
+  describe("delivery margin before the deadline", () => {
+    afterEach(() => vi.useRealTimers());
+    const fakeClock = () =>
+      vi.useFakeTimers({
+        toFake: [
+          "setTimeout",
+          "clearTimeout",
+          "setInterval",
+          "clearInterval",
+          "Date",
+        ],
+      });
+
+    it("does not deliver a held command with too little of its timeout left", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      const pending = service.sendCommand(device, "ring", {}, 12_000);
+      // The device is back 0.5 s before the 12 s deadline.
+      await vi.advanceTimersByTimeAsync(11_500);
+      transport.connect();
+      const result = await pending;
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('"ring" was not delivered');
+      // Never offered again: it cannot have run on the device.
+      expect(transport.offers).toHaveLength(1);
+    });
+
+    it("fails as soon as the margin is reached, not at the deadline", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      reconnectingTransport(service);
+      fakeClock();
+
+      let result: Awaited<ReturnType<MeshService["sendCommand"]>> | undefined;
+      void service.sendCommand(device, "ring", {}, 12_000).then((r) => {
+        result = r;
+      });
+      await vi.advanceTimersByTimeAsync(8_900);
+      expect(result).toBeUndefined();
+      // 12 s − max(3 s, 1.2 s) = 9 s.
+      await vi.advanceTimersByTimeAsync(200);
+      expect(result).toMatchObject({ ok: false });
+      expect(result!.message).toContain("did not reconnect within 9s");
+    });
+
+    it("still delivers when the device is back before the margin", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      const pending = service.sendCommand(device, "ring", {}, 12_000);
+      await vi.advanceTimersByTimeAsync(8_500);
+      transport.connect();
+      expect(await pending).toMatchObject({ ok: true, message: "ran ring" });
+    });
+
+    it("scales the margin to 10% of a long timeout", async () => {
+      const service = await tempService({ commandHoldMs: 600_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      // 100 s budget: the margin is 10 s, not 3 s, so 8 s left is too late.
+      const pending = service.sendCommand(device, "exec", {}, 100_000);
+      await vi.advanceTimersByTimeAsync(92_000);
+      transport.connect();
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("did not reconnect within 90s");
+      expect(transport.offers).toHaveLength(1);
+    });
+
+    it("fails a held command at once when the device reconnects past the margin before the hold timer fires", async () => {
+      const service = await tempService({ commandHoldMs: 60_000 });
+      const device = await phone(service);
+      const transport = reconnectingTransport(service);
+      fakeClock();
+
+      const pending = service.sendCommand(device, "ring", {}, 12_000);
+      // The clock moves past the margin without timers running (a stalled
+      // event loop): the reconnect itself must refuse to deliver.
+      vi.setSystemTime(Date.now() + 9_500);
+      transport.connect();
+      const result = await pending;
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain('"ring" was not delivered');
+      expect(transport.offers).toHaveLength(1);
+    });
+  });
+
+  it("fails at once with a zero hold", async () => {
+    const service = await tempService();
+    service.setCommandHoldMs(0);
+    const device = await phone(service);
+    reconnectingTransport(service);
+
+    const started = Date.now();
+    const result = await service.sendCommand(device, "ring", {}, 5_000);
+    expect(result.message).toBe(
+      'Pixel 9 has no live connection to the bridge, so "ring" was not delivered.',
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
   });
 });

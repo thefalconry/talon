@@ -15,7 +15,7 @@
  * PRUNE_EVERY appends) rather than on a timer.
  */
 
-import { logError } from "../util/log.js";
+import { logError, logWarn } from "../util/log.js";
 import * as repo from "./repositories/journal-repo.js";
 
 /**
@@ -82,6 +82,7 @@ export function readJournal<E extends JournalRecord = JournalRecord>(
     ? repo.recentByType(options.type, limit)
     : repo.recent(limit);
   const entries: JournalEntry<E>[] = [];
+  const corrupt: number[] = [];
   for (const row of rows) {
     try {
       entries.push({
@@ -90,8 +91,14 @@ export function readJournal<E extends JournalRecord = JournalRecord>(
         event: JSON.parse(row.payload) as E,
       });
     } catch {
-      // skip the corrupt row
+      corrupt.push(row.seq); // skip the corrupt row
     }
+  }
+  if (corrupt.length > 0) {
+    logWarn(
+      "journal",
+      `Skipped ${corrupt.length} corrupt journal row(s) seq=${corrupt.slice(0, 5).join(",")}`,
+    );
   }
   return entries;
 }

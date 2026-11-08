@@ -19,7 +19,6 @@
  *   - Bindings (server-bindings.ts, chat-turn.ts, turn.ts, factory.ts) —
  *     the helpers closed over one backend's state, the SSE-driven turn,
  *     the chat-turn orchestration, and the registry factory composition.
- *     This is where the code that used to be copied per backend lives.
  *
  *   - Profiles (`profiles/bind.ts` + `profiles/{kilo,opencode}.ts`) —
  *     `bindRemoteProfile` closes all of the above over one driver's

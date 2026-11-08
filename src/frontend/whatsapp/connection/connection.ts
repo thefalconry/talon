@@ -11,7 +11,10 @@ import makeWASocket, { type AuthenticationState, type WASocket } from "baileys";
 import qrcode from "qrcode-terminal";
 import { log, logError, logWarn } from "../../../util/log.js";
 import { dirs } from "../../../util/paths.js";
-import { notifyAdmin } from "../../../core/frontend-runtime/admin-notify.js";
+import {
+  raiseAlert,
+  resolveAlert,
+} from "../../../core/frontend-runtime/alerts.js";
 import { useAtomicAuthState } from "./auth-state.js";
 import { bareId } from "./identity.js";
 import { handleInbound } from "../messages/inbound.js";
@@ -23,6 +26,7 @@ import {
   type WhatsAppRuntime,
 } from "../runtime.js";
 import { makeWaLogger } from "./wa-logger.js";
+import { errorText } from "../../health/outage.js";
 
 /** What the connection loop should do after a socket ends. */
 type ConnectOutcome = "reconnect" | "logged-out" | "unpaired" | "stop";
@@ -64,9 +68,11 @@ function onQr(runtime: WhatsAppRuntime, qr: string): void {
   qrcode.generate(qr, { small: true });
   if (!runtime.unpairedNotified) {
     runtime.unpairedNotified = true;
-    void notifyAdmin(
-      "📱 WhatsApp is not linked. Send /whatsapp pair when you're " +
+    raiseAlert(
+      "whatsapp.linked",
+      "WhatsApp is not linked. Send /whatsapp pair when you're " +
         "ready and I'll reply with a QR to scan.",
+      { severity: "warn" },
     );
   }
 }
@@ -77,10 +83,10 @@ function onOpen(runtime: WhatsAppRuntime, socket: WASocket): void {
     .filter((id): id is string => Boolean(id))
     .map(bareId);
   runtime.reconnectDelay = RECONNECT_BASE_MS;
-  if (runtime.unpairedNotified) {
-    void notifyAdmin("✅ WhatsApp linked and connected.");
-  }
+  // Announces only when a "not linked" / "unlinked" alert went out.
+  resolveAlert("whatsapp.linked", "WhatsApp linked and connected.");
   runtime.unpairedNotified = false;
+  runtime.health.opened();
   log(
     "whatsapp",
     `Connected as ${socket.user?.name ?? "?"} (${runtime.selfIds.join("/") || "?"})`,
@@ -91,6 +97,7 @@ function onClose(
   runtime: WhatsAppRuntime,
   state: AuthenticationState,
   code: number | undefined,
+  reason: string,
 ): ConnectOutcome {
   if (runtime.stopping) return "stop";
   const disposition = classifyClose(code, state.creds.registered);
@@ -113,6 +120,7 @@ function onClose(
         "whatsapp",
         "Connection replaced by another client (440) — backing off",
       );
+      runtime.health.noteClose("replaced by another client (440)");
       runtime.reconnectDelay = REPLACED_BACKOFF_MS;
       return "reconnect";
     case "logged-out":
@@ -128,6 +136,7 @@ function onClose(
       // session on its first ordinary disconnect.
       if (!isPaired(state.creds)) return "unpaired";
       log("whatsapp", `Connection closed (code ${code ?? "?"}) — reconnecting`);
+      runtime.health.noteClose(`code=${code ?? "?"} ${reason}`);
       return "reconnect";
   }
 }
@@ -163,6 +172,9 @@ async function connectOnce(
   // Atomic replacement for Baileys' useMultiFileAuthState — same disk
   // format, torn-write-proof (see auth-state.ts for why that matters).
   const { state, saveCreds } = await useAtomicAuthState(dirs.whatsappAuth);
+  // stop() ends runtime.sock, which is still null while auth loads; a
+  // socket built after it would never close and stop() would wait forever.
+  if (runtime.stopping) return "stop";
   const socket = makeWASocket({
     auth: state,
     logger: makeWaLogger(),
@@ -195,7 +207,8 @@ async function connectOnce(
           lastDisconnect?.error as
             { output?: { statusCode?: number } } | undefined
         )?.output?.statusCode;
-        resolve(onClose(runtime, state, code));
+        const reason = errorText(lastDisconnect?.error ?? "closed");
+        resolve(onClose(runtime, state, code, reason));
       }
     });
   });
@@ -260,6 +273,7 @@ export async function runConnectionLoop(
   try {
     await connectionLoop(runtime, signalReady);
   } finally {
+    runtime.health.dispose();
     signalReady();
     log("whatsapp", "WhatsApp connection loop ended");
   }
@@ -290,6 +304,7 @@ async function connectionLoop(
       // half-written auth dir, say) must not hold the boot open while
       // the loop keeps trying.
       signalReady();
+      runtime.health.noteClose(`socket error: ${errorText(err)}`);
       outcome = "reconnect";
     }
     runtime.sock = null;
@@ -306,10 +321,13 @@ async function connectionLoop(
         "whatsapp",
         "Logged out by WhatsApp — parked until /whatsapp pair re-links",
       );
-      void notifyAdmin(
-        "⚠️ WhatsApp unlinked this device. When you're ready to " +
+      runtime.health.dispose();
+      raiseAlert(
+        "whatsapp.linked",
+        "WhatsApp unlinked this device. When you're ready to " +
           "re-link, send /whatsapp pair and scan the QR I reply with. " +
           "Nothing is retried until then.",
+        { severity: "warn" },
       );
       rmSync(dirs.whatsappAuth, { recursive: true, force: true });
       await parkUntilPaired(runtime);
@@ -318,10 +336,12 @@ async function connectionLoop(
     }
     if (outcome === "unpaired") {
       log("whatsapp", "Not paired — parked until /whatsapp pair links");
+      runtime.health.dispose();
       await parkUntilPaired(runtime);
       runtime.reconnectDelay = RECONNECT_BASE_MS;
       continue;
     }
+    runtime.health.reconnecting(runtime.reconnectDelay);
     await sleep(runtime, runtime.reconnectDelay);
     runtime.reconnectDelay = Math.min(
       runtime.reconnectDelay * 2,

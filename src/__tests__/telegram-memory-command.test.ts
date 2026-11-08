@@ -25,6 +25,10 @@ vi.mock("../util/log.js", () => ({
 }));
 
 import { registerMemoryCommand } from "../frontend/telegram/commands/memory.js";
+import { setAdminUserId } from "../frontend/telegram/commands/state.js";
+
+const ADMIN = 111;
+setAdminUserId(ADMIN);
 import { assertMemory, supersedeMemory } from "../storage/memory.js";
 
 let seq = 0;
@@ -47,10 +51,15 @@ function captureHandler(): (ctx: unknown) => Promise<void> {
 }
 
 /** Run `/memory <arg>` and return the replies it produced. */
-async function runMemory(arg: string): Promise<Reply[]> {
+async function runMemory(
+  arg: string,
+  who: { fromId?: number; chatId?: number; chatType?: string } = {},
+): Promise<Reply[]> {
   const replies: Reply[] = [];
+  const fromId = who.fromId ?? ADMIN;
   const ctx = {
-    chat: { id: -100999 },
+    chat: { id: who.chatId ?? fromId, type: who.chatType ?? "private" },
+    from: { id: fromId, first_name: "T" },
     match: arg,
     reply: async (text: string, opts?: { parse_mode?: string }) => {
       replies.push({ text, opts });
@@ -189,5 +198,29 @@ describe("/memory why", () => {
   it("reports an unknown id", async () => {
     const text = await memoryText("why 987654321");
     expect(text).toBe("No memory with id 987654321.");
+  });
+});
+
+describe("/memory access", () => {
+  it("refuses a non-admin in a DM", async () => {
+    const replies = await runMemory("", { fromId: 999 });
+    expect(replies.map((r) => r.text).join("")).toBe("Not authorized.");
+  });
+
+  it("refuses a non-admin in a group, without hinting at DMs", async () => {
+    const replies = await runMemory("", {
+      fromId: 999,
+      chatId: -1002193667550,
+      chatType: "supergroup",
+    });
+    expect(replies.map((r) => r.text).join("")).toBe("Not authorized.");
+  });
+
+  it("refuses even the admin in a group — every member would see it", async () => {
+    const replies = await runMemory("", {
+      chatId: -1002193667550,
+      chatType: "supergroup",
+    });
+    expect(replies.map((r) => r.text).join("")).toMatch(/DM/);
   });
 });

@@ -24,7 +24,8 @@ vi.mock("pino-pretty", () => ({
   default: () => ({ write: vi.fn(), on: vi.fn() }),
 }));
 
-const { log, logError, logWarn, logDebug } = await import("../util/log.js");
+const { log, logError, logWarn, logDebug, onLogError } =
+  await import("../util/log.js");
 
 describe("log", () => {
   beforeEach(() => {
@@ -133,6 +134,30 @@ describe("log", () => {
         { component: "agent" },
         "processing query",
       );
+    });
+  });
+
+  describe("onLogError(listener)", () => {
+    it("feeds every logError to the listener, never re-entrantly", () => {
+      const seen: string[] = [];
+      onLogError((component, message, err) => {
+        seen.push(`${component}:${message}:${String(err)}`);
+        logError("bot", "from inside the listener");
+      });
+      logError("cron", "job failed", "ETIMEDOUT");
+      onLogError(null);
+      logError("cron", "after clear");
+      expect(seen).toEqual(["cron:job failed:ETIMEDOUT"]);
+      expect(mockError).toHaveBeenCalledTimes(3);
+    });
+
+    it("never lets a throwing listener break logError", () => {
+      onLogError(() => {
+        throw new Error("listener bug");
+      });
+      expect(() => logError("bot", "still logged")).not.toThrow();
+      onLogError(null);
+      expect(mockError).toHaveBeenCalledOnce();
     });
   });
 });

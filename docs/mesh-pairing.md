@@ -8,6 +8,10 @@ problem.
 
 `/mesh link` removes the typing.
 
+The token a link carries is a **per-device credential** minted for the phone
+that redeems it (device + chat UI scopes), not the daemon's shared token —
+see [mesh-credentials.md](mesh-credentials.md).
+
 ## From Telegram
 
 ```

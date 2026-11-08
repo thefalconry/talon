@@ -23,6 +23,7 @@
 
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import {
   chmod,
   mkdir,
@@ -57,7 +58,7 @@ export const NODE_TARGETS: readonly NodeTarget[] = [
 ];
 
 const SUMS_ASSET = "talon-node-SHA256SUMS";
-const RELEASE_BASE = "https://github.com/dylanneve1/talon/releases/download";
+const RELEASE_BASE = "https://github.com/thefalconry/talon/releases/download";
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const BUILD_TIMEOUT_MS = 300_000;
 
@@ -382,12 +383,18 @@ async function pruneStaleVersions(
   }
 }
 
-async function hashFile(
+/** Stream a file through SHA-256 without loading it into memory (APKs are big
+ *  and Buffer has a hard ceiling). Returns the hex digest and byte size. */
+export async function hashFile(
   path: string,
 ): Promise<{ sha256: string; size: number }> {
-  const data = await readFile(path);
-  return {
-    sha256: createHash("sha256").update(data).digest("hex"),
-    size: data.length,
-  };
+  const { size } = await stat(path);
+  const hash = createHash("sha256");
+  await new Promise<void>((resolve, reject) => {
+    createReadStream(path)
+      .on("data", (chunk) => hash.update(chunk))
+      .on("end", () => resolve())
+      .on("error", reject);
+  });
+  return { sha256: hash.digest("hex"), size };
 }

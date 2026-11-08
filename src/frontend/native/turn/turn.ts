@@ -9,6 +9,7 @@
 import type { ExecuteResult } from "../../../core/types.js";
 import type { AgentEvent } from "../../../core/agent-runtime/events.js";
 import { execute } from "../../../core/engine/dispatcher.js";
+import { LOCAL_OPERATOR_SENDER } from "../../../core/mcp-hub/guest-scope.js";
 import { toolInputToRecord } from "../../../core/agent-runtime/events.js";
 import { getBackendForChat } from "../../../core/engine/backend-controller/index.js";
 import { isDeliveryTool } from "../../../core/tools/index.js";
@@ -101,10 +102,8 @@ export function liveTurnEvents(runtime: NativeRuntime): BridgeEvent[] {
 
 /**
  * Safety net: any tool the backend announced but never resolved (a crash can
- * eat a tool_result; callback backends historically never emitted one —
- * handler-to-events now pairs each tool_call with an immediate synthetic
- * result) gets a synthetic result at turn end — a spinner the app opened on
- * phase:"call" must always see a phase:"result".
+ * eat a tool_result) gets a synthetic result at turn end — a spinner the app
+ * opened on phase:"call" must always see a phase:"result".
  */
 function flushOpenTools(
   runtime: NativeRuntime,
@@ -294,6 +293,7 @@ async function runTurn(
       numericChatId: entry.numericId,
       prompt,
       senderName: "User",
+      senderKeys: [LOCAL_OPERATOR_SENDER],
       isGroup: false,
       // Give the model the user message's id so `[msg_id:N]` is present and
       // react/reply/edit target the user's message — not the bot's.
@@ -310,14 +310,14 @@ async function runTurn(
     // clients. Any late tool spinner has already been flushed above.
     runtime.liveTurns.delete(entry.id);
     // Flush a queued follow-up as a fresh turn: "once it's done it will
-    // send". Deferred so we don't re-enter runTurn inside its own finally.
+    // send". Started synchronously so the chat never looks idle in between —
+    // a /send landing in a deferred gap would start its own turn and run
+    // ahead of the message that was queued first.
     const queued = takeQueued(runtime, entry);
     if (queued) {
-      setImmediate(() =>
-        startTurn(runtime, entry, queued.text, {
-          attachments: queued.attachments,
-        }),
-      );
+      startTurn(runtime, entry, queued.text, {
+        attachments: queued.attachments,
+      });
     }
   }
 }

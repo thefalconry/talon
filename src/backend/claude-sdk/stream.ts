@@ -2,8 +2,8 @@
  * Typed stream processing helpers for SDK messages.
  *
  * Each function operates on a properly narrowed SDK message type —
- * no Record<string, unknown> casts. The StreamState accumulator
- * replaces the scattered local variables from the original handler.
+ * no Record<string, unknown> casts. StreamState is the turn's single
+ * accumulator.
  */
 
 import type {

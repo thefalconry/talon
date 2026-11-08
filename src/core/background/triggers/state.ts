@@ -9,12 +9,15 @@ import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { execute as dispatcherExecute } from "../../engine/dispatcher.js";
 import { log } from "../../../util/log.js";
+import { getTriggerCaps, setTriggerCaps, type TriggerCaps } from "./caps.js";
 
 // ── Dependencies (injected at startup) ──────────────────────────────────────
 
 export type TriggerDeps = {
   /** Used for terminal "fired"/"errored" wake prompts that go through the model. */
   execute: typeof dispatcherExecute;
+  /** Per-chat caps from `config.triggers`; defaults apply when absent. */
+  caps?: Partial<TriggerCaps>;
 };
 
 /** Reassignable on a holder object so submodules see the injected deps. */
@@ -52,7 +55,15 @@ export const WARDEN_GRACE_SLACK_MS = 2_000;
 export function initTriggers(d: TriggerDeps): void {
   depsHolder.deps = d;
   lifecycle.shuttingDown = false;
-  log("triggers", "Initialized");
+  setTriggerCaps(d.caps);
+  const caps = getTriggerCaps();
+  log(
+    "triggers",
+    `Initialized — maxActivePerChat=${caps.maxActivePerChat}` +
+      (caps.maxPersistentPerChat !== undefined
+        ? ` maxPersistentPerChat=${caps.maxPersistentPerChat}`
+        : ""),
+  );
 }
 
 /** Number of triggers currently running. */

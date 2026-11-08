@@ -140,6 +140,17 @@ function errorCodes(err: unknown, depth = 0): string[] {
 // ── Classify any error ──────────────────────────────────────────────────────
 
 /**
+ * A backend session that expired or no longer exists. Claude's CLI answers
+ * a resume of a session whose transcript is missing with "No conversation
+ * found with session ID: …" — a definite not-found; without the match
+ * every later turn in the chat fails the same way. The reset that follows
+ * archives the old id (resetSession), so a transcript that turns up again
+ * can be re-attached.
+ */
+const SESSION_EXPIRED_RE =
+  /session.*expired|expired.*session|invalid.*resume|no conversation found/i;
+
+/**
  * Wrap or classify any thrown value into a TalonError.
  * Call this at module boundaries (backend catch, bridge catch) to convert
  * raw errors into typed ones that callers can switch on.
@@ -247,8 +258,8 @@ export function classify(err: unknown): TalonError {
   }
 
   // 408 Request Timeout — a transient deadline like any other, but it
-  // is neither 4xx-terminal nor 5xx, so it used to fall through to
-  // `unknown`/non-retryable and strand the request.
+  // is neither 4xx-terminal nor 5xx, so without this branch it falls
+  // through to `unknown`/non-retryable and strands the request.
   if (status === 408) {
     return new TalonError(msg, {
       reason: "network",
@@ -259,8 +270,8 @@ export function classify(err: unknown): TalonError {
     });
   }
 
-  // Session expired
-  if (/session.*expired|expired.*session|invalid.*resume/i.test(msg)) {
+  // Session expired (or gone — see SESSION_EXPIRED_RE)
+  if (SESSION_EXPIRED_RE.test(msg)) {
     return new TalonError(msg, {
       reason: "session_expired",
       retryable: false,

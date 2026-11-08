@@ -74,12 +74,12 @@ describe("mem0 plugin", () => {
     const plugin = await makePlugin({
       apiKey: "m0-test",
       host: "http://localhost:8888",
-      userId: "dylan",
+      userId: "ada",
     });
     expect(plugin.getEnvVars?.({})).toEqual({
       MEM0_API_KEY: "m0-test",
       MEM0_HOST: "http://localhost:8888",
-      MEM0_USER_ID: "dylan",
+      MEM0_USER_ID: "ada",
     });
   });
 
@@ -92,9 +92,9 @@ describe("mem0 plugin", () => {
   });
 
   it("substitutes {{userId}} in the system prompt template", async () => {
-    const plugin = await makePlugin({ apiKey: "m0-test", userId: "dylan" });
+    const plugin = await makePlugin({ apiKey: "m0-test", userId: "ada" });
     const addition = plugin.getSystemPromptAddition?.({});
-    expect(addition).toContain("Entity id: `dylan`");
+    expect(addition).toContain("Entity id: `ada`");
     expect(addition).not.toContain("{{userId}}");
   });
 

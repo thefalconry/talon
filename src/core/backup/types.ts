@@ -29,7 +29,39 @@ export type SnapshotPart = {
    * targets may skip the upload entirely.
    */
   contentAddressed?: boolean;
+  /** Written through archive/crypt.ts (name ends in `.enc`). */
+  encrypted?: boolean;
+  /**
+   * Kept on this machine only — never handed to a remote target. Login
+   * sessions (WhatsApp, the userbot) are, unless `backup.loginSessions`
+   * is "remote". A restore from a remote copy skips a missing local-only
+   * part instead of failing.
+   */
+  localOnly?: boolean;
 };
+
+/**
+ * The MAC over a manifest (see archive/manifest-auth.ts). Present on
+ * every snapshot written with a backup passphrase.
+ */
+export type ManifestAuth = {
+  v: 1;
+  alg: "hmac-sha256";
+  kdf: "scrypt";
+  log2N: number;
+  r: number;
+  p: number;
+  /** base64 */
+  salt: string;
+  /** base64 */
+  mac: string;
+};
+
+/**
+ * Where WhatsApp and userbot login sessions may go: nowhere, the local
+ * snapshot store only, or also to remote targets.
+ */
+type LoginSessionsPolicy = "off" | "local" | "remote";
 
 /** Per-target upload state, mirrored into the `backup_remotes` table. */
 export type RemoteState = {
@@ -41,6 +73,29 @@ export type RemoteState = {
 
 /** Where an `extra/<n>/…` subtree came from, so restore can put it back. */
 type ExtraMapping = { n: number; source: string };
+
+/**
+ * A root captured from outside the Talon home — a backend's session
+ * store, a plugin checkout. `source` is the absolute path at snapshot
+ * time; a clone rewrites it for the new machine (see sources/relocate.ts).
+ */
+export type ExternalRoot = {
+  /** Archive path of the root (`sessions/claude/<slug>`, `plugin-src/<n>-<name>`). */
+  root: string;
+  source: string;
+  /** How a clone relocates it. */
+  kind: "claude-project" | "session-store" | "plugin";
+  /** A SQLite file captured via `VACUUM INTO`, not copied byte-wise. */
+  sqlite?: boolean;
+};
+
+/** The paths a snapshot was taken against — what a clone rewrites from. */
+export type SnapshotOrigin = {
+  /** The operating-system user's home directory. */
+  userHome: string;
+  /** The Talon home (`~/.talon`). */
+  home: string;
+};
 
 export type Manifest = {
   schema: 1;
@@ -60,11 +115,24 @@ export type Manifest = {
   excludes: string[];
   /** `extra/<n>` → absolute source path. */
   extras?: ExtraMapping[];
+  /** Session stores and plugin sources from outside the Talon home. */
+  external?: ExternalRoot[];
+  origin?: SnapshotOrigin;
   /** Tree fingerprint of the palace part, for content-addressed reuse. */
   palaceHash?: string;
   /** Total bytes of all parts. */
   sizeBytes: number;
   remote: Record<string, RemoteState>;
+  /**
+   * Epoch ms at which every part was read back and matched its digest
+   * (and, when encrypted, decrypted end to end) — see archive/verify.ts. Set
+   * before signing, so the MAC covers it. Absent on snapshots written
+   * before verification existed. Retention never prunes the newest
+   * verified snapshot.
+   */
+  verifiedAt?: number;
+  /** MAC under the backup passphrase; absent on plaintext/legacy snapshots. */
+  auth?: ManifestAuth;
 };
 
 /** A snapshot as the listing surfaces show it. */
@@ -86,11 +154,23 @@ export type BackupSettings = {
   intervalHours: number;
   keepLocal: number;
   keepRemote: number;
+  /** Newest snapshot per day, for this many days (0 = off). */
+  keepDaily: number;
+  /** Newest snapshot per ISO week, for this many weeks (0 = off). */
+  keepWeekly: number;
+  /** Unpinned checkpoints kept, apart from the scheduled snapshots. */
+  keepCheckpoints: number;
   includePalace: boolean;
+  /** WhatsApp auth + userbot session: see {@link LoginSessionsPolicy}. */
+  loginSessions: LoginSessionsPolicy;
+  /** Backend session transcripts and traces, in a part of their own. */
+  includeSessions: boolean;
   workspaceInclude: readonly string[];
   extraPaths: readonly string[];
   /** Unset = every registered target; `[]` = local only. */
   targets?: readonly string[];
   checkpointBeforeUpdate: boolean;
   notifyChatId?: string;
+  /** Present = snapshots must be encrypted (see passphrase.ts). */
+  encryption?: { passphraseFile?: string };
 };

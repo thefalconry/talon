@@ -1,12 +1,23 @@
 name: CodeQL
 
+# Full analysis on every push to main and weekly. On PRs only when the
+# TypeScript under src/ (or this workflow) changes — CodeQL is not a
+# required check, so a path filter here can't block a merge, and main's
+# push run still covers everything that lands.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    paths:
+      - "src/**"
+      - ".github/workflows/codeql.yml"
   schedule:
     - cron: "23 4 * * 1"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   analyze:
@@ -19,12 +30,12 @@ jobs:
       matrix:
         language: [javascript-typescript]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: github/codeql-action/init@v4.38.1
+      - uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: ${{ matrix.language }}
 
-      - uses: github/codeql-action/analyze@v4.38.1
+      - uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: /language:${{ matrix.language }}

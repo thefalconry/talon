@@ -61,7 +61,6 @@ export function createGitHubPlugin(config: {
         );
       }
 
-      // Check Docker is available
       try {
         execFileSync("docker", ["info"], {
           timeout: 10_000,

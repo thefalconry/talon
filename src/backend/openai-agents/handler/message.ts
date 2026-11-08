@@ -118,8 +118,7 @@ function buildTurnPrompt(
 
 /**
  * Acquire the per-chat MCP bundle. Persistent across turns — built on
- * first use, kept alive until `releaseBundle(chatId)`. Avoids the
- * ~15-subprocess re-spawn the original per-turn build caused.
+ * first use, kept until the backend's cleanup releases the pool.
  */
 async function acquireMcpBundle(
   chatId: string,
@@ -366,7 +365,7 @@ export async function handleMessage(
   } catch (err) {
     // Swallow the terminator abort — the turn completed via a delivery tool.
     if (!isTerminatorAbort(streamState, err)) {
-      // MCP bundle is retained across a retry — subprocesses are
+      // MCP bundle is retained across a retry — its servers are
       // stateless wrt the model conversation. See `mcp-pool.ts`.
       const outcome = await applyRetryDecision({
         err,
@@ -400,8 +399,7 @@ export async function handleMessage(
       activeAborts.delete(chatId);
     }
     // MCP bundle is NOT closed here — it persists across turns via the
-    // pool in `mcp-pool.ts`. Release happens on chat rebind, `/reset`, and
-    // at backend cleanup.
+    // pool in `mcp-pool.ts` and is released at backend cleanup.
   }
 
   // ── Post-loop accounting ──────────────────────────────────────────────────

@@ -80,6 +80,7 @@ import {
   pluginHubUrl,
 } from "../core/mcp-hub/index.js";
 import { getActiveChildKeys } from "../core/mcp-hub/children.js";
+import { gatewayFetch, TEST_GATEWAY_TOKEN } from "./helpers/gateway-fetch.js";
 
 let gateway: Gateway;
 let bridgeUrl: string;
@@ -89,7 +90,13 @@ async function connectClient(url: string): Promise<Client> {
     { name: "hub-test-client", version: "1.0.0" },
     { capabilities: {} },
   );
-  await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(url), {
+      requestInit: {
+        headers: { Authorization: `Bearer ${TEST_GATEWAY_TOKEN}` },
+      },
+    }),
+  );
   return client;
 }
 
@@ -152,7 +159,7 @@ describe("mcp-hub / talon tool serving (in-process)", () => {
   });
 
   it("rejects unknown frontends and unknown sessions", async () => {
-    const bad = await fetch(`${bridgeUrl}/mcp/talon/nosuch/c1`, {
+    const bad = await gatewayFetch(`${bridgeUrl}/mcp/talon/nosuch/c1`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -171,7 +178,7 @@ describe("mcp-hub / talon tool serving (in-process)", () => {
     });
     expect(bad.status).toBe(404);
 
-    const stale = await fetch(`${bridgeUrl}/mcp/talon/telegram/c1`, {
+    const stale = await gatewayFetch(`${bridgeUrl}/mcp/talon/telegram/c1`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

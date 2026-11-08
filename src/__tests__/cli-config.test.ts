@@ -14,11 +14,18 @@ function cfg(overrides: Partial<Config>): Config {
 }
 
 describe("isConfigured", () => {
-  it("telegram needs a bot token", () => {
+  it("telegram needs a bot token and an admin", () => {
     expect(isConfigured(cfg({ frontend: "telegram" }))).toBe(false);
+    // A token alone is not enough: without an admin the daemon refuses to
+    // start, so a plain `talon` must route to setup instead.
     expect(isConfigured(cfg({ frontend: "telegram", botToken: "t" }))).toBe(
-      true,
+      false,
     );
+    expect(
+      isConfigured(
+        cfg({ frontend: "telegram", botToken: "t", adminUserId: 42 }),
+      ),
+    ).toBe(true);
   });
 
   it("terminal and native need no credentials", () => {
@@ -29,7 +36,13 @@ describe("isConfigured", () => {
 
   it("a mixed list is judged per-frontend", () => {
     expect(
-      isConfigured(cfg({ frontend: ["telegram", "native"], botToken: "t" })),
+      isConfigured(
+        cfg({
+          frontend: ["telegram", "native"],
+          botToken: "t",
+          adminUserId: 42,
+        }),
+      ),
     ).toBe(true);
     expect(isConfigured(cfg({ frontend: ["telegram", "native"] }))).toBe(false);
   });

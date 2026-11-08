@@ -11,8 +11,6 @@
  *   - `delivery` — the agent run + reply pipeline (processAndReply)
  *   - `queue`    — per-chat debounce queue
  *   - `messages` — the messageCreate handler (handleMessage)
- *
- * Re-exports the same public surface the old single-file module exposed.
  */
 
 export { registerDiscordChat, lookupDiscordChat } from "./registry.js";

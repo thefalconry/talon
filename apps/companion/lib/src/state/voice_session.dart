@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart'
 import '../models/bridge_models.dart';
 import '../services/log.dart';
 import '../models/tool_format.dart';
+import '../services/neural_tts.dart';
 import '../services/voice.dart';
 import 'app_state.dart';
 
@@ -120,6 +121,11 @@ class VoiceSession extends ChangeNotifier {
   final AppState state;
   final VoiceEngine engine;
   final VoiceTiming timing;
+
+  /// Chooses between the on-device neural voice and Android TTS per
+  /// utterance. Tests inject one; with an injected [engine] and no router the
+  /// session speaks with the system voice only.
+  final NeuralTtsRouter neuralTts;
   late final String diagnosticId = 'voice-${_diagnosticSequence++}';
 
   /// Keep listening after each reply (conversation style) vs tap-to-talk.
@@ -129,8 +135,22 @@ class VoiceSession extends ChangeNotifier {
     this.state, {
     required this.handsFree,
     VoiceEngine? engine,
+    NeuralTtsRouter? neuralTts,
     this.timing = const VoiceTiming(),
-  }) : engine = engine ?? VoiceService.instance {
+  })  : engine = engine ?? VoiceService.instance,
+        neuralTts = neuralTts ??
+            (engine == null
+                ? NeuralTtsRouter.forPrefs(
+                    backend: VoiceService.instance,
+                    enabled: () => state.prefs.neuralVoiceEnabled,
+                    voiceName: () => state.prefs.neuralVoiceName,
+                  )
+                : NeuralTtsRouter(
+                    backend: const NoNeuralTts(),
+                    enabled: () => false,
+                    installedModelDir: () async => null,
+                    voiceName: () => null,
+                  )) {
     state.addListener(_onAppState);
     _subs.addAll([
       this.engine.onSttReady.listen(_onSttReady),
@@ -275,6 +295,9 @@ class VoiceSession extends ChangeNotifier {
   // ── Session control ───────────────────────────────────────────────────────
 
   Future<void> start() async {
+    // Load the neural voice once per session, in parallel with arming the
+    // mic; replies use Android TTS until (and unless) it is ready.
+    unawaited(neuralTts.prepare());
     final epoch = _listenEpoch;
     final available = await engine.isSttAvailable();
     if (!_isCurrentEpoch(epoch)) return;
@@ -503,6 +526,8 @@ class VoiceSession extends ChangeNotifier {
       ..clear()
       ..addAll(state.messagesFor(id).map((message) => message.id));
 
+    // Picks up a model that finished downloading after the session opened.
+    unawaited(neuralTts.prepare());
     final sent = await state.sendMessage(trimmed);
     if (!_ownsTurn(turnEpoch)) return;
     if (!sent) {
@@ -591,11 +616,20 @@ class VoiceSession extends ChangeNotifier {
 
   // ── Turn tracking / speech output ─────────────────────────────────────────
 
+  /// The chat turn currently followed for streamed-token updates.
+  TurnState? _turn;
+
   void _onAppState() {
     if (_disposed) return;
     final id = chatId;
     if (id == null) return;
     final turn = state.turnFor(id);
+    // Streamed tokens notify the turn, not AppState (#1059) — follow the
+    // current chat's turn too so live captions keep up with the draft.
+    if (!identical(turn, _turn)) {
+      _turn?.removeListener(_onAppState);
+      _turn = turn..addListener(_onAppState);
+    }
     if (phase != VoicePhase.thinking && phase != VoicePhase.speaking) return;
 
     if (turn.active) _turnSeen = true;
@@ -699,6 +733,7 @@ class VoiceSession extends ChangeNotifier {
     bool flush = true,
   }) async {
     var accepted = false;
+    final speaker = neuralTts.speaker;
     try {
       accepted = await engine.speak(
         text,
@@ -707,9 +742,27 @@ class VoiceSession extends ChangeNotifier {
         pitch: state.prefs.voicePitch,
         voiceName: state.prefs.voiceName,
         flush: flush,
+        neuralSpeaker: speaker,
       );
     } catch (error) {
       AppLog.warn('voice', '[$diagnosticId] tts request threw', error);
+    }
+    if (!accepted && speaker != null && !_disposed) {
+      // The neural voice refused it: stop using it this session and say the
+      // same utterance with Android TTS instead of dropping it.
+      neuralTts.markFailed('speak refused');
+      try {
+        accepted = await engine.speak(
+          text,
+          id: utteranceId,
+          rate: state.prefs.voiceRate,
+          pitch: state.prefs.voicePitch,
+          voiceName: state.prefs.voiceName,
+          flush: flush,
+        );
+      } catch (error) {
+        AppLog.warn('voice', '[$diagnosticId] tts fallback threw', error);
+      }
     }
     if (accepted) return;
     AppLog.warn(
@@ -892,8 +945,11 @@ class VoiceSession extends ChangeNotifier {
       unawaited(subscription.cancel());
     }
     state.removeListener(_onAppState);
+    _turn?.removeListener(_onAppState);
+    _turn = null;
     if (sttId != null) unawaited(engine.cancelListening(sttId));
     unawaited(engine.stopSpeaking());
+    unawaited(neuralTts.dispose());
     super.dispose();
   }
 }

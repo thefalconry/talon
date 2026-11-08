@@ -12,6 +12,7 @@
  * column default can hold.
  */
 
+import { logWarn } from "../../util/log.js";
 import { getDatabase, inTransaction } from "../db.js";
 import { sessionsSql } from "../sql/statements.generated.js";
 import {
@@ -46,13 +47,19 @@ type Row = {
   metrics: string | null;
 };
 
-function parseMetrics(raw: string | null): SessionMetrics {
+function parseMetrics(raw: string | null, chatId: string): SessionMetrics {
   if (!raw) return emptyMetrics();
   try {
     // Normalise at the load boundary: backfills partial blobs and restores
     // the Infinity minMs sentinel that JSON round-trips as null.
     return normaliseMetrics(JSON.parse(raw));
-  } catch {
+  } catch (err) {
+    // Degrade to empty — and say so, since the next upsert overwrites
+    // the corrupt blob and the chat's lifetime counters restart at zero.
+    logWarn(
+      "sessions",
+      `Corrupt session metrics chat=${chatId} bytes=${raw.length} — resetting: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return emptyMetrics();
   }
 }
@@ -78,7 +85,7 @@ function rowToSession(row: Row): SessionState {
       // NULL = no timed turn yet — the domain sentinel is Infinity.
       fastestResponseMs: row.fastest_response_ms ?? Infinity,
     },
-    metrics: parseMetrics(row.metrics),
+    metrics: parseMetrics(row.metrics, row.chat_id),
     lastBotMessageId: row.last_bot_message_id ?? undefined,
     sessionName: row.session_name ?? undefined,
     lastModel: row.last_model ?? undefined,

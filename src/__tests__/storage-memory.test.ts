@@ -39,7 +39,7 @@ function input(overrides: Partial<MemoryInput> = {}): MemoryInput {
   return {
     kind: "fact",
     subject: "mem-test-default",
-    text: "Dylan ships on Fridays",
+    text: "Ada ships on Fridays",
     trust: "operator",
     ...overrides,
   };
@@ -91,7 +91,7 @@ describe("memory store CRUD", () => {
     const history = memoryHistory(id);
     expect(history).toHaveLength(1);
     expect(history[0]!.op).toBe("assert");
-    expect(history[0]!.afterText).toBe("Dylan ships on Fridays");
+    expect(history[0]!.afterText).toBe("Ada ships on Fridays");
   });
 
   it("lists live rows pinned first", () => {
@@ -254,14 +254,14 @@ describe("supersede", () => {
 
   it("replaces a row, keeps the old one readable and links them", () => {
     const { id } = assertMemory(
-      input({ subject, text: "Dylan lives in London", salience: 3 }),
+      input({ subject, text: "Ada lives in London", salience: 3 }),
     );
     pinMemory(id);
-    const newId = supersedeMemory(id, "Dylan lives in Lisbon", "he moved");
+    const newId = supersedeMemory(id, "Ada lives in Lisbon", "he moved");
     const old = getMemory(id)!;
     const next = getMemory(newId)!;
     expect(old.supersededBy).toBe(newId);
-    expect(next.text).toBe("Dylan lives in Lisbon");
+    expect(next.text).toBe("Ada lives in Lisbon");
     // The successor inherits the old row's frame.
     expect(next.kind).toBe(old.kind);
     expect(next.subject).toBe(old.subject);

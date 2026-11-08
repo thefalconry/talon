@@ -4,3 +4,9 @@
 # manufacture a diff.
 *.sql text eol=lf
 src/storage/sql/statements.generated.ts text eol=lf
+
+# Shell scripts are executed inside Linux containers and hosts; a CRLF
+# checkout (Windows autocrlf) turns "#!/bin/sh" into "#!/bin/sh<CR>" and
+# the image's entrypoint stops starting.
+*.sh text eol=lf
+docker/seed-config.mjs text eol=lf

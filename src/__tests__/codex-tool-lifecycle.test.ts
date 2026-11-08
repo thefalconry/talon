@@ -215,7 +215,7 @@ describe("handlerToEvents — live tool lifecycle wiring", () => {
       chatId: "chat-1",
       model: makeBareModelRef("codex", "stub-model"),
       text: "ping",
-      senderName: "Dylan",
+      senderName: "Ada",
     };
   }
 

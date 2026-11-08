@@ -1,8 +1,8 @@
 /**
  * Timezone-aware time formatting utilities.
  *
- * All functions accept a timezone string (IANA, e.g. "Europe/Warsaw").
- * If none is set, falls back to the system default.
+ * Every helper formats in the IANA timezone set via `setTimezone`
+ * (e.g. "Europe/Warsaw"), falling back to the system default.
  */
 
 let configuredTz: string | undefined;
@@ -94,7 +94,7 @@ export function formatRelativeAge(ts: number): string {
 
 /**
  * Full datetime for system prompt injection.
- * Example: "2026-03-21 14:32 (Europe/Warsaw, Fri)"
+ * Example: "2026-03-21 14:32 Fri (Europe/Warsaw)"
  */
 export function formatFullDatetime(): string {
   const now = new Date();

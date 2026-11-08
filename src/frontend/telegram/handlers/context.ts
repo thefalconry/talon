@@ -147,17 +147,28 @@ export function getForwardContext(msg: {
   return `[Forwarded from ${from}]\n`;
 }
 
+/**
+ * Deadline for one whole download (getFile + body). Media handlers run in
+ * grammY's update loop, which handles updates one at a time, so a download
+ * stalled on a dead socket holds every later message behind it.
+ */
+const DOWNLOAD_TIMEOUT_MS = 120_000;
+
 export async function downloadTelegramFile(
   bot: Bot,
   config: TalonConfig,
   fileId: string,
   fileName: string,
 ): Promise<string> {
-  const file = await bot.api.getFile(fileId);
+  const signal = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
+  const file = await bot.api.getFile(
+    fileId,
+    signal as Parameters<Bot["api"]["getFile"]>[1],
+  );
   if (!file.file_path) throw new Error("Could not get file path from Telegram");
 
   const url = `https://api.telegram.org/file/bot${config.botToken}/${file.file_path}`;
-  const resp = await fetch(url);
+  const resp = await fetch(url, { signal });
   if (!resp.ok) throw new Error(`Download failed: ${resp.status}`);
 
   // Guard against excessively large files (50MB limit)

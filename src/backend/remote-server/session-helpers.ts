@@ -32,6 +32,7 @@
 
 import { logWarn } from "../../util/log.js";
 import type { RemoteAgentClient } from "./client.js";
+import { errMsg } from "./state.js";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -152,10 +153,6 @@ export interface RemoteSessionClient extends RemoteAgentClient {
 }
 
 // ── Local utility ───────────────────────────────────────────────────────────
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 function hasAssistantUsage(info: RemoteAssistantInfo | undefined): boolean {
   return Boolean(

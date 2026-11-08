@@ -75,6 +75,20 @@ log(
 /** Map of server name → {client, transport} once connected. */
 const mcpClients = new Map();
 
+// Like the real CLI, `${VAR}` references in MCP headers expand from the
+// process env — how Talon hands over the gateway token without putting it
+// on the command line.
+const expandHeaders = (headers) =>
+  Object.fromEntries(
+    Object.entries(headers ?? {}).map(([k, v]) => [
+      k,
+      String(v).replace(
+        /\$\{([A-Z0-9_]+)\}/g,
+        (_, name) => process.env[name] ?? "",
+      ),
+    ]),
+  );
+
 const getMcpClient = async (serverName) => {
   if (mcpClients.has(serverName)) return mcpClients.get(serverName);
   const cfg = MCP_CONFIG.mcpServers?.[serverName];
@@ -88,7 +102,9 @@ const getMcpClient = async (serverName) => {
     // command/args shape spawns a stdio subprocess.
     const transport =
       cfg.type === "http" || cfg.url
-        ? new StreamableHTTPClientTransport(new URL(cfg.url))
+        ? new StreamableHTTPClientTransport(new URL(cfg.url), {
+            requestInit: { headers: expandHeaders(cfg.headers) },
+          })
         : new StdioClientTransport({
             command: cfg.command,
             args: cfg.args ?? [],

@@ -1,0 +1,39 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgFill" x1="160" y1="120" x2="880" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#171A2B"/>
+      <stop offset="1" stop-color="#0A0B12"/>
+    </linearGradient>
+    <linearGradient id="bird" x1="300" y1="300" x2="760" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8E9BFF"/>
+      <stop offset="0.55" stop-color="#6E7EFF"/>
+      <stop offset="1" stop-color="#54E6FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- rounded-square backdrop -->
+  <rect x="0" y="0" width="1024" height="1024" rx="230" fill="url(#bgFill)"/>
+  <rect x="0.5" y="0.5" width="1023" height="1023" rx="229.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.06" stroke-width="2"/>
+
+  <!-- minimal falcon in flight: broad swept wings, compact head, short tail.
+       This exact path is mirrored in lib/src/ui/brand.dart (BrandMark) so the
+       in-app mark and the launcher icons stay identical — change both together. -->
+  <g fill="url(#bird)">
+    <path d="
+      M512 306
+      C 500 306 492 313 489 325
+      L 460 462
+      C 358 438 240 442 142 494
+      C 246 512 340 548 412 602
+      L 446 626
+      C 464 640 484 658 494 690
+      C 500 712 506 732 512 752
+      C 518 732 524 712 530 690
+      C 540 658 560 640 578 626
+      L 612 602
+      C 684 548 778 512 882 494
+      C 784 442 666 438 564 462
+      L 535 325
+      C 532 313 524 306 512 306 Z"/>
+  </g>
+</svg>

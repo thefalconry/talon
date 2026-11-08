@@ -15,7 +15,15 @@
  *
  * Backoff state is in-memory only: a process restart forgets it, which is
  * fine — the first post-restart attempt either works or re-arms the window.
+ *
+ * A holder built with an `alert` also tells the operator: once the streak
+ * reaches its threshold (2 by default — one failure is a blip, a second in
+ * a row after the backoff is a broken component) it raises `alert.key`
+ * with the error, and the next success resolves it.
  */
+
+import { faultText } from "../engine/fault-text.js";
+import { raiseAlert, resolveAlert } from "../frontend-runtime/alerts.js";
 
 const FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000;
 const FAILURE_BACKOFF_MAX_MS = 60 * 60 * 1000;
@@ -70,6 +78,16 @@ export function failureBackoffUntil(
   return now + exp;
 }
 
+/** Operator alert a backoff holder raises while its component keeps failing. */
+type BackoffAlert = {
+  /** Stable alert key, e.g. "heartbeat.failing". */
+  key: string;
+  /** What failed, for the message: "The heartbeat", "Dream (memory consolidation)". */
+  label: string;
+  /** Consecutive failures before raising. Default 2. */
+  threshold?: number;
+};
+
 /**
  * Per-component backoff holder. Cadence checks gate on `active()`; run
  * completions call `succeed()` / `fail(err)`.
@@ -77,6 +95,8 @@ export function failureBackoffUntil(
 export class FailureBackoff {
   private consecutiveFailures = 0;
   private until = 0;
+
+  constructor(private readonly alert?: BackoffAlert) {}
 
   /** True while inside the backoff window — the caller should skip firing. */
   active(now = Date.now()): boolean {
@@ -87,6 +107,14 @@ export class FailureBackoff {
   fail(err: unknown, now = Date.now()): number {
     this.consecutiveFailures += 1;
     this.until = failureBackoffUntil(err, this.consecutiveFailures, now);
+    const alert = this.alert;
+    if (alert && this.consecutiveFailures >= (alert.threshold ?? 2)) {
+      const retryAt = new Date(this.until).toISOString().slice(11, 16);
+      raiseAlert(
+        alert.key,
+        `${alert.label} has failed ${this.consecutiveFailures} times in a row: ${faultText(err)}. Next attempt after ${retryAt} UTC.`,
+      );
+    }
     return this.until;
   }
 
@@ -94,6 +122,8 @@ export class FailureBackoff {
   succeed(): void {
     this.consecutiveFailures = 0;
     this.until = 0;
+    if (this.alert)
+      resolveAlert(this.alert.key, `${this.alert.label} is running again.`);
   }
 
   get failures(): number {

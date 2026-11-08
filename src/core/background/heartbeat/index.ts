@@ -9,8 +9,6 @@
  *   - `state`     — shared run-guard/timers/config + persisted-state I/O
  *   - `agent`     — prompt building + the one-shot agent run + log helpers
  *   - `scheduler` — init, the cadence timer, run guard, force/await/status API
- *
- * Re-exports the same public surface the old single-file module exposed.
  */
 
 export {

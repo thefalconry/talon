@@ -71,7 +71,7 @@ describe("chat-id ownership (resolveOwnerFrontendId)", () => {
     expect(resolveOwnerFrontendId("d_1751640000000_ab12cd")).toBe("native");
     expect(resolveOwnerFrontendId("teams_chat_19:abc@thread.v2")).toBe("teams");
     expect(resolveOwnerFrontendId("discord_guild_123_456")).toBe("discord");
-    expect(resolveOwnerFrontendId("-1001426819337")).toBe("telegram");
+    expect(resolveOwnerFrontendId("-1009876543210")).toBe("telegram");
     expect(resolveOwnerFrontendId("123456789")).toBe("telegram");
   });
 

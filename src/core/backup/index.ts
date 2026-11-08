@@ -25,6 +25,7 @@ export {
   runBackup,
   stopBackupScheduler,
   checkpointBeforeUpdate,
+  type UpdateCheckpoint,
 } from "./scheduler.js";
 
 export {
@@ -41,6 +42,11 @@ export {
   writeRestorePending,
 } from "./restore.js";
 
+export {
+  checkpointOnVersionChange,
+  recordBootVersion,
+} from "./boot/version-checkpoint.js";
+
 export { discoverTargets, type BackupTarget } from "./targets.js";
 
 export {
@@ -49,6 +55,7 @@ export {
   formatBytes,
   formatRelative,
   formatSnapshotList,
+  type BackupStatus,
 } from "./status.js";
 
 export type { SnapshotSummary } from "./types.js";
