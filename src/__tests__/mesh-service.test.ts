@@ -653,15 +653,71 @@ describe("MeshService exec + filesystem channel", () => {
         }),
     });
 
-    const res = await service.execOnDevice("node", "sleep 999", undefined, 1);
+    // A run with a chat to wake detaches by default.
+    service.execJobs.setWake(() => {});
+    const res = await service.execOnDevice(
+      "node",
+      "sleep 999",
+      undefined,
+      1,
+      "42",
+    );
     expect(seen[0]).toMatchObject({ detachOnTimeout: true });
     expect(res.ok).toBe(true);
     expect(res.text).toContain("background job job_1");
     expect(res.text).toContain("partial");
-    expect(res.text).toContain("No chat to wake");
+    expect(res.text).toContain("gets a wake-up");
 
-    await service.execOnDevice("phone", "true");
+    await service.execOnDevice("phone", "true", undefined, undefined, "42");
     expect(seen[1]).not.toHaveProperty("detachOnTimeout");
+    service.execJobs.stop();
+  });
+
+  it("keeps the kill for a run with no chat to wake unless it asks to detach", async () => {
+    const service = await tempService({ commandTimeoutMs: 2_000 });
+    await service.register({
+      id: "node",
+      name: "Mini",
+      platform: "macos",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    const seen: Array<Record<string, unknown>> = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          seen.push(cmd.params);
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data:
+              cmd.params.detachOnTimeout === true
+                ? { detached: true, jobId: "job_2", stdout: "" }
+                : { stdout: "", stderr: "[killed: timeout]", exitCode: -1 },
+          });
+        }),
+    });
+    service.execJobs.setWake(() => {});
+
+    // A heartbeat / cron / sub-agent label is not a chat.
+    await service.execOnDevice("node", "ping host", undefined, 1, "heartbeat");
+    expect(seen[0]).not.toHaveProperty("detachOnTimeout");
+    // ...and kill wins even for a chat.
+    await service.execOnDevice("node", "ping host", undefined, 1, "42", "kill");
+    expect(seen[1]).not.toHaveProperty("detachOnTimeout");
+    // An explicit detach is honoured with nobody to wake.
+    const res = await service.execOnDevice(
+      "node",
+      "ping host",
+      undefined,
+      1,
+      "agent:abc",
+      "detach",
+    );
+    expect(seen[2]).toMatchObject({ detachOnTimeout: true });
+    expect(res.text).toContain("No chat to wake");
     service.execJobs.stop();
   });
 

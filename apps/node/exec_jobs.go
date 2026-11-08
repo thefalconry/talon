@@ -78,7 +78,14 @@ func (t *execJobTable) get(id string) *execJob {
 	return t.jobs[id]
 }
 
-// killAll stops every running job and waits for them, for node shutdown.
+// killAllWait bounds how long killAll waits for the jobs it stopped. A job
+// whose command left a process holding its output pipes (Windows kills only
+// powershell.exe, not the tree) may not report done promptly, and node
+// shutdown and self-update must not hang on it. A var so tests can shorten it.
+var killAllWait = 5 * time.Second
+
+// killAll stops every running job and waits for them, up to killAllWait in
+// total, for node shutdown and self-update.
 func (t *execJobTable) killAll() {
 	t.mu.Lock()
 	jobs := make([]*execJob, 0, len(t.jobs))
@@ -88,7 +95,15 @@ func (t *execJobTable) killAll() {
 	t.mu.Unlock()
 	for _, j := range jobs {
 		j.cancel()
-		<-j.done
+	}
+	deadline := time.NewTimer(killAllWait)
+	defer deadline.Stop()
+	for _, j := range jobs {
+		select {
+		case <-j.done:
+		case <-deadline.C:
+			return
+		}
 	}
 }
 
@@ -216,6 +231,16 @@ func cmdExecJob(params map[string]any) commandResult {
 		data["runtimeMs"] = j.finished.Sub(j.started).Milliseconds()
 		if j.runErr != nil {
 			data["error"] = j.runErr.Error()
+		}
+		// Killed at maxExecJobLifetime: say so, as attachedResult does, so an
+		// exit -1 is not read as the command's own crash.
+		if j.timedOut {
+			data["timedOut"] = true
+			if stderr := j.stderr.String(); stderr != "" {
+				data["stderr"] = stderr + "\n[killed: timeout]"
+			} else {
+				data["stderr"] = "[killed: timeout]"
+			}
 		}
 	} else {
 		data["runtimeMs"] = time.Since(j.started).Milliseconds()

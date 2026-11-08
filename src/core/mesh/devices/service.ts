@@ -802,6 +802,7 @@ export class MeshService {
     cwd?: unknown,
     timeoutSec?: unknown,
     wakeChatKey?: unknown,
+    onTimeout?: unknown,
   ): Promise<MeshToolResult> {
     const command = typeof cmd === "string" ? cmd : "";
     if (!command.trim()) {
@@ -809,8 +810,11 @@ export class MeshService {
     }
     const budgetMs = clampExecTimeout(timeoutSec);
     // Only a device that can answer exec_job may be asked to detach; anything
-    // else keeps the old kill-at-budget behaviour.
-    const canDetach = await this.canDetachExec(query);
+    // else keeps the old kill-at-budget behaviour. A run with no chat to wake
+    // kills too, unless the caller asked for on_timeout:"detach".
+    const canDetach =
+      this.execJobs.shouldDetach(onTimeout, wakeChatKey) &&
+      (await this.canDetachExec(query));
     const dispatched = await this.dispatchCommand(
       query,
       "exec",
@@ -1515,7 +1519,7 @@ function clampExecTimeout(value: unknown): number {
   );
 }
 
-/** Render an exec result: exit code headline + stdout/stderr blocks. */
+/** Render a command that outlived its budget and became a device job. */
 function formatDetachedExec(
   deviceName: string,
   jobId: string,
@@ -1537,6 +1541,7 @@ function formatDetachedExec(
   return parts.join("\n");
 }
 
+/** Render an exec result: exit code headline + stdout/stderr blocks. */
 function formatExecResult(
   device: DeviceInfo,
   result: DeviceCommandResult,

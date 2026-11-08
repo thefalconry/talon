@@ -136,3 +136,60 @@ func TestExecJobUnknownAndExpired(t *testing.T) {
 	delete(execJobs.jobs, "job_new")
 	execJobs.mu.Unlock()
 }
+
+func TestKillAllDoesNotHangOnAJobThatNeverFinishes(t *testing.T) {
+	saved := killAllWait
+	killAllWait = 200 * time.Millisecond
+	defer func() { killAllWait = saved }()
+	stuck := &execJob{id: "job_stuck", done: make(chan struct{}), cancel: func() {}}
+	execJobs.mu.Lock()
+	execJobs.jobs[stuck.id] = stuck
+	execJobs.mu.Unlock()
+	defer func() {
+		execJobs.mu.Lock()
+		delete(execJobs.jobs, stuck.id)
+		execJobs.mu.Unlock()
+	}()
+
+	returned := make(chan struct{})
+	go func() {
+		execJobs.killAll()
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("killAll waited on a job that never reports done")
+	}
+}
+
+func TestExecJobReportsALifetimeKill(t *testing.T) {
+	j := &execJob{
+		id:       "job_lifetime",
+		started:  time.Now().Add(-time.Hour),
+		stdout:   &cappedOutput{},
+		stderr:   &cappedOutput{},
+		done:     make(chan struct{}),
+		cancel:   func() {},
+		exitCode: -1,
+		timedOut: true,
+		finished: time.Now(),
+	}
+	close(j.done)
+	execJobs.mu.Lock()
+	execJobs.jobs[j.id] = j
+	execJobs.mu.Unlock()
+	defer func() {
+		execJobs.mu.Lock()
+		delete(execJobs.jobs, j.id)
+		execJobs.mu.Unlock()
+	}()
+
+	res := dispatch(context.Background(), nil, "exec_job", map[string]any{"jobId": j.id})
+	if !res.OK || res.Data["timedOut"] != true {
+		t.Fatalf("a job killed at its lifetime must say so: %+v", res)
+	}
+	if !strings.HasSuffix(res.Data["stderr"].(string), "[killed: timeout]") {
+		t.Errorf("stderr = %q, want the timeout note", res.Data["stderr"])
+	}
+}

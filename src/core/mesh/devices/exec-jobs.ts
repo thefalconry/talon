@@ -8,8 +8,23 @@
  */
 
 import type { DeviceCommandResult } from "../types.js";
+import {
+  isDiscordChatId,
+  isNativeChatId,
+  isTeamsChatId,
+  isTelegramChatId,
+  isTerminalChatId,
+  isWhatsAppChatId,
+} from "../../frontend-runtime/chat-id.js";
 
 const EXEC_JOB_POLL_MS = 15_000;
+/**
+ * A job still running after this long is polled [EXEC_JOB_SLOW_FACTOR]
+ * times less often: a day-long build needs no 15s wake-up precision, and
+ * each poll is a command the node has to serve.
+ */
+const EXEC_JOB_SLOW_AFTER_MS = 5 * 60_000;
+const EXEC_JOB_SLOW_FACTOR = 4;
 /** Give up after this many failed polls in a row (offline node, lost job). */
 export const EXEC_JOB_MAX_POLL_FAILURES = 40;
 /** Matches the node's hard stop, plus time for a last poll. */
@@ -40,11 +55,21 @@ function tail(text: string): string {
 }
 
 /**
- * Chat ids of the frontends. Listed, not "anything but agent:", because a
- * background run's label (heartbeat, dream, agent:...) is not a chat and a
- * wake sent to one would start a session nobody reads.
+ * True for a frontend's chat id. Built from the per-frontend predicates in
+ * chat-id.ts (the one owner of that grammar), not "anything but agent:",
+ * because a background run's label (heartbeat, dream, agent:...) is not a
+ * chat and a wake sent to one would start a session nobody reads.
  */
-const WAKEABLE_CHAT_KEY = /^(-?\d+$|d_|wa_dm_|wa_group_|teams_|discord_|t_)/;
+function isWakeableChatKey(chatKey: string): boolean {
+  return (
+    isTelegramChatId(chatKey) ||
+    isNativeChatId(chatKey) ||
+    isWhatsAppChatId(chatKey) ||
+    isTeamsChatId(chatKey) ||
+    isDiscordChatId(chatKey) ||
+    isTerminalChatId(chatKey)
+  );
+}
 
 export class ExecJobTracker {
   private wake: ExecJobWake | null = null;
@@ -59,9 +84,26 @@ export class ExecJobTracker {
 
   /** Whether notify would reach a chat with this key. */
   canNotify(chatKey: string): boolean {
-    return (
-      WAKEABLE_CHAT_KEY.test(chatKey) && chatKey !== "0" && this.wake !== null
-    );
+    return isWakeableChatKey(chatKey) && chatKey !== "0" && this.wake !== null;
+  }
+
+  /**
+   * Whether a command that reaches its budget should keep running as a job.
+   *
+   * on_timeout:"kill" and "detach" decide outright. Otherwise detaching is
+   * the default only when a chat will be woken at the end: a heartbeat,
+   * cron or sub-agent run has nobody to wake, so its job would outlive the
+   * run unwatched, and a recurring run would pile them up (filling the
+   * node's job table for every real chat).
+   */
+  shouldDetach(onTimeout: unknown, chatKey: unknown): boolean {
+    if (onTimeout === "kill") return false;
+    if (onTimeout === "detach") return true;
+    const key =
+      typeof chatKey === "string" || typeof chatKey === "number"
+        ? String(chatKey)
+        : "";
+    return this.canNotify(key);
   }
 
   /** Wake a chat directly, for a job the daemon watches itself. */
@@ -98,9 +140,13 @@ export class ExecJobTracker {
     startedAt: number,
     failures: number,
   ): void {
-    const timer = setTimeout(() => {
-      void this.check(input, chatKey, startedAt, failures);
-    }, this.pollMs);
+    const slow = Date.now() - startedAt >= EXEC_JOB_SLOW_AFTER_MS;
+    const timer = setTimeout(
+      () => {
+        void this.check(input, chatKey, startedAt, failures);
+      },
+      slow ? this.pollMs * EXEC_JOB_SLOW_FACTOR : this.pollMs,
+    );
     timer.unref?.();
     this.timers.set(this.key(input), timer);
   }
@@ -154,8 +200,12 @@ export class ExecJobTracker {
     result: DeviceCommandResult,
   ): string {
     const d = result.data ?? {};
+    const outcome =
+      d.timedOut === true
+        ? `was killed at the node's 24h job limit (exit ${String(d.exitCode ?? "?")})`
+        : `finished, exit ${String(d.exitCode ?? "?")}`;
     const parts = [
-      `Background job ${input.jobId} on ${input.deviceName} finished, exit ${String(d.exitCode ?? "?")}: ${input.cmd}`,
+      `Background job ${input.jobId} on ${input.deviceName} ${outcome}: ${input.cmd}`,
     ];
     const rawStdout = String(d.stdout ?? "");
     const stdout = tail(input.cleanOutput?.(rawStdout) ?? rawStdout);

@@ -13,7 +13,8 @@ import { stat as fsStat } from "node:fs/promises";
 import { getTeleport } from "../../../mesh/devices/teleport.js";
 import { createOutputCapture } from "../../../../util/exec-output.js";
 import { bashBackground } from "./exec-background.js";
-import { detachLocalRun } from "./exec-detach.js";
+import { DetachRefused, detachLocalRun } from "./exec-detach.js";
+import { getMeshService } from "../../../mesh/index.js";
 import { bashTeleported } from "./exec-remote.js";
 import { resolvePathParam } from "./params.js";
 import { renderExec, type Result } from "./results.js";
@@ -84,17 +85,23 @@ async function bash(
     }
     return bashBackground(cmd, dir);
   }
+  const detach = shouldDetach(onTimeout, chatKey);
   if (active) {
     return bashTeleported(
       chatId,
       active.deviceId,
       cmd,
       timeoutMs,
-      onTimeout !== "kill",
+      detach,
       chatKey,
     );
   }
-  return bashLocal(cmd, dir, timeoutMs, chatKey, onTimeout !== "kill");
+  return bashLocal(cmd, dir, timeoutMs, chatKey, detach);
+}
+
+/** See ExecJobTracker.shouldDetach: detach by default only when a chat will be woken. */
+function shouldDetach(onTimeout: unknown, chatKey: string): boolean {
+  return getMeshService().execJobs.shouldDetach(onTimeout, chatKey);
 }
 
 function bashLocal(
@@ -135,6 +142,8 @@ function bashLocal(
       }
     };
     let settled = false;
+    /** Why the run was killed instead of detached, when detach was wanted. */
+    let detachRefusal = "";
     let killTimer: NodeJS.Timeout | undefined;
     let forceTimer: NodeJS.Timeout | undefined;
     const finish = (r: Result) => {
@@ -148,7 +157,7 @@ function bashLocal(
     const timedOutResult = () => {
       const body = renderExec(
         "local",
-        `⏱️ timed out after ${timeoutMs / 1000}s — killed; partial output kept below`,
+        `⏱️ timed out after ${timeoutMs / 1000}s — killed${detachRefusal ? ` (not kept running: ${detachRefusal})` : ""}; partial output kept below`,
         stdout.value(),
         stderr.value(),
       );
@@ -173,9 +182,13 @@ function bashLocal(
             }),
           );
           return;
-        } catch {
-          // Can't set up the log: fall through to the kill rather than leave
-          // a command running that nothing can see.
+        } catch (err) {
+          // At the job cap, or can't set up the log: fall through to the kill
+          // rather than leave a command running that nothing can see.
+          detachRefusal =
+            err instanceof DetachRefused
+              ? err.message
+              : `cannot open its log (${(err as Error).message})`;
           child.stdout.on("data", stdout.push);
           child.stderr.on("data", stderr.push);
         }

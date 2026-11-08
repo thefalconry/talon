@@ -683,7 +683,7 @@ func (n *Node) handleCommand(ctx context.Context, event map[string]any) {
 	}
 	// Audited after the answer is on its way (so the log never delays a
 	// reply) but before any re-exec (so an update is still recorded).
-	if n.audit != nil {
+	if n.audit != nil && auditable(name, params) {
 		n.audit.record(newAuditEntry(id, name, params, result, elapsed, n.token()))
 	}
 	// A successful update_node swapped the on-disk binary; now that the ack

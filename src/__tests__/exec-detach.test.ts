@@ -1,8 +1,28 @@
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { closeSync } from "node:fs";
+import {
+  lstat,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  stat,
+  symlink,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { getMeshService } from "../core/mesh/index.js";
-import { detachLocalRun } from "../core/engine/gateway-actions/native/exec-detach.js";
+import {
+  DetachRefused,
+  detachLocalRun,
+  liveLocalJobs,
+} from "../core/engine/gateway-actions/native/exec-detach.js";
+import {
+  bashLogDir,
+  openBashLog,
+  resetBashLogDir,
+} from "../core/engine/gateway-actions/native/bash-log.js";
 
 function start(script: string) {
   const child = spawn("bash", ["-c", script], { detached: true });
@@ -99,4 +119,105 @@ describe.skipIf(process.platform === "win32")("detachLocalRun", () => {
     });
     expect(await woke).toContain("was killed");
   }, 10_000);
+});
+
+describe.skipIf(process.platform === "win32")("detachLocalRun — bounds", () => {
+  afterEach(() => getMeshService().execJobs.setWake(null));
+
+  it("refuses past the job cap so the caller kills instead", () => {
+    const { child, killTree } = start("sleep 5");
+    try {
+      expect(() =>
+        detachLocalRun({
+          child,
+          cmd: "over-cap",
+          chatKey: "42",
+          budgetMs: 1000,
+          stdoutSoFar: "",
+          stderrSoFar: "",
+          killTree,
+          maxJobs: liveLocalJobs(),
+        }),
+      ).toThrow(DetachRefused);
+    } finally {
+      killTree("SIGKILL");
+    }
+  });
+
+  it("finishes a job whose pipes an escaped process keeps open", async () => {
+    const woke = new Promise<string>((resolve) => {
+      getMeshService().execJobs.setWake((_k, p) => resolve(p));
+    });
+    const before = liveLocalJobs();
+    // setsid moves the sleeper out of the job's process group while it keeps
+    // the inherited stdout, so `close` would not fire for 30s.
+    const { child, killTree } = start(
+      "setsid sleep 30 & echo shell-done; exit 0",
+    );
+    detachLocalRun({
+      child,
+      cmd: "escaper",
+      chatKey: "42",
+      budgetMs: 1000,
+      stdoutSoFar: "",
+      stderrSoFar: "",
+      killTree,
+      drainGraceMs: 200,
+    });
+    expect(liveLocalJobs()).toBe(before + 1);
+    const prompt = await woke;
+    expect(prompt).toContain("finished, exit 0");
+    expect(prompt).toContain("shell-done");
+    expect(liveLocalJobs()).toBe(before);
+  }, 10_000);
+
+  it("writes its log privately, in a directory only this user can open", async () => {
+    const { child, killTree } = start("echo secret-ish; exit 0");
+    const res = detachLocalRun({
+      child,
+      cmd: "private",
+      chatKey: "0",
+      budgetMs: 1000,
+      stdoutSoFar: "",
+      stderrSoFar: "",
+      killTree,
+    });
+    const path = logOf(res.text);
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect((await stat(dirname(path))).mode & 0o077).toBe(0);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("bash log directory", () => {
+  afterEach(() => resetBashLogDir());
+
+  it("never reuses an existing file or follows a symlink", async () => {
+    const a = openBashLog("same command");
+    const b = openBashLog("same command");
+    expect(a.path).not.toBe(b.path);
+    closeSync(a.fd);
+    closeSync(b.fd);
+  });
+
+  it("falls back to a private temp dir when the stable one is not ours", async () => {
+    const stable = join(tmpdir(), `talon-bash-${process.getuid!()}`);
+    resetBashLogDir();
+    const original = await lstat(stable).catch(() => null);
+    // Simulate another user's planted directory with an open mode we cannot
+    // fix: replace ours with a symlink to a world-writable dir.
+    const planted = await mkdtemp(join(tmpdir(), "planted-"));
+    const moved = `${stable}.moved-${process.pid}`;
+    if (original) await rename(stable, moved);
+    try {
+      await symlink(planted, stable);
+      const dir = bashLogDir();
+      expect(dir).not.toBe(stable);
+      expect(dir.startsWith(`${stable}-`)).toBe(true);
+      expect((await stat(dir)).mode & 0o077).toBe(0);
+    } finally {
+      await rm(stable, { force: true });
+      if (original) await rename(moved, stable);
+      await rm(planted, { recursive: true, force: true });
+    }
+  });
 });

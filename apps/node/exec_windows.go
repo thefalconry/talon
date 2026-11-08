@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// windowsPipeDrainGrace is how long Wait lets output drain after the shell
+// exits before closing the pipes on a process still holding them.
+const windowsPipeDrainGrace = 2 * time.Second
+
 // runShell executes the command line under PowerShell. Windows has no
 // process groups in the POSIX sense; Kill() terminates the shell itself,
 // which is the practical budget enforcement for v1.
@@ -28,6 +32,11 @@ func runShell(
 	}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// Kill() ends only powershell.exe. A child it started can keep the
+	// output pipes open, and Wait would block on os/exec's copy goroutines
+	// until that child exits. WaitDelay closes the pipes this long after the
+	// shell is gone, so the budget (and a job kill) actually ends the call.
+	cmd.WaitDelay = windowsPipeDrainGrace
 	if err := cmd.Start(); err != nil {
 		return 0, false, err
 	}

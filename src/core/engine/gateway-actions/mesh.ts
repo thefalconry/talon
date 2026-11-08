@@ -34,6 +34,7 @@ export const meshHandlers: SharedActionHandlers = {
       body.cwd,
       body.timeout_sec,
       body._chatId,
+      body.on_timeout,
     ),
   device_exec_job: (body) =>
     getMeshService().execJobOnDevice(

@@ -8,10 +8,18 @@
  */
 
 import { describe, it, expect, afterEach, beforeAll } from "vitest";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  getMeshService,
   MeshRegistry,
   MeshService,
   setMeshService,
@@ -178,6 +186,8 @@ describe("native tools — local execution", () => {
   it.skipIf(process.platform === "win32")(
     "keeps a command running past its budget and logs all its output",
     async () => {
+      // Chat "1" has a wake wired, so detaching is the default.
+      getMeshService().execJobs.setWake(() => {});
       const marker = join(tmpdir(), `detach-${process.pid}-${Date.now()}`);
       const res = await nativeHandlers.native_bash(
         {
@@ -208,6 +218,44 @@ describe("native tools — local execution", () => {
       }
       expect(marked).toBe("");
       await rm(marker, { force: true });
+      // The log is private to this user.
+      expect((await stat(logPath)).mode & 0o077).toBe(0);
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "kills at the budget when the run has no chat to wake, unless told to detach",
+    async () => {
+      getMeshService().execJobs.setWake(null);
+      const killed = await nativeHandlers.native_bash(
+        {
+          action: "native_bash",
+          command: "echo head; sleep 30",
+          timeout_sec: 1,
+        },
+        1,
+        undefined,
+        "heartbeat",
+      );
+      expect(killed.ok).toBe(false);
+      expect(killed.text).toContain("timed out after 1s");
+      expect(killed.text).toContain("head");
+
+      const kept = await nativeHandlers.native_bash(
+        {
+          action: "native_bash",
+          command: "sleep 3",
+          timeout_sec: 1,
+          on_timeout: "detach",
+        },
+        1,
+        undefined,
+        "heartbeat",
+      );
+      expect(kept.ok).toBe(true);
+      expect(kept.text).toContain("not killed");
+      expect(kept.text).toContain("No chat to wake");
     },
     20_000,
   );
@@ -676,6 +724,8 @@ describe("native tools — teleport routing", () => {
       undefined,
       "1",
     );
+    // Chat "1" has a wake wired, so detaching is the default.
+    service.execJobs.setWake(() => {});
 
     const res = await nativeHandlers.native_bash(
       { action: "native_bash", command: "sleep 999" },

@@ -99,6 +99,12 @@ export const meshTools: ToolDefinition[] = [
         .describe(
           "Seconds to wait for a result (default 60, max 300). A device that supports jobs keeps the command running past this as a background job; others kill it.",
         ),
+      on_timeout: z
+        .enum(["detach", "kill"])
+        .optional()
+        .describe(
+          "What happens to the command at timeout_sec on a device that supports jobs. detach keeps it running as a background job; kill ends it and returns the partial output. Default: detach when this run has a chat to wake, kill otherwise (cron, heartbeat, sub-agents).",
+        ),
     },
     execute: (params, bridge) => bridge("device_exec", params),
     tag: "mesh",
