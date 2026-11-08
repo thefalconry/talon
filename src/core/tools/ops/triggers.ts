@@ -133,7 +133,7 @@ export const triggerTools: ToolDefinition[] = [
         .max(4000)
         .optional()
         .describe(
-          'mode="isolated" only: system brief for every wake run — what to do with an event and when to message the user (e.g. "Follow skill szufla-wake."). The run has no chat history, so make it self-contained.',
+          'mode="isolated" only: system brief for every wake run — what to do with an event and when to message the user (e.g. "Follow skill inbox-wake."). The run has no chat history, so make it self-contained.',
         ),
       provider: z
         .string()

@@ -115,9 +115,17 @@ export async function fireWake(
   // event for terminal completion.
   const promptStatus = terminal ? status : "signalled";
 
+  // A terminal status other than "fired" is the watcher's own death
+  // (errored, timed_out, cancelled, terminated by a restart), not an event.
+  const lifecycleNotice = terminal && status !== "fired";
+
   // Isolated mode: hand the wake to a one-shot job instead of resuming the
   // chat session. The lane coalesces bursts; failures are noticed there.
-  if (isIsolated(t)) {
+  // Lifecycle notices still go to the chat: the one-shot has no history and
+  // is told to message the user only when its brief says so, so the chat
+  // would never learn its watcher is gone and never recreate it.
+  const isolated = isIsolated(t);
+  if (isolated && !lifecycleNotice) {
     await dispatchIsolatedWake(t, {
       status: promptStatus,
       payload: trimmed,
@@ -132,6 +140,9 @@ export async function fireWake(
   const prompt =
     `[System: TRIGGER FIRED. Status: ${promptStatus}. ` +
     `This is a wake-up message from a long-running script you started earlier. ` +
+    (isolated
+      ? `Its events were handled in isolated runs; this notice says the watcher itself has stopped. `
+      : "") +
     `Decide whether to message the user, take an action, or do nothing.]` +
     `\n\n${body}`;
 
@@ -145,8 +156,9 @@ export async function fireWake(
       source: "trigger",
       // Per-trigger model override (same backend) — runs the wake-up turn on a
       // cheaper model while still resuming the chat session. Falls back to the
-      // chat model if the id no longer resolves.
-      ...(t.model ? { modelOverride: t.model } : {}),
+      // chat model if the id no longer resolves. An isolated trigger's model
+      // is for its one-shot runs (possibly another provider), not the chat.
+      ...(t.model && !isolated ? { modelOverride: t.model } : {}),
     });
   } catch (err) {
     logError("triggers", `wake dispatch failed [${triggerId}]`, err);

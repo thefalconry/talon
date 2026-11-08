@@ -69,6 +69,12 @@ export async function validateIsolatedJobTarget(
   model?: string,
   provider?: string,
 ): Promise<string | null> {
+  // Checked first, for every provider: the isolated runner resolves the
+  // model from the spec whenever a provider is named, even the chat's own,
+  // so a provider without a model would pass here and then fail every run.
+  if (provider && !model) {
+    return `A 'provider' override also requires a 'model'.`;
+  }
   const chatBackendId = getBackendIdForChat(chatKey);
   if (!provider || provider === chatBackendId) {
     const capabilityErr = validateBackgroundCapability(

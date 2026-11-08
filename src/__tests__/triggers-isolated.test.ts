@@ -43,6 +43,8 @@ const { buildIsolatedWakePrompt, MAX_PENDING, _resetIsolatedLanes } =
   await import("../core/background/triggers/isolated.js");
 const { parseWakeOptions } =
   await import("../core/engine/gateway-actions/triggers.js");
+const { validateIsolatedJobTarget } =
+  await import("../core/engine/gateway-actions/validation.js");
 
 import type { Trigger } from "../storage/triggers.js";
 import type { IsolatedJobSpec } from "../core/background/cron/scheduler.js";
@@ -140,14 +142,14 @@ describe("trigger store — wake_* columns", () => {
     const t = makeTrigger({
       model: "cheap-model",
       provider: "other-backend",
-      instructions: "Follow skill szufla-wake.",
+      instructions: "Follow skill inbox-wake.",
       wakeTimeoutMs: 120_000,
     });
     const back = getTrigger(t.id)!;
     expect(back.wakeMode).toBe("isolated");
     expect(back.model).toBe("cheap-model");
     expect(back.provider).toBe("other-backend");
-    expect(back.instructions).toBe("Follow skill szufla-wake.");
+    expect(back.instructions).toBe("Follow skill inbox-wake.");
     expect(back.wakeTimeoutMs).toBe(120_000);
   });
 
@@ -164,9 +166,9 @@ describe("trigger store — wake_* columns", () => {
 describe("fireWake routing", () => {
   it("isolated: runs a one-shot job, never resumes the chat session", async () => {
     const t = makeTrigger({
-      description: "watches szufla",
+      description: "watches the inbox",
       model: "m-cheap",
-      instructions: "Follow skill szufla-wake.",
+      instructions: "Follow skill inbox-wake.",
     });
     await fireWake(t.id, "fired", '{"event":"new"}', false);
 
@@ -178,13 +180,13 @@ describe("fireWake routing", () => {
       name: t.name,
       kind: "trigger",
       model: "m-cheap",
-      instructions: "Follow skill szufla-wake.",
+      instructions: "Follow skill inbox-wake.",
       timeoutMs: DEFAULT_WAKE_TIMEOUT_MS,
     });
     expect(spec.provider).toBeUndefined();
     expect(spec.payload).toContain('{"event":"new"}');
     expect(spec.payload).toContain("signalled");
-    expect(spec.payload).toContain("watches szufla");
+    expect(spec.payload).toContain("watches the inbox");
     expect(spec.payload).toContain('chat_id="chat-iso"');
     expect(getTrigger(t.id)!.fireCount).toBe(1);
   });
@@ -195,13 +197,36 @@ describe("fireWake routing", () => {
       provider: "p",
       wakeTimeoutMs: 45_000,
     });
-    await fireWake(t.id, "errored", "exit 1", true);
+    await fireWake(t.id, "fired", "exit 0", true);
     expect(runIsolated.mock.calls[0][0]).toMatchObject({
       provider: "p",
       model: "m",
       timeoutMs: 45_000,
     });
-    expect(runIsolated.mock.calls[0][0].payload).toContain("errored");
+    expect(runIsolated.mock.calls[0][0].payload).toContain("fired");
+  });
+
+  it("isolated: the watcher's own death still reaches the chat", async () => {
+    // The one-shot has no history and messages the user only when its
+    // brief says so; a dead watcher must not depend on that.
+    for (const status of [
+      "errored",
+      "timed_out",
+      "cancelled",
+      "terminated",
+    ] as const) {
+      runIsolated.mockClear();
+      executeSpy.mockClear();
+      const t = makeTrigger({ model: "other-provider-model", provider: "p" });
+      await fireWake(t.id, status, "last output", true);
+      expect(runIsolated).not.toHaveBeenCalled();
+      expect(executeSpy).toHaveBeenCalledTimes(1);
+      const params = executeSpy.mock.calls[0][0];
+      expect(params.prompt).toContain(`Status: ${status}`);
+      expect(params.prompt).toContain("the watcher itself has stopped");
+      // The isolated model belongs to the one-shot runs, not the chat.
+      expect(params.modelOverride).toBeUndefined();
+    }
   });
 
   it("chat mode is unchanged: resumes the chat via execute", async () => {
@@ -375,7 +400,7 @@ describe("trigger_create — parseWakeOptions", () => {
     expect(
       parseWakeOptions({
         mode: "isolated",
-        instructions: "  Follow skill szufla-wake.  ",
+        instructions: "  Follow skill inbox-wake.  ",
         provider: "openai",
         wake_timeout_seconds: 120,
       }),
@@ -383,11 +408,21 @@ describe("trigger_create — parseWakeOptions", () => {
       ok: true,
       value: {
         isolated: true,
-        instructions: "Follow skill szufla-wake.",
+        instructions: "Follow skill inbox-wake.",
         provider: "openai",
         wakeTimeoutMs: 120_000,
       },
     });
+  });
+
+  it("rejects a provider without a model, even the chat's own backend", async () => {
+    // The isolated runner takes the model from the spec whenever a provider
+    // is named, so this would pass creation and then fail every wake.
+    for (const provider of ["claude", "codex"]) {
+      expect(await validateIsolatedJobTarget("123", undefined, provider)).toBe(
+        "A 'provider' override also requires a 'model'.",
+      );
+    }
   });
 
   it("rejects an oversized brief", () => {
