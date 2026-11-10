@@ -1137,6 +1137,83 @@ describe("config", () => {
       expect(config.agents?.maxConcurrent).toBe(6);
     });
 
+    it("leaves idle compaction off when the cache block is absent or empty", async () => {
+      mockFs({ frontend: "terminal" });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(loadConfig().cache).toBeUndefined();
+
+      vi.resetModules();
+      mockFs({ frontend: "terminal", cache: {} });
+      const fresh = await import("../core/config/index.js");
+      expect(fresh.loadConfig().cache).toEqual({
+        idleCompact: false,
+        idleCompactMinContextTokens: 200_000,
+        idleCompactMode: "precompute",
+        idleCompactOnTurn: "wait",
+      });
+    });
+
+    it("accepts a configured idle-compaction policy and validates its bounds", async () => {
+      mockFs({
+        frontend: "terminal",
+        cache: {
+          idleCompact: true,
+          idleCompactMinContextTokens: 150_000,
+          idleCompactMode: "in-place",
+          idleCompactOnTurn: "ask",
+          promptCacheTtl: "1h",
+        },
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(loadConfig().cache).toEqual({
+        idleCompact: true,
+        idleCompactMinContextTokens: 150_000,
+        idleCompactMode: "in-place",
+        idleCompactOnTurn: "ask",
+        promptCacheTtl: "1h",
+      });
+
+      // Below the 100k floor is accepted (the resolver clamps it up)…
+      vi.resetModules();
+      mockFs({
+        frontend: "terminal",
+        cache: { idleCompactMinContextTokens: 99_999 },
+      });
+      const floor = await import("../core/config/index.js");
+      expect(floor.loadConfig().cache?.idleCompactMinContextTokens).toBe(
+        99_999,
+      );
+      const { resolveIdleCompactSettings } =
+        await import("../core/weaver/idle-compact.js");
+      expect(
+        resolveIdleCompactSettings(floor.loadConfig()).minContextTokens,
+      ).toBe(100_000);
+
+      // …but not a non-positive count.
+      vi.resetModules();
+      mockFs({
+        frontend: "terminal",
+        cache: { idleCompactMinContextTokens: 0 },
+      });
+      const zero = await import("../core/config/index.js");
+      expect(() => zero.loadConfig()).toThrow();
+
+      vi.resetModules();
+      mockFs({ frontend: "terminal", cache: { idleCompactMode: "eager" } });
+      const mode = await import("../core/config/index.js");
+      expect(() => mode.loadConfig()).toThrow();
+
+      vi.resetModules();
+      mockFs({ frontend: "terminal", cache: { idleCompactOnTurn: "queue" } });
+      const onTurn = await import("../core/config/index.js");
+      expect(() => onTurn.loadConfig()).toThrow();
+
+      vi.resetModules();
+      mockFs({ frontend: "terminal", cache: { promptCacheTtl: "10m" } });
+      const third = await import("../core/config/index.js");
+      expect(() => third.loadConfig()).toThrow();
+    });
+
     it("accepts configured trigger and agent caps", async () => {
       mockFs({
         frontend: "terminal",
