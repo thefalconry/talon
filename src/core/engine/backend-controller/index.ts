@@ -54,5 +54,6 @@ export {
   getBackendForChat,
   getBackendIdForChat,
   hasChatBackendOverride,
+  chatsBoundTo,
   resolveChatBackend,
 } from "./rebind.js";

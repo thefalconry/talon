@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
@@ -12,6 +13,7 @@ import 'log.dart';
 import 'mesh_liveness.dart';
 import 'mesh_service.dart';
 import 'message_notifications.dart';
+import 'network_watch.dart';
 import 'prefs.dart';
 
 /// Android background mesh: the foreground service owns the ENTIRE mesh loop.
@@ -45,7 +47,7 @@ void startMeshForegroundCallback() {
 }
 
 /// Task handler: delegates to a [MeshBackgroundRunner] for the whole service
-/// lifetime. The 60s repeat event doubles as a connection watchdog.
+/// lifetime. The 90s repeat event doubles as a connection watchdog.
 class MeshTaskHandler extends TaskHandler {
   MeshBackgroundRunner? _runner;
 
@@ -81,23 +83,49 @@ class MeshTaskHandler extends TaskHandler {
     AppLog.info('mesh_bg', 'foreground mesh stopping (timeout=$isTimeout)');
     await _runner?.dispose();
     _runner = null;
+    if (isTimeout) await MeshForegroundController.noteServiceTimedOut();
   }
 }
 
 /// Owns the background isolate's bridge connection and mesh loop:
 /// prefs → BridgeClient → MeshService, plus SSE reconnection with backoff
 /// (the same duty AppState performs for the UI's own connection).
+/// True when an open event stream has been silent longer than [idle]. The
+/// daemon pings every 25 s, so a live stream never is; null [lastRx] (no
+/// stream opened yet) is not "dead", just not connected.
+bool streamLooksDead(DateTime? lastRx, DateTime now, Duration idle) =>
+    lastRx != null && now.difference(lastRx) > idle;
+
+/// What the background mesh should stamp as its "last alive" moment after a
+/// successful registration: when the event stream last delivered anything,
+/// or null (don't stamp) while no stream is up. A registration alone proves
+/// only that an HTTP POST got through, not that commands can arrive.
+int? meshAliveStamp({
+  required DateTime? streamLastRx,
+  required bool connected,
+  required int nowMs,
+}) {
+  if (!connected || streamLastRx == null) return null;
+  final rx = streamLastRx.millisecondsSinceEpoch;
+  return rx > nowMs ? nowMs : rx;
+}
+
 class MeshBackgroundRunner {
   Prefs? _prefs;
   BridgeClient? _client;
   MeshService? _mesh;
   StreamSubscription<Map<String, dynamic>>? _drops;
+  StreamSubscription<List<ConnectivityResult>>? _networkWatch;
   Timer? _retry;
   bool _connecting = false;
   bool _connected = false;
   bool _disposed = false;
   int _backoffMs = _initialBackoffMs;
   int? _lastRegisteredAtMs;
+
+  /// The last connectivity reading ([networkKey]), so an interface change
+  /// can be told from a repeat of the same state.
+  String? _lastNetwork;
 
   static const int _initialBackoffMs = 2000;
   static const int _maxBackoffMs = 60000;
@@ -118,9 +146,9 @@ class MeshBackgroundRunner {
     'status',
   };
 
-  /// MeshService re-registers every 60 s on its own; the watchdog only
-  /// registers when that heartbeat has gone quiet for this long, so there is
-  /// one registration a minute instead of two (#1060).
+  /// MeshService re-registers every 60 s; the watchdog only registers when
+  /// that heartbeat has gone quiet for this long, so there is one
+  /// registration a minute instead of redundant heartbeats.
   static const Duration _heartbeatQuiet = Duration(seconds: 75);
 
   /// UI state pushed over the task channel (see
@@ -164,8 +192,51 @@ class MeshBackgroundRunner {
         _scheduleReconnect();
       },
     );
+    try {
+      if (!connectivityWatchAvailable) throw UnsupportedError('no plugin');
+      final connectivity = Connectivity();
+      unawaited(_seedNetwork(connectivity));
+      _networkWatch = connectivity.onConnectivityChanged.listen(
+        (results) {
+          if (_disposed) return;
+          final key = networkKey(results);
+          final changed = _lastNetwork != null && key != _lastNetwork;
+          _lastNetwork = key;
+          if (results.every((r) => r == ConnectivityResult.none)) return;
+          if (_connecting) return;
+          if (!_connected || changed) {
+            // A stream opened on the old interface is bound to it: after a
+            // Wi-Fi ↔ cellular switch it goes half-open and never errors, so
+            // reopen it now rather than wait out the idle deadline.
+            AppLog.info(
+              'mesh_bg',
+              _connected
+                  ? 'network changed ($key); reconnecting now'
+                  : 'network restored; reconnecting now',
+            );
+            _retry?.cancel();
+            _connected = false;
+            _backoffMs = _initialBackoffMs;
+            unawaited(_connect());
+          }
+        },
+        onError: (Object e) =>
+            AppLog.debug('mesh_bg', 'network watch unavailable', e),
+      );
+    } catch (e) {
+      AppLog.debug('mesh_bg', 'network watch setup failed', e);
+    }
     await _startMesh();
     await _connect();
+  }
+
+  /// Seed [_lastNetwork] so the first real change is recognised as one.
+  Future<void> _seedNetwork(Connectivity connectivity) async {
+    try {
+      _lastNetwork ??= networkKey(await connectivity.checkConnectivity());
+    } catch (e) {
+      AppLog.debug('mesh_bg', 'connectivity check unavailable', e);
+    }
   }
 
   /// Chat id → title, so a notification can be headed by the conversation's
@@ -342,14 +413,35 @@ class MeshBackgroundRunner {
     // Every successful registration lands here (MeshService's heartbeat
     // included), so the watchdog can tell whether one is due.
     _lastRegisteredAtMs = now;
+    // A registration is a fresh HTTP request on its own socket: it succeeds
+    // even while the event stream — the socket commands actually arrive on —
+    // sits half-open. So "alive" is when the stream last delivered something
+    // (a `: ping` every 25 s), not when the POST went through.
+    final aliveAt = meshAliveStamp(
+      streamLastRx: _client?.lastRx,
+      connected: _connected,
+      nowMs: now,
+    );
+    if (aliveAt == null) return;
     // Its own tiny file, not a SharedPreferences write (#1060).
-    await MeshLiveness.stamp(prefs, now);
+    await MeshLiveness.stamp(prefs, aliveAt);
   }
 
-  /// 60s watchdog (the foreground task's repeat event): keep registration
+  /// 90s watchdog (the foreground task's repeat event): keep registration
   /// fresh and reconnect with backoff when either SSE or registration stalls.
   void watchdog() {
     if (_disposed || _connecting) return;
+    if (_connected &&
+        streamLooksDead(
+          _client?.lastRx,
+          DateTime.now(),
+          BridgeClient.eventStreamIdleTimeout,
+        )) {
+      // Belt and braces for the client's own idle deadline: a stream that
+      // has delivered nothing (not even a ping) for that long is dead.
+      AppLog.warn('mesh_bg', 'event stream silent; reconnecting');
+      _connected = false;
+    }
     if (_connected) {
       unawaited(_watchdogRegister());
       return;
@@ -404,6 +496,8 @@ class MeshBackgroundRunner {
     _disposed = true;
     _retry?.cancel();
     _retry = null;
+    await _networkWatch?.cancel();
+    _networkWatch = null;
     await _mesh?.stop();
     await _drops?.cancel();
     _client?.dispose();
@@ -511,7 +605,7 @@ class MeshForegroundController {
 
   /// Data message poking the task isolate to reload prefs and reconnect.
   static const String msgReconfigure = 'mesh.reconfigure.v1';
-  static const Duration staleAliveAfter = Duration(seconds: 90);
+  static const Duration staleAliveAfter = Duration(seconds: 120);
 
   /// Keys of the UI-state map pushed to the task with [pushUiState].
   static const String keyUiForeground = 'ui.foreground';
@@ -586,7 +680,7 @@ class MeshForegroundController {
       iosNotificationOptions: const IOSNotificationOptions(),
       foregroundTaskOptions: ForegroundTaskOptions(
         // Drives MeshTaskHandler.onRepeatEvent — the connection watchdog.
-        eventAction: ForegroundTaskEventAction.repeat(60000),
+        eventAction: ForegroundTaskEventAction.repeat(90000),
         autoRunOnBoot: true,
         autoRunOnMyPackageReplaced: true,
         // No lifetime wake/Wi-Fi locks (#1060): they kept the SoC and radio
@@ -612,11 +706,36 @@ class MeshForegroundController {
     );
     switch (result) {
       case ServiceRequestSuccess():
+        // Running again: any "paused by Android" notice is now stale.
+        unawaited(
+          MessageNotifications.clearNotice(MessageNotifications.meshPausedId),
+        );
         return true;
       case ServiceRequestFailure(:final error):
         AppLog.warn('mesh_bg', 'foreground service start failed', error);
         return false;
     }
+  }
+
+  /// Android 15+ caps a `dataSync` foreground service at 6 hours per 24 and
+  /// then stops it (Service.onTimeout; the plugin stops the service and
+  /// reports `isTimeout`). It may not be restarted from the background until
+  /// the app next comes to the foreground — where [syncFromPrefs] restarts
+  /// it on the next connect. Until then the mesh is down, so say so rather
+  /// than leave a silently dead device: one notice, tapping it opens the app
+  /// (which restarts the service and withdraws the notice).
+  static Future<void> noteServiceTimedOut() async {
+    AppLog.warn(
+      'mesh_bg',
+      'Android stopped the mesh service at its background time limit; '
+          'it resumes when Talon is next opened',
+    );
+    await MessageNotifications.showNotice(
+      id: MessageNotifications.meshPausedId,
+      title: 'Talon mesh paused',
+      body: "Android paused Talon's background connection after its daily "
+          'time limit. Open Talon to reconnect this device.',
+    );
   }
 
   static Future<bool> stop() async {

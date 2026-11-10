@@ -156,9 +156,9 @@ void main() {
       await _waitFor(() =>
           state.messagesFor('d_abc123').last.text.contains('SDK error'));
 
-      // locate + device_command are mesh events — the chat layer must
-      // tolerate them silently; the trailing chat_deleted proves the stream
-      // survived them.
+      // locate + device_command are mesh events and bye is the daemon's
+      // restart notice — the chat layer must tolerate them silently; the
+      // trailing chat_deleted proves the stream survived them.
       await playThrough('chat_deleted');
       await _waitFor(() => !state.chats.any((c) => c.id == 'd_new777'));
 

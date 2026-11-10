@@ -16,10 +16,12 @@ import {
   agentIdFromContextLabel,
   agentRegistry,
   clampTimeout,
+  describeTimeout,
   deliverToAgent,
   getAgentCaps,
   killAgent,
   spawnAgent,
+  wantsPreflight,
   type AgentParent,
   type AgentRecord,
 } from "../../../agents/index.js";
@@ -150,6 +152,8 @@ function readSpawnBody(body: Record<string, unknown>):
       model?: string;
       reasoningEffort?: ReasoningEffortLevel;
       timeoutMs?: number;
+      preflight: boolean;
+      force: boolean;
     }
   | { ok: false; error: string } {
   const brief = String(body.brief ?? "").trim();
@@ -168,10 +172,20 @@ function readSpawnBody(body: Record<string, unknown>):
   if (timeoutS !== undefined && !Number.isFinite(timeoutS)) {
     return { ok: false, error: "timeout_s must be a number of seconds" };
   }
+  const preflight = body.preflight;
+  if (preflight !== undefined && typeof preflight !== "boolean") {
+    return { ok: false, error: "preflight must be true or false" };
+  }
+  const force = body.force;
+  if (force !== undefined && typeof force !== "boolean") {
+    return { ok: false, error: "force must be true or false" };
+  }
   return {
     ok: true,
     brief,
     label,
+    force: force === true,
+    preflight: wantsPreflight(brief, preflight),
     ...(body.backend ? { backendId: String(body.backend) } : {}),
     ...(body.model ? { model: String(body.model) } : {}),
     ...(effort !== undefined
@@ -200,9 +214,12 @@ export const agentControlHandlers: SharedActionHandlers = {
       ...(parsed.timeoutMs !== undefined
         ? { timeoutMs: parsed.timeoutMs }
         : {}),
+      preflight: parsed.preflight,
+      ...(parsed.force ? { force: true } : {}),
     });
     if (!outcome.ok) return { ok: false, error: outcome.error };
-    const timeoutS = Math.round(clampTimeout(parsed.timeoutMs) / 1000);
+    const timeout = describeTimeout(clampTimeout(parsed.timeoutMs));
+    const stall = getAgentCaps().stallTimeoutMs;
     log("gateway", `spawn_agent: "${parsed.label}" [${outcome.agentId}]`);
     return {
       ok: true,
@@ -210,7 +227,13 @@ export const agentControlHandlers: SharedActionHandlers = {
         `Spawned agent "${parsed.label}" (id: ${outcome.agentId})\n` +
         `Backend: ${outcome.backendId}/${outcome.model}` +
         `${outcome.routing ? ` (routed: ${outcome.routing})` : ""}\n` +
-        `Timeout: ${timeoutS}s\n` +
+        `Timeout: ${timeout}` +
+        (stall > 0
+          ? ` (watchdog: pinged after ${describeTimeout(stall)} quiet, ` +
+            `killed after ${describeTimeout(3 * stall)})`
+          : "") +
+        `\n` +
+        (parsed.preflight ? `Pre-flight lane: on\n` : "") +
         `It runs in the background. You will be woken with its report — ` +
         `carry on with what you were doing.`,
     };

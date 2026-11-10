@@ -17,8 +17,12 @@
  */
 
 import type { IncomingMessage } from "node:http";
-import { isDeviceCredentialToken } from "../../../../core/mesh/credentials/index.js";
+import {
+  credentialIdOf,
+  isDeviceCredentialToken,
+} from "../../../../core/mesh/credentials/index.js";
 import { logWarn } from "../../../../util/log.js";
+import { clientAddress } from "../client-address.js";
 
 /**
  * What a credential may do (see core/mesh/credentials/types.ts):
@@ -64,6 +68,8 @@ type BridgeCredentialAuthority = {
     deviceId: string,
   ): { ok: true } | { ok: false; error: string };
   rotationDue(credentialId: string): boolean;
+  /** Live credentials acting as `deviceId` (and whether each was used). */
+  activeFor(deviceId: string): readonly { lastUsedAt?: number }[];
   noteLegacy(deviceId: string): boolean;
   onRevoked(listener: (credentialIds: readonly string[]) => void): () => void;
   mint(input: {
@@ -137,6 +143,15 @@ function isLocalRequest(req: IncomingMessage): boolean {
   );
 }
 
+/**
+ * The per-device credential id a presented bearer names (`tdc1.<id>.…`), so
+ * a refusal can count against that id as well as the address. Null for the
+ * shared token or anything malformed. Ids are identifiers, safe to log.
+ */
+export function presentedCredentialId(candidate: string): string | null {
+  return credentialIdOf(candidate);
+}
+
 /** Addresses already warned about a refused legacy token (bounded). */
 const refusedLegacy = new Set<string>();
 
@@ -165,7 +180,7 @@ export function resolvePrincipal(
   if (!sharedMatches(candidate)) return null;
   const local = isLocalRequest(req);
   if (!local && credentials && !credentials.policy.legacySharedToken) {
-    const remote = req.socket.remoteAddress ?? "unknown";
+    const remote = clientAddress(req);
     if (!refusedLegacy.has(remote) && refusedLegacy.size < 256) {
       refusedLegacy.add(remote);
       logWarn(

@@ -8,7 +8,8 @@
  */
 
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
-import { agentTools } from "../core/tools/ops/agents.js";
+import type { z } from "zod";
+import { agentTools, preflightTools } from "../core/tools/ops/agents.js";
 import {
   agentContextActions,
   agentHandlers,
@@ -20,6 +21,7 @@ import {
 import {
   agentContextLabel,
   agentRegistry,
+  deliverToAgent,
   initAgentDelivery,
   type AgentParent,
   type AgentRecord,
@@ -52,7 +54,13 @@ function live(parent: AgentParent, label = "probe"): AgentRecord {
       parent,
       backendId: "claude",
     },
-    { maxConcurrent: 10, maxDepth: 3, defaultTimeoutMs: 1000 },
+    {
+      maxConcurrent: 10,
+      maxDepth: 3,
+      defaultTimeoutMs: 1000,
+      stallTimeoutMs: 0,
+      minHeadroomPct: 0,
+    },
   );
   if (!outcome.ok) throw new Error(outcome.error);
   agentRegistry.start(outcome.record.id, {
@@ -98,7 +106,7 @@ afterEach(() => {
 
 describe("tool → action routing", () => {
   it("routes every tool to the bridge action of the same name", async () => {
-    for (const tool of agentTools) {
+    for (const tool of [...agentTools, ...preflightTools]) {
       const seen: string[] = [];
       await tool.execute({ probe: 1 }, async (action) => {
         seen.push(action);
@@ -109,7 +117,9 @@ describe("tool → action routing", () => {
   });
 
   it("has a gateway handler for every tool, and no orphan handlers", () => {
-    const toolNames = agentTools.map((tool) => tool.name).sort();
+    const toolNames = [...agentTools, ...preflightTools]
+      .map((tool) => tool.name)
+      .sort();
     expect(Object.keys(agentHandlers).sort()).toEqual(toolNames);
     expect([...agentContextActions].sort()).toEqual(toolNames);
     for (const name of toolNames) expect(isAgentContextAction(name)).toBe(true);
@@ -257,6 +267,38 @@ describe("chat-side actions", () => {
       effort: "turbo",
     });
     expect(badEffort.error).toContain("Unknown effort");
+    const badPreflight = await asChat("spawn_agent", {
+      brief: "x",
+      label: "y",
+      preflight: "yes",
+    });
+    expect(badPreflight.error).toBe("preflight must be true or false");
+    const badForce = await asChat("spawn_agent", {
+      brief: "x",
+      label: "y",
+      force: "yes",
+    });
+    expect(badForce.error).toBe("force must be true or false");
+  });
+
+  it("spawn_agent exposes an optional boolean force param that names the guard", () => {
+    const spawnTool = agentTools.find((tool) => tool.name === "spawn_agent");
+    const param = spawnTool?.schema.force as z.ZodType | undefined;
+    expect(param).toBeDefined();
+    expect(param?.safeParse(undefined).success).toBe(true);
+    expect(param?.safeParse(true).success).toBe(true);
+    expect(param?.safeParse("yes").success).toBe(false);
+    expect(spawnTool?.description).toContain("force: true");
+    expect(spawnTool?.description).toContain("agents.minHeadroomPct");
+  });
+
+  it("spawn_agent exposes an optional boolean preflight param", () => {
+    const spawnTool = agentTools.find((tool) => tool.name === "spawn_agent");
+    const param = spawnTool?.schema.preflight as z.ZodType | undefined;
+    expect(param).toBeDefined();
+    expect(param?.safeParse(undefined).success).toBe(true);
+    expect(param?.safeParse(true).success).toBe(true);
+    expect(param?.safeParse("yes").success).toBe(false);
   });
 });
 
@@ -292,10 +334,9 @@ describe("peer channel", () => {
     expect(again.text).toContain("Inbox empty");
   });
 
-  // The boundary. Widening addressing to siblings must not widen it further:
-  // a cousin belongs to another parent's job and is none of this agent's
-  // business.
-  it("refuses an agent under a different parent, and one in another chat", async () => {
+  // The boundary: messaging reaches the whole tree rooted in the caller's
+  // chat — and never past it.
+  it("reaches a cousin in the same tree but never an agent in another chat", async () => {
     const mine = live(CHAT, "mine");
     const sibling = live(CHAT, "sibling");
     const cousin = live({ kind: "agent", agentId: sibling.id }, "cousin");
@@ -304,33 +345,80 @@ describe("peer channel", () => {
       "stranger",
     );
 
-    for (const target of [cousin.id, stranger.id]) {
+    const toCousin = await asAgent(mine.id, "message_peer", {
+      agent_id: cousin.id,
+      text: "the schema changed",
+    });
+    expect(toCousin.ok).toBe(true);
+    expect((await asAgent(cousin.id, "check_inbox")).text).toContain(
+      "the schema changed",
+    );
+
+    for (const target of [stranger.id, "stranger"]) {
       const refused = await asAgent(mine.id, "message_peer", {
         agent_id: target,
         text: "hello",
       });
       expect(refused.ok).toBe(false);
-      expect(refused.error).toContain("same parent");
+      expect(refused.error).toContain("in your tree");
     }
-    // and nothing was delivered
-    expect((await asAgent(cousin.id, "check_inbox")).text).toContain(
-      "Inbox empty",
-    );
     expect((await asAgent(stranger.id, "check_inbox")).text).toContain(
       "Inbox empty",
     );
+    // and the stranger cannot see in either
+    const theirs = await asAgent(stranger.id, "list_peers", { scope: "tree" });
+    expect(theirs.text).not.toContain(mine.id);
   });
 
-  it("does not treat its own child as a peer (children go via send_to_agent)", async () => {
+  it("lists the whole tree with relationships, and addresses by label", async () => {
+    const parent = live(CHAT, "lead");
+    const me = live({ kind: "agent", agentId: parent.id }, "me");
+    const child = live({ kind: "agent", agentId: me.id }, "kid");
+    const uncle = live(CHAT, "uncle");
+
+    const tree = await asAgent(me.id, "list_peers", { scope: "tree" });
+    expect(tree.ok).toBe(true);
+    expect(tree.text).toMatch(/lead \[\w+\] — your parent/);
+    expect(tree.text).toMatch(/kid \[\w+\] — your child/);
+    expect(tree.text).toContain(uncle.id);
+    expect(tree.text).not.toContain(`ID: ${me.id}`);
+
+    const up = await asAgent(me.id, "message_peer", {
+      agent_id: "lead",
+      text: "found it",
+    });
+    expect(up.ok).toBe(true);
+    expect((await asAgent(parent.id, "check_inbox")).text).toContain(
+      "found it",
+    );
+    const down = await asAgent(me.id, "message_peer", {
+      agent_id: child.id,
+      text: "stop",
+    });
+    expect(down.ok).toBe(true);
+  });
+
+  it("refuses an ambiguous label and an unknown scope", async () => {
+    const me = live(CHAT, "me");
+    const a = live(CHAT, "worker");
+    const b = live(CHAT, "worker");
+    const result = await asAgent(me.id, "message_peer", {
+      agent_id: "worker",
+      text: "x",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("ambiguous");
+    expect(result.error).toContain(a.id);
+    expect(result.error).toContain(b.id);
+    const bad = await asAgent(me.id, "list_peers", { scope: "galaxy" });
+    expect(bad.ok).toBe(false);
+  });
+
+  it("keeps list_peers' default view to siblings (a child is not a peer there)", async () => {
     const parent = live(CHAT, "parent");
-    const child = live({ kind: "agent", agentId: parent.id }, "child");
+    live({ kind: "agent", agentId: parent.id }, "child");
     const peers = await asAgent(parent.id, "list_peers");
     expect(peers.text).toContain("No peers");
-    const refused = await asAgent(parent.id, "message_peer", {
-      agent_id: child.id,
-      text: "hi",
-    });
-    expect(refused.ok).toBe(false);
   });
 
   it("refuses a chat caller", async () => {
@@ -349,5 +437,95 @@ describe("peer channel", () => {
     const killed = await asAgent(a.id, "kill_agent", { agent_id: b.id });
     expect(killed.ok).toBe(false);
     expect(agentRegistry.isLive(b.id)).toBe(true);
+  });
+});
+
+describe("inbox unread notice on tool results", () => {
+  it("appears on tool results while the calling agent has unread messages", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "important: check the config first");
+
+    const result = await asAgent(record.id, "list_peers");
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain("No peers");
+    expect(result.text).toContain(
+      "[inbox: 1 unread message(s) — call check_inbox now]",
+    );
+  });
+
+  it("disappears immediately after check_inbox drains the inbox", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "step 1 instructions");
+
+    // Before drain: tool result carries notice
+    const before = await asAgent(record.id, "list_peers");
+    expect(before.text).toContain(
+      "[inbox: 1 unread message(s) — call check_inbox now]",
+    );
+
+    // check_inbox drains the mail and its own result does not carry the notice
+    const drained = await asAgent(record.id, "check_inbox");
+    expect(drained.ok).toBe(true);
+    expect(drained.text).toContain("step 1 instructions");
+    expect(drained.text).not.toContain("[inbox:");
+
+    // Subsequent tool call has no unread messages, so no notice appears
+    const after = await asAgent(record.id, "list_peers");
+    expect(after.text).toContain("No peers");
+    expect(after.text).not.toContain("[inbox:");
+  });
+
+  it("reflects the correct unread message count", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "note 1");
+    deliverToAgent("peer-1", record.id, "note 2");
+    deliverToAgent("peer-2", record.id, "note 3");
+
+    const result = await asAgent(record.id, "list_peers");
+    expect(result.text).toContain(
+      "[inbox: 3 unread message(s) — call check_inbox now]",
+    );
+  });
+
+  it("never appears for chat (non-agent) callers even when agents have unread messages", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "unread mail waiting");
+
+    // Chat caller inspecting agents
+    const listRes = await asChat("list_agents");
+    expect(listRes.text).toContain(record.id);
+    expect(listRes.text).not.toContain("[inbox:");
+
+    const statusRes = await asChat("agent_status", { agent_id: record.id });
+    expect(statusRes.text).toContain(record.id);
+    expect(statusRes.text).not.toContain("[inbox:");
+  });
+
+  it("attaches to error results when an agent call fails with pending inbox messages", async () => {
+    const record = live(CHAT);
+    deliverToAgent("parent", record.id, "waiting mail");
+
+    const failRes = await asAgent(record.id, "report_result", { summary: "" });
+    expect(failRes.ok).toBe(false);
+    expect(failRes.error).toContain("Missing summary");
+    expect(failRes.error).toContain(
+      "[inbox: 1 unread message(s) — call check_inbox now]",
+    );
+  });
+});
+
+describe("spawn_agent chat_id (background runs)", () => {
+  const spawn = agentTools.find((t) => t.name === "spawn_agent")!;
+  it("accepts an explicit chat_id and forwards it to the bridge", async () => {
+    expect(spawn.schema.chat_id).toBeDefined();
+    const bridge = vi.fn(async () => ({ ok: true }));
+    const params = { brief: "b", label: "l", chat_id: "352042062" };
+    await spawn.execute(params as never, bridge as never);
+    expect(bridge).toHaveBeenCalledWith("spawn_agent", params);
+  });
+  it("keeps chat_id optional for chat mode", () => {
+    expect(
+      (spawn.schema.chat_id as z.ZodType).safeParse(undefined).success,
+    ).toBe(true);
   });
 });

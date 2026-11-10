@@ -1,0 +1,36 @@
+# nfpm packaging manifest for the Talon Companion Linux client (.deb and .rpm).
+# VERSION, ARCH, and BUNDLE_DIR are supplied via the environment.
+name: talon-companion
+arch: ${ARCH}
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: The Falconry <noreply@github.com>
+description: |
+  Desktop companion client for the Talon AI agent.
+vendor: The Falconry
+homepage: https://github.com/thefalconry/talon
+license: MIT
+recommends:
+  - libgtk-3-0
+  - libayatana-appindicator3-1
+  - libsecret-1-0
+contents:
+  - src: ${STAGING_BUNDLE}/*
+    dst: /usr/lib/talon-companion/
+  - src: ${LINUX_INSTALLER_DIR}/talon-companion.desktop
+    dst: /usr/share/applications/talon-companion.desktop
+    file_info:
+      mode: 0644
+  - src: ${LINUX_INSTALLER_DIR}/talon-companion.png
+    dst: /usr/share/icons/hicolor/256x256/apps/talon-companion.png
+    file_info:
+      mode: 0644
+  - src: ${COMPANION_ASSETS_DIR}/icon/talon_icon.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/talon-companion.svg
+    file_info:
+      mode: 0644
+  - src: ${LINUX_INSTALLER_DIR}/talon-companion-launcher.sh
+    dst: /usr/bin/talon-companion
+    file_info:
+      mode: 0755

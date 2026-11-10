@@ -167,17 +167,18 @@ function authHeaders(token: string): Record<string, string> {
   };
 }
 
-async function oauthToken(): Promise<string | undefined> {
+async function oauthToken(configDir?: string): Promise<string | undefined> {
   // An API-key session isn't on the subscription whose resets these are.
   if (process.env.ANTHROPIC_API_KEY) return undefined;
-  return (await readCredentials())?.accessToken;
+  return (await readCredentials(configDir))?.accessToken;
 }
 
 /** What a claim would spend right now, or undefined when there's nothing. */
 export async function getBankedResetOffer(
   now = Date.now(),
+  configDir?: string,
 ): Promise<BankedResetOffer | undefined> {
-  const token = await oauthToken();
+  const token = await oauthToken(configDir);
   if (!token) return undefined;
   try {
     const res = await fetch(USAGE_ENDPOINT, {
@@ -260,12 +261,13 @@ export function parseClaimResponse(body: unknown): BankedResetClaim {
 export async function claimBankedReset(
   grantId: string,
   requestId: string = newResetRequestId(),
+  configDir?: string,
 ): Promise<BankedResetClaim> {
   if (!isValidGrantId(grantId) || !isValidRequestId(requestId)) {
     logWarn("agent", "banked resets: refusing a malformed grant or request id");
     return failed("error");
   }
-  const token = await oauthToken();
+  const token = await oauthToken(configDir);
   if (!token) return failed("auth_error");
 
   try {
@@ -292,7 +294,7 @@ export async function claimBankedReset(
     }
     const claim = parseClaimResponse(await res.json().catch(() => null));
     // Any settled answer changes what /usage should say; re-read next time.
-    if (claim.result !== "unavailable") invalidatePlanUsage();
+    if (claim.result !== "unavailable") invalidatePlanUsage(configDir);
     return claim;
   } catch (err) {
     logWarn(

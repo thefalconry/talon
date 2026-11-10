@@ -4,12 +4,18 @@
  * anything with logic of its own lives in the module named for it.
  */
 
+import {
+  isLiveSecretDrop,
+  openSecretDropForm,
+  submitSecretDrop,
+} from "../../../core/secrets/index.js";
 import { files } from "../../../util/paths.js";
 import { setChatPulse } from "../../../storage/chat-settings.js";
 import { getPooledBackend } from "../../../core/engine/backend-controller/index.js";
 import { createChat, deleteChat, renameChat } from "../chats/chat-lifecycle.js";
 import { broadcastChatUpdated, toClientChat } from "../chats/chat-wire.js";
 import { control } from "./control.js";
+import { handleNativeCommand, listNativeCommands } from "../commands/index.js";
 import {
   pluginItems,
   skillItems,
@@ -41,6 +47,8 @@ import type { ClientAttachment } from "../protocol.js";
 import { configSnapshot, applyConfigUpdate } from "./settings.js";
 import { bridgeStatus, broadcastStatus } from "./status.js";
 import { logWarn } from "../../../util/log.js";
+import { applyInboundRedaction } from "../../../core/secrets/redact.js";
+import { emitAssistant } from "../turn/emit.js";
 import {
   interruptTurn,
   isBusy,
@@ -92,6 +100,31 @@ function resolveAttachments(
   return resolved;
 }
 
+/**
+ * Credentials out of a native message before it's emitted, persisted or
+ * sent to the model (core/secrets/redact.ts). The once-per-chat nudge is
+ * emitted after the caller has emitted the user's own message.
+ */
+function redactNativeText(
+  runtime: NativeRuntime,
+  chatId: string,
+  text: string,
+): string {
+  const r = applyInboundRedaction(text, {
+    chatKey: chatId,
+    isDm: true,
+    config: { ...runtime.config.redaction, deleteOriginal: "never" },
+  });
+  const notice = r.notice;
+  if (notice) {
+    queueMicrotask(() => {
+      const entry = runtime.chats.get(chatId);
+      if (entry) emitAssistant(runtime, entry, notice);
+    });
+  }
+  return r.text;
+}
+
 export function buildBridgeHandlers(
   runtime: NativeRuntime,
 ): BridgeServerHandlers {
@@ -108,23 +141,48 @@ export function buildBridgeHandlers(
     // straight delegations to the read-only half of the store.
     listMemory,
     memoryWhy,
-    send: (id, text, opts) => {
+    send: (id, rawText, opts, caller) => {
+      const text = redactNativeText(runtime, id, rawText);
       const entry = chats.get(id) ?? chats.ensure(id);
       // Resolve the client's references into the records this daemon minted
       // at upload time — dropping anything it can't account for.
       const attachments = resolveAttachments(runtime, opts);
+      // A slash command the daemon answers itself never reaches the model,
+      // and never waits behind a running turn (`/stop` is for exactly
+      // that). A message with files attached is always the model's.
+      if (
+        !attachments.length &&
+        handleNativeCommand(runtime, entry, text, {
+          operator: caller?.operator === true,
+        })
+      ) {
+        return;
+      }
       // A turn is already running for this chat — don't interrupt it. Park the
       // message as the single queued follow-up (synced to every client); it
       // auto-sends when the running turn ends. `isBusy` reads `liveTurns`,
       // which `runTurn` sets synchronously, so even a rapid second /send from
       // any client is caught here rather than starting a concurrent turn.
       if (isBusy(runtime, entry.id)) {
-        setQueued(runtime, entry.id, { text, attachments });
+        const existing = runtime.queuedByChat.get(entry.id);
+        if (existing) {
+          const combinedText = [existing.text.trim(), text.trim()]
+            .filter(Boolean)
+            .join("\n\n");
+          const combinedAttachments = [...existing.attachments, ...attachments];
+          setQueued(runtime, entry.id, {
+            text: combinedText,
+            attachments: combinedAttachments,
+          });
+        } else {
+          setQueued(runtime, entry.id, { text, attachments });
+        }
         return;
       }
       startTurn(runtime, entry, text, { attachments });
     },
-    queueMessage: (id, text) => {
+    queueMessage: (id, rawText) => {
+      const text = redactNativeText(runtime, id, rawText);
       // Edit/replace the queued follow-up's text, keeping whatever files were
       // queued with it. Empty text cancels the whole follow-up, attachments
       // included — the client's queue editor offers no other way to drop it.
@@ -176,10 +234,12 @@ export function buildBridgeHandlers(
     setSkillEnabled: (name, enabled) =>
       toggleSkill(config, getPooledBackend(config.backend), name, enabled),
     control,
+    listCommands: () => listNativeCommands(),
     logs: ({ lines, minLevel, component }) =>
       readLogEntries(files.log, { limit: lines, minLevel, component }),
     liveTurnEvents: () => liveTurnEvents(runtime),
     mediaPath: (id) => runtime.media.get(id) ?? null,
+    mediaName: (id) => runtime.uploads.get(id)?.name ?? null,
     // Mesh routes are thin transport shims over the shared core service —
     // storeLocation wakes any pending fresh-fix waiters inside the service.
     registerDevice: (body) => mesh.register(body),
@@ -193,5 +253,9 @@ export function buildBridgeHandlers(
     openCompanionPair: (token, format) => mesh.openCompanionPair(token, format),
     openNodeInstall: (token, os, arch) => mesh.openNodeInstall(token, os, arch),
     openNodeBinary: (token) => mesh.openNodeBinary(token),
+    openSecretDrop: (token) => openSecretDropForm(token),
+    isLiveSecretDrop: (token) => isLiveSecretDrop(token),
+    submitSecretDrop: (token, body, contentType) =>
+      submitSecretDrop(token, body, contentType),
   };
 }

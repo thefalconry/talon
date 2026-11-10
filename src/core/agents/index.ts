@@ -21,9 +21,12 @@ export { AgentRegistry, agentRegistry } from "./registry.js";
 export {
   DEFAULT_AGENT_CAPS,
   clampTimeout,
+  describeTimeout,
   getAgentCaps,
   initAgents,
+  interruptAgentsForRestart,
   killAgent,
+  resumeAgentsAfterRestart,
   shutdownAgents,
   spawnAgent,
 } from "./runner.js";
@@ -33,5 +36,6 @@ export {
   deliverToAgent,
   initAgentDelivery,
 } from "./delivery.js";
-export { describeParent } from "./prompt.js";
+export { describeParent, wantsPreflight } from "./prompt.js";
+export { recordInterimMessage } from "./trail.js";
 export type { AgentCaps, AgentParent, AgentRecord } from "./types.js";

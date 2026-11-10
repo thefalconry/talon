@@ -39,7 +39,14 @@ import {
   recordTurnMeta,
   getTurnMeta,
 } from "../frontend/native/turn/turn-meta.js";
-import { getRecentHistory, pushMessage } from "../storage/history.js";
+import {
+  getHistoryStats,
+  getRecentHistory,
+  isChatHistoryHidden,
+  pushMessage,
+  searchHistoryMessages,
+} from "../storage/history.js";
+import { historyPage } from "../frontend/native/chats/history.js";
 import { BOT_SENDER_ID } from "../frontend/native/protocol.js";
 import { makeNativeHarness } from "./helpers/native-bridge.js";
 
@@ -108,7 +115,7 @@ describe("native chat lifecycle", () => {
     expect(runtime.chats.get(chat.id)).toBeUndefined();
   });
 
-  it("drops the deleted chat's cached readout, queue and turn meta", () => {
+  it("drops the deleted chat's cached readout and queue, keeps its turn meta", () => {
     const { runtime } = harness;
     const chat = createChat(runtime);
     runtime.contextByChat.set(chat.id, {
@@ -125,7 +132,30 @@ describe("native chat lifecycle", () => {
 
     expect(runtime.contextByChat.has(chat.id)).toBe(false);
     expect(runtime.queuedByChat.has(chat.id)).toBe(false);
-    expect(getTurnMeta(chat.id, "9")).toBeNull();
+    // Kept with the (hidden) rows — only `talon history purge` drops it.
+    expect(getTurnMeta(chat.id, "9")).toEqual({ durationMs: 1 });
+  });
+
+  it("soft-deletes: the chat is hidden, its history rows are kept", () => {
+    const { runtime } = harness;
+    const chat = createChat(runtime);
+    pushMessage(chat.id, {
+      msgId: 1,
+      senderId: 1,
+      senderName: "Ada",
+      text: "a conversation worth keeping",
+      timestamp: Date.now(),
+    });
+
+    expect(deleteChat(runtime, chat.id)).toBe(true);
+
+    expect(isChatHistoryHidden(chat.id)).toBe(true);
+    expect(getHistoryStats(chat.id).totalMessages).toBe(1);
+    expect(
+      getRecentHistory(chat.id, 10, { includeCleared: true })[0].text,
+    ).toBe("a conversation worth keeping");
+    // Not in the chat's context any more, and no longer restored.
+    expect(getRecentHistory(chat.id, 10)).toEqual([]);
   });
 
   it("reports a delete of an unknown chat as false, with nothing broadcast", () => {
@@ -142,7 +172,7 @@ describe("native chat reset", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("clears the chat's transcript", () => {
+  it("starts the transcript fresh but keeps every history row", () => {
     const { runtime } = harness;
     const entry = runtime.chats.create();
     pushMessage(entry.id, {
@@ -155,9 +185,13 @@ describe("native chat reset", () => {
 
     expect(resetChat(runtime, entry.id)).toBe(true);
     expect(getRecentHistory(entry.id, 10)).toHaveLength(0);
+    expect(historyPage(runtime, entry.id)).toHaveLength(0);
+    // Soft reset: the row is still stored and still found by search.
+    expect(getHistoryStats(entry.id).totalMessages).toBe(1);
+    expect(searchHistoryMessages(entry.id, "old reply")).toHaveLength(1);
   });
 
-  it("forgets the chat's turn meta, cached readout and queued follow-up", () => {
+  it("forgets the cached readout and queued follow-up, keeps turn meta", () => {
     const { runtime } = harness;
     const entry = runtime.chats.create();
     recordTurnMeta(entry.id, "3", { durationMs: 5 });
@@ -172,7 +206,7 @@ describe("native chat reset", () => {
 
     resetChat(runtime, entry.id);
 
-    expect(getTurnMeta(entry.id, "3")).toBeNull();
+    expect(getTurnMeta(entry.id, "3")).toEqual({ durationMs: 5 });
     expect(runtime.contextByChat.has(entry.id)).toBe(false);
     expect(runtime.queuedByChat.has(entry.id)).toBe(false);
   });

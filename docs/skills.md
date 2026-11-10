@@ -58,7 +58,10 @@ the normal Read tool. Deleting a skill removes the whole folder.
   source either **is** a skill (has `SKILL.md`) or is a collection whose
   immediate children are skills — collections install every child. The target
   folder name is the frontmatter `name`; existing skills are only replaced
-  with `--force`.
+  with `--force`. A git source installs at a given commit with `<source>#<sha>`
+  or `--commit <sha>`, and each skill installed from git gets a
+  `.talon-install.json` recording the repo, path and commit (it is not listed
+  as a skill resource).
 - `talon skill list` — every skill with its enabled state.
 - `talon skill enable/disable <name>` — toggle via a `.disabled` marker file
   in the skill folder. The marker survives `save_skill` updates (which only

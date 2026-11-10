@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show HttpClient, X509Certificate;
+import 'dart:io' show HttpClient, SecurityContext, X509Certificate;
 
 import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:http/http.dart' as http;
@@ -36,6 +36,14 @@ class BridgeClient {
   /// up here turns silence into a reported failure.
   static const Duration streamIdleTimeout = Duration(seconds: 45);
 
+  /// Silence after which the SSE event stream is declared dead. The daemon
+  /// writes a `: ping` comment every 25 s, so a healthy stream is never quiet
+  /// this long; a half-open socket (a network switch, NAT dropping the flow
+  /// without a FIN) delivers neither bytes nor an error, and without this
+  /// deadline the stream would sit "connected" forever while the HTTP
+  /// heartbeat keeps the device marked online.
+  static const Duration eventStreamIdleTimeout = Duration(seconds: 70);
+
   /// Wall-clock budget for pushing [bytes] up (the `upload_file` half).
   /// Unlike a download there is no per-chunk event to watch — the response
   /// arrives only once the whole body is sent — so the deadline is sized
@@ -56,6 +64,7 @@ class BridgeClient {
     final prev = _config;
     _config = next;
     if (next.tls != prev.tls ||
+        next.enforcesPin != prev.enforcesPin ||
         next.clientP12 != prev.clientP12 ||
         next.clientP12Password != prev.clientP12Password) {
       _httpClient?.close();
@@ -72,6 +81,7 @@ class BridgeClient {
 
   String? _seenFingerprint;
   bool _pinRejected = false;
+  bool _pinObserved = false;
 
   /// This device's mesh id, when it has one. Claimed on the SSE GET so the
   /// daemon addresses `device_command` frames to this client alone, and sent
@@ -80,8 +90,23 @@ class BridgeClient {
   /// makes this a plain UI connection.
   String? meshDeviceId;
 
-  BridgeClient(ConnectionConfig config, {this.skipKinds = const {}})
-      : _config = config;
+  BridgeClient(
+    ConnectionConfig config, {
+    this.skipKinds = const {},
+    this.eventStreamIdle = eventStreamIdleTimeout,
+  }) : _config = config;
+
+  /// See [eventStreamIdleTimeout]; injectable so tests can stall a stream
+  /// without waiting a minute.
+  final Duration eventStreamIdle;
+
+  DateTime? _lastRx;
+
+  /// When the event stream last delivered anything — an event or a `: ping`
+  /// keep-alive. Null until a stream has opened. The freshest proof the
+  /// connection is really alive, unlike a successful HTTP request, which
+  /// travels on a different socket.
+  DateTime? get lastRx => _lastRx;
 
   /// Event kinds this client drops *before* JSON-decoding them. The
   /// background mesh isolate sets this to the chat-UI firehose (`delta`,
@@ -107,24 +132,56 @@ class BridgeClient {
   /// the pin candidate the caller persists after a successful first connect.
   String? get seenFingerprint => _seenFingerprint;
 
+  /// True once a handshake presented exactly the pinned certificate — the
+  /// caller then persists [ConnectionConfig.pinObserved], which makes the
+  /// pin binding even for CA-valid certificates.
+  bool get pinObserved => _pinObserved;
+
+  /// How long an idle pooled connection is kept for reuse. dart:io's default
+  /// is 15 s, shorter than the mesh's 60 s registration heartbeat, so every
+  /// heartbeat paid a fresh DNS lookup, TCP connect and TLS handshake
+  /// (~1000 of them in two days on one Mac). Outliving the heartbeat lets
+  /// it ride one kept-alive connection wherever the server end (a reverse
+  /// proxy, or the bridge's own keep-alive window) holds it open too; a
+  /// connection the server has closed is dropped from the pool as soon as
+  /// its FIN arrives, so nothing is sent on a dead socket.
+  static const Duration restIdleTimeout = Duration(seconds: 90);
+
   http.Client _newClient() {
-    if (!config.tls) return http.Client();
     // A reverse proxy in front of the bridge may demand a client
     // certificate; present the imported one whenever it's asked for. Server
-    // trust is still the pin below.
-    final inner = HttpClient(context: config.clientSecurityContext())
-      ..badCertificateCallback = (cert, host, port) => _evaluate(cert);
+    // trust is still the pin below. A profile that enforces its pin leaves
+    // the platform's CA roots out, so no certificate is trusted before the
+    // pin has been checked.
+    final strict = config.enforcesPin;
+    final inner = config.tls
+        ? (HttpClient(
+            context: config.clientSecurityContext(trustedRoots: !strict) ??
+                (strict ? SecurityContext(withTrustedRoots: false) : null),
+          )
+            // BridgeTrust (the process-wide HttpOverrides) may have routed
+            // connections through the process pin; this client pins itself.
+            ..connectionFactory = null
+            ..badCertificateCallback = (cert, host, port) => _evaluate(cert))
+        : HttpClient();
+    inner.idleTimeout = restIdleTimeout;
     return IOClient(inner);
   }
 
-  /// Fires only for certificates the platform doesn't already trust (so
-  /// CA-backed reverse proxies bypass it). No pin yet ⇒ trust on first use;
-  /// pinned ⇒ exact fingerprint match or the handshake is refused.
+  /// Fires for certificates the platform doesn't already trust — and, on a
+  /// profile that [ConnectionConfig.enforcesPin], for every certificate.
+  /// Otherwise CA-backed reverse proxies bypass it. No pin yet ⇒ trust on
+  /// first use; pinned ⇒ exact fingerprint match or the handshake is
+  /// refused.
   bool _evaluate(X509Certificate cert) {
     final seen = BridgeTrust.fingerprintOf(cert);
     _seenFingerprint = seen;
     final pinned = config.fingerprint;
-    if (pinned == null || seen == pinned) return true;
+    if (pinned == null) return true;
+    if (seen == pinned) {
+      _pinObserved = true;
+      return true;
+    }
     _pinRejected = true;
     return false;
   }
@@ -307,12 +364,36 @@ class BridgeClient {
       if (res.statusCode == 401) {
         throw BridgeException.unauthorized();
       }
-      throw BridgeException('Event stream rejected (${res.statusCode})');
+      // A 403 here is usually the daemon refusing this device id (e.g. a
+      // pairing it could not bind) — its body says why; show that.
+      final body = await res.stream
+          .bytesToString()
+          .timeout(const Duration(seconds: 5), onTimeout: () => '');
+      throw BridgeException(
+        _serverError('Event stream rejected', res.statusCode, body),
+      );
     }
 
     AppLog.info('bridge', 'event stream open');
+    _lastRx = DateTime.now();
     final buffer = StringBuffer();
+    final idle = eventStreamIdle;
     _sseSub = res.stream
+        // An inter-event deadline (as in downloadFile): the keep-alive pings
+        // reset it, so only a stream that stops delivering entirely trips
+        // it — and the error reaches the owner, whose reconnect fires.
+        .timeout(
+          idle,
+          onTimeout: (sink) => sink.addError(
+            BridgeException(
+              'Event stream idle: nothing received for ${idle.inSeconds}s',
+            ),
+          ),
+        )
+        .map((chunk) {
+          _lastRx = DateTime.now();
+          return chunk;
+        })
         .transform(utf8.decoder)
         .transform(const LineSplitter())
         .listen(
@@ -695,13 +776,26 @@ class BridgeClient {
   /// The daemon explains a rejected upload (too large, disk error) in the
   /// body; surface that rather than a bare status code.
   static String _uploadError(int status, String body) {
+    final error = _bodyError(body);
+    if (error != null) return error;
+    return 'Upload rejected ($status)${body.isEmpty ? '' : ': $body'}';
+  }
+
+  /// A non-401 rejection: the daemon's own `{"error": …}` text when it sent
+  /// one (e.g. a device-id bind refusal), else `<fallback> (<status>)`.
+  static String _serverError(String fallback, int status, String body) {
+    final error = _bodyError(body);
+    return error != null ? '$error ($status)' : '$fallback ($status)';
+  }
+
+  static String? _bodyError(String body) {
     try {
       final j = jsonDecode(body);
       if (j is Map && j['error'] is String) return j['error'] as String;
     } catch (_) {
-      /* not JSON — fall through to the generic form */
+      /* not JSON */
     }
-    return 'Upload rejected ($status)${body.isEmpty ? '' : ': $body'}';
+    return null;
   }
 
   Future<(String active, List<ModelOption> models)> models([
@@ -795,7 +889,9 @@ class BridgeClient {
   Map<String, dynamic> _decode(http.Response res) {
     if (res.statusCode == 401) throw BridgeException.unauthorized();
     if (res.statusCode >= 400) {
-      throw BridgeException('Request failed (${res.statusCode})');
+      throw BridgeException(
+        _serverError('Request failed', res.statusCode, res.body),
+      );
     }
     if (res.body.isEmpty) return const {};
     return _decodeObject(res.body);

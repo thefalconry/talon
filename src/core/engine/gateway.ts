@@ -24,17 +24,19 @@ import {
   handleAgentContextAction,
   isChatFreeAction,
 } from "./gateway-actions/index.js";
+import { attachInboxNotice } from "./gateway-actions/agents/inbox-notice.js";
 import { AGENT_CONTEXT_PREFIX } from "../agents/context.js";
 import { registerCrossSendTarget } from "./gateway-actions/cross-send.js";
 import { getHubSessionCount } from "../mcp-hub/index.js";
 import {
   dispatchGatewayRoute,
   listenWithRetry,
+  type PortInUseCheck,
   type GatewayRouteHost,
 } from "./gateway-routes.js";
 import { gatewayToken } from "./gateway-auth.js";
 import { handlePluginAction } from "../plugin/index.js";
-import type { FrontendActionHandler } from "../types.js";
+import type { ActionResult, FrontendActionHandler } from "../types.js";
 import type { Backend } from "../agent-runtime/capabilities.js";
 import { resolveOwnerFrontendId } from "../frontend-runtime/routing.js";
 
@@ -274,6 +276,11 @@ export class Gateway {
     return this.port;
   }
 
+  /** True while the tool bridge's HTTP server is bound and accepting. */
+  isListening(): boolean {
+    return this.server?.listening === true;
+  }
+
   getActiveChats(): number {
     return this.loom.activeContextCount();
   }
@@ -314,18 +321,22 @@ export class Gateway {
       // backup, whatsapp_account), which a sub-agent is offered and must be
       // able to reach. Without this fall-through those calls returned null and
       // dropped into chat routing, failing with "No active chat context".
-      const result = agentContext
+      let result = agentContext
         ? ((await handleAgentContextAction(body, rawChatId)) ??
           (isChatFreeAction(action) ? await handleChatFreeAction(body) : null))
         : await handleChatFreeAction(body);
       if (result) {
         logDebug("gateway", `${action} ${where} ${Date.now() - t0}ms`);
+        if (agentContext && typeof result === "object") {
+          result = attachInboxNotice(result as ActionResult, rawChatId);
+        }
         return result;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logError("gateway", `${action} (${where}) failed: ${msg}`);
-      return { ok: false, error: `${action}: ${msg}` };
+      const errResult: ActionResult = { ok: false, error: `${action}: ${msg}` };
+      return agentContext ? attachInboxNotice(errResult, rawChatId) : errResult;
     }
     return null;
   }
@@ -396,11 +407,22 @@ export class Gateway {
       chatId = this.findContextByStringId(rawChatId);
     }
     if (chatId === null) {
-      return { ok: false, error: "No active chat context" };
+      const errResult: ActionResult = {
+        ok: false,
+        error: "No active chat context",
+      };
+      return rawChatId.startsWith(AGENT_CONTEXT_PREFIX)
+        ? attachInboxNotice(errResult, rawChatId)
+        : errResult;
     }
 
     const action = typeof body.action === "string" ? body.action : "";
-    if (!action) return { ok: false, error: "Missing action" };
+    if (!action) {
+      const errResult: ActionResult = { ok: false, error: "Missing action" };
+      return rawChatId.startsWith(AGENT_CONTEXT_PREFIX)
+        ? attachInboxNotice(errResult, rawChatId)
+        : errResult;
+    }
     const t0 = Date.now();
     // The canonical string id for this chat. The bridge only carries the
     // numeric id, but the turn's Thread is keyed by the dispatcher's string
@@ -471,6 +493,15 @@ export class Gateway {
    * A failed bind clears the in-flight state, so a later `start()` retries;
    * so does `stop()`, so start-after-stop binds afresh.
    */
+  /**
+   * Veto for the EADDRINUSE port walk (see `listenWithRetry`). The daemon
+   * installs one that refuses when the busy port is another daemon.
+   */
+  setPortInUseCheck(check: PortInUseCheck | undefined): void {
+    this.portInUseCheck = check;
+  }
+  private portInUseCheck: PortInUseCheck | undefined;
+
   async start(port = 19876): Promise<number> {
     if (this.server) return this.port;
     if (this.starting) return this.starting;
@@ -509,7 +540,7 @@ export class Gateway {
     const httpServer = createServer(
       (req, res) => void dispatchGatewayRoute(req, res, host),
     );
-    const bound = await listenWithRetry(httpServer, port);
+    const bound = await listenWithRetry(httpServer, port, this.portInUseCheck);
     this.server = httpServer;
     this.port = bound;
     log("gateway", `Action gateway on :${this.port}`);

@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import type { ReasoningEffortLevel } from "../core/types.js";
+import { CODEX_CHATGPT_DEFAULT_MODEL } from "../backend/codex/constants.js";
 
 vi.mock("../core/plugin/index.js", () => ({
   getPluginMcpServers: vi.fn(() => ({})),
@@ -166,6 +167,9 @@ describe("codex / runOneShotAgent — extended item-type coverage", () => {
    * the SDK for each test. Each test re-imports init + runOneShotAgent
    * after re-applying the mock to get a fresh Codex instance.
    */
+  /** What the last {@link runWith} rejected with, if anything. */
+  let lastRunError: unknown;
+
   async function runWith(
     events: AsyncGenerator<Record<string, unknown>>,
   ): Promise<string[]> {
@@ -208,17 +212,22 @@ describe("codex / runOneShotAgent — extended item-type coverage", () => {
     );
 
     const lines: string[] = [];
-    await runMod.runOneShotAgent({
-      prompt: "Hello",
-      systemPrompt: "You are an assistant.",
-      workspace: "/tmp",
-      model: "gpt-5-codex",
-      contextLabel: "heartbeat",
-      abortController: new AbortController(),
-      appendLog: async (text: string) => {
-        lines.push(text);
-      },
-    });
+    lastRunError = undefined;
+    await runMod
+      .runOneShotAgent({
+        prompt: "Hello",
+        systemPrompt: "You are an assistant.",
+        workspace: "/tmp",
+        model: "gpt-5-codex",
+        contextLabel: "heartbeat",
+        abortController: new AbortController(),
+        appendLog: async (text: string) => {
+          lines.push(text);
+        },
+      })
+      .catch((err: unknown) => {
+        lastRunError = err;
+      });
     return lines;
   }
 
@@ -324,6 +333,47 @@ describe("codex / runOneShotAgent — extended item-type coverage", () => {
     const log = (await runWith(events)).join("");
     expect(log).toContain("Turn FAILED");
     expect(log).toContain("rate limit hit, try later");
+    // A stream that ends after turn.failed is a failed run, not a success:
+    // the caller (cron, heartbeat, task table) must see it reject.
+    expect(lastRunError).toBeInstanceOf(Error);
+    expect((lastRunError as Error).name).toBe("CodexOneShotError");
+    expect((lastRunError as Error).message).toBe("rate limit hit, try later");
+  });
+
+  it("rejects with the model-not-found 404 when the account lost the model", async () => {
+    const notFound =
+      "unexpected status 404 Not Found: The model `gpt-5.5` does not exist " +
+      "or you do not have access to it.";
+    const events = (async function* () {
+      yield { type: "turn.started" };
+      yield { type: "error", message: "Reconnecting... 1/5 (stream closed)" };
+      yield { type: "error", message: notFound };
+      yield { type: "turn.failed", error: { message: notFound } };
+    })();
+    await runWith(events);
+    expect((lastRunError as Error).message).toBe(notFound);
+  });
+
+  it("ignores transient reconnect errors when the turn completes", async () => {
+    const events = (async function* () {
+      yield { type: "turn.started" };
+      yield { type: "error", message: "Reconnecting... 1/5 (stream closed)" };
+      yield {
+        type: "error",
+        message: "Falling back from WebSockets to HTTPS transport. x",
+      };
+      yield {
+        type: "turn.completed",
+        usage: {
+          input_tokens: 1,
+          output_tokens: 1,
+          cached_input_tokens: 0,
+          reasoning_output_tokens: 0,
+        },
+      };
+    })();
+    await runWith(events);
+    expect(lastRunError).toBeUndefined();
   });
 
   it("surfaces stream-level error events", async () => {
@@ -333,6 +383,7 @@ describe("codex / runOneShotAgent — extended item-type coverage", () => {
     const log = (await runWith(events)).join("");
     expect(log).toContain("ERROR");
     expect(log).toContain("connection reset");
+    expect((lastRunError as Error).message).toBe("connection reset");
   });
 
   it("renders unknown item types via the fallback JSON dump", async () => {
@@ -591,7 +642,7 @@ describe("codex / runOneShotAgent — OAuth-aware model swap", () => {
     };
   }
 
-  it("swaps gpt-5-codex → gpt-5.5 on OAuth and logs the swap", async () => {
+  it("swaps gpt-5-codex → the ChatGPT default on OAuth and logs the swap", async () => {
     const events = (async function* () {
       yield { type: "turn.started" };
       yield {
@@ -609,10 +660,10 @@ describe("codex / runOneShotAgent — OAuth-aware model swap", () => {
       "gpt-5-codex",
       events,
     );
-    expect(observedModel).toBe("gpt-5.5");
+    expect(observedModel).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(log).toContain("Model swap");
     expect(log).toContain("gpt-5-codex");
-    expect(log).toContain("gpt-5.5");
+    expect(log).toContain(CODEX_CHATGPT_DEFAULT_MODEL);
   });
 
   it("swaps a runtime-learned OAuth-incompat model on OAuth", async () => {
@@ -695,12 +746,12 @@ describe("codex / runOneShotAgent — OAuth-aware model swap", () => {
     });
 
     const log = lines.join("");
-    expect(observedThreadOptions[0]?.model).toBe("gpt-5.5");
+    expect(observedThreadOptions[0]?.model).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(log).toContain("Model swap");
     expect(log).toContain("gpt-5.4-mini");
   });
 
-  it("does NOT swap when the requested model is already gpt-5.5", async () => {
+  it("does NOT swap when the requested model is already the ChatGPT default", async () => {
     const events = (async function* () {
       yield { type: "turn.started" };
       yield {
@@ -714,8 +765,11 @@ describe("codex / runOneShotAgent — OAuth-aware model swap", () => {
       };
     })();
 
-    const { observedModel, log } = await runWithMockedSdk("gpt-5.5", events);
-    expect(observedModel).toBe("gpt-5.5");
+    const { observedModel, log } = await runWithMockedSdk(
+      CODEX_CHATGPT_DEFAULT_MODEL,
+      events,
+    );
+    expect(observedModel).toBe(CODEX_CHATGPT_DEFAULT_MODEL);
     expect(log).not.toContain("Model swap");
   });
 
@@ -767,17 +821,19 @@ describe("codex / runOneShotAgent — OAuth-aware model swap", () => {
 
     const lines: string[] = [];
     const abortController = new AbortController();
-    await runMod.runOneShotAgent({
-      prompt: "Hello",
-      systemPrompt: "test",
-      workspace: "/tmp",
-      model: "gpt-5.4-mini",
-      contextLabel: "heartbeat",
-      abortController,
-      appendLog: async (t: string) => {
-        lines.push(t);
-      },
-    });
+    await expect(
+      runMod.runOneShotAgent({
+        prompt: "Hello",
+        systemPrompt: "test",
+        workspace: "/tmp",
+        model: "gpt-5.4-mini",
+        contextLabel: "heartbeat",
+        abortController,
+        appendLog: async (t: string) => {
+          lines.push(t);
+        },
+      }),
+    ).rejects.toThrow(/Reading prompt from stdin/);
 
     const log = lines.join("");
     expect(log).toContain("Error");
@@ -789,7 +845,7 @@ describe("codex / runOneShotAgent — OAuth-aware model swap", () => {
   it("DOES persist on EXPLICIT mismatch even in one-shot context", async () => {
     // Heartbeat/dream can't recurse for an in-place retry, but
     // explicit mismatch is unambiguous server signal — persist it so
-    // the next scheduled run pre-empts to gpt-5.5.
+    // the next scheduled run pre-empts to the ChatGPT default.
     vi.resetModules();
     vi.doMock("../core/plugin/index.js", () => ({
       getPluginMcpServers: vi.fn(() => ({})),
@@ -830,17 +886,19 @@ describe("codex / runOneShotAgent — OAuth-aware model swap", () => {
     );
 
     const lines: string[] = [];
-    await runMod.runOneShotAgent({
-      prompt: "Hello",
-      systemPrompt: "test",
-      workspace: "/tmp",
-      model: "gpt-future-model",
-      contextLabel: "heartbeat",
-      abortController: new AbortController(),
-      appendLog: async (t: string) => {
-        lines.push(t);
-      },
-    });
+    await expect(
+      runMod.runOneShotAgent({
+        prompt: "Hello",
+        systemPrompt: "test",
+        workspace: "/tmp",
+        model: "gpt-future-model",
+        contextLabel: "heartbeat",
+        abortController: new AbortController(),
+        appendLog: async (t: string) => {
+          lines.push(t);
+        },
+      }),
+    ).rejects.toThrow(/not supported when using Codex/);
 
     expect(oauthIncompat.isKnownOAuthIncompat("gpt-future-model")).toBe(true);
   });

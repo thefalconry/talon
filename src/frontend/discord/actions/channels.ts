@@ -14,9 +14,12 @@ export async function resolveChannel(
   const info = lookupDiscordChat(numericChatId);
   if (!info) return null;
   try {
-    const ch = await client.channels.fetch(info.channelId);
-    if (ch && "send" in ch && (ch as TextBasedChannel).isSendable?.()) {
-      return ch as TextBasedChannel;
+    // A DM rebuilt from its chat key has no channel id — open it by user.
+    if (info.channelId) {
+      const ch = await client.channels.fetch(info.channelId);
+      if (ch && "send" in ch && (ch as TextBasedChannel).isSendable?.()) {
+        return ch as TextBasedChannel;
+      }
     }
     if (info.userId) {
       const user = await client.users.fetch(info.userId);

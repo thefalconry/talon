@@ -1,8 +1,8 @@
 /**
  * Post-restart resume — respawn persistent triggers, fire late wakes for
  * recently-terminated ones, plus the orphan-kill used to avoid duplicate
- * spawns after an unclean crash. The /proc PID-starttime probe both this
- * and spawn use lives in ./pid.ts.
+ * spawns after an unclean crash. The /proc probes it relies on (pid start
+ * time, owning daemon) live in core/daemon/pidfile.ts.
  */
 
 import {
@@ -12,11 +12,14 @@ import {
   SHUTDOWN_KILL_ERROR,
   type Trigger,
 } from "../../../storage/triggers.js";
-import { log, logError } from "../../../util/log.js";
+import { log, logError, logWarn } from "../../../util/log.js";
 import { depsHolder } from "./state.js";
 import { fireWake } from "./output.js";
 import { spawnTrigger } from "./spawn.js";
-import { readPidStarttimeSync } from "./pid.js";
+import {
+  childBelongsToLiveDaemon,
+  readPidStarttimeSync,
+} from "../../../core/daemon/pidfile.js";
 
 /**
  * After the dispatcher is wired, walk the store and clean up leftover state
@@ -85,6 +88,11 @@ export async function resumeAfterRestart(): Promise<void> {
  * boot and unchanged by exec(), so a match means the PID still belongs to our
  * process. On non-Linux (no /proc), pidStarttime is undefined and we fall
  * through to SIGKILL.
+ *
+ * Owner check: a process whose spawning daemon is still alive is not an
+ * orphan. It is another daemon's live trigger. That is what a second,
+ * concurrently started daemon found on 2026-09-27, and it SIGKILLed the
+ * running daemon's watchers.
  */
 function killOrphan(t: Trigger): void {
   if (t.pid === undefined) return;
@@ -92,6 +100,13 @@ function killOrphan(t: Trigger): void {
     process.kill(t.pid, 0);
   } catch {
     return; // dead — nothing to do
+  }
+  if (childBelongsToLiveDaemon(t.pid)) {
+    logWarn(
+      "triggers",
+      `Orphan probe: pid=${t.pid} ("${t.name}") belongs to another running daemon — leaving alone`,
+    );
+    return;
   }
   if (t.pidStarttime !== undefined) {
     const current = readPidStarttimeSync(t.pid);

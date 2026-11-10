@@ -1,4 +1,4 @@
-import 'dart:io' show File;
+import 'dart:async' show Timer;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -63,6 +63,24 @@ class MessageBubble extends StatelessWidget {
   /// timestamp — this row's external clock is skipped.
   final bool showTime;
 
+  /// False for an assistant row that is not the last of its run: the Copy /
+  /// clock / stats footer is left to the run's last row, so a burst of
+  /// mid-turn messages carries one footer instead of one per line.
+  final bool showFooter;
+
+  /// True when another row of the same assistant run follows (see
+  /// [AssistantSurface.continues]).
+  final bool continues;
+
+  /// What the footer's Copy puts on the clipboard. The run's last row gets
+  /// the whole run's text, so one Copy grabs the reply the reader saw as one.
+  /// Defaults to this message's own text.
+  final String? copyText;
+
+  /// Quote this message into the composer. Offered from the text's context
+  /// menu (long-press on touch, right-click on desktop); null hides it.
+  final void Function(ClientMessage message)? onReply;
+
   const MessageBubble({
     super.key,
     required this.message,
@@ -74,6 +92,10 @@ class MessageBubble extends StatelessWidget {
     this.mediaBaseUrl = '',
     this.showHeader = true,
     this.showTime = true,
+    this.showFooter = true,
+    this.continues = false,
+    this.copyText,
+    this.onReply,
   });
 
   @override
@@ -227,6 +249,7 @@ class MessageBubble extends StatelessWidget {
                                     selectionColor: userSelectionColor,
                                     cursorColor: Colors.white,
                                     child: SelectionArea(
+                                      contextMenuBuilder: _contextMenu,
                                       child: Text(
                                         message.text,
                                         style: TalonType.body.copyWith(
@@ -274,17 +297,14 @@ class MessageBubble extends StatelessWidget {
   // Chat-app anatomy: only the reply itself lives in the bubble. The name +
   // time header, the tool trace, and the copy/token/duration footer all sit
   // outside on the canvas (see AssistantSurface).
+  // The clock lives in the footer, with Copy and the stats, on the run's
+  // last row only — a burst of short messages mid-turn used to stamp every
+  // line with its own time and its own Copy.
   Widget _assistantRow() => AssistantSurface(
         botName: botName,
         surfaceKey: const Key('assistant-message-card'),
         showHeader: showHeader,
-        trailing: Text(
-          _clock(message.time),
-          style: TalonType.caption.copyWith(
-            fontSize: 10.5,
-            fontFeatures: const [FontFeature.tabularFigures()],
-          ),
-        ),
+        continues: continues,
         aboveBubble:
             message.tools.isEmpty ? null : ToolTrace(tools: message.tools),
         bubble: Column(
@@ -307,11 +327,13 @@ class MessageBubble extends StatelessWidget {
             if (!((imageUrl != null || files.isNotEmpty) &&
                 message.text.isEmpty))
               SelectionArea(
+                contextMenuBuilder: _contextMenu,
                 child: Builder(
                   builder: (context) => MarkdownBody(
                     data: message.text.isEmpty ? '…' : message.text,
                     builders: {'code': CodeElementBuilder()},
-                    onTapLink: (_, href, __) => _onTapLink(context, href),
+                    onTapLink: (text, href, _) =>
+                        _onTapLink(context, href, text: text),
                     styleSheet: talonMarkdownStyle(),
                   ),
                 ),
@@ -320,37 +342,112 @@ class MessageBubble extends StatelessWidget {
               _FileList(files: files, headers: mediaHeaders, onAccent: false),
           ],
         ),
-        belowBubble: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (message.buttons.isNotEmpty) _buttons(),
-            if (message.reactions.isNotEmpty) _reactions(),
-            _MessageActions(message: message),
-          ],
-        ),
+        belowBubble: message.buttons.isEmpty &&
+                message.reactions.isEmpty &&
+                !showFooter
+            ? null
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (message.buttons.isNotEmpty) _buttons(),
+                  if (message.reactions.isNotEmpty) _reactions(),
+                  if (showFooter)
+                    _MessageActions(
+                      message: message,
+                      copyText: copyText ?? message.text,
+                      showTime: showTime,
+                    ),
+                ],
+              ),
       );
+
+  /// The selection context menu (long-press on touch, right-click on
+  /// desktop): the platform's own items for the current selection, plus
+  /// whole-message actions so nobody has to drag-select a reply to copy it.
+  Widget _contextMenu(BuildContext context, SelectableRegionState region) {
+    return AdaptiveTextSelectionToolbar.buttonItems(
+      anchors: region.contextMenuAnchors,
+      buttonItems: [
+        ...region.contextMenuButtonItems,
+        if (message.text.isNotEmpty)
+          ContextMenuButtonItem(
+            label: 'Copy message',
+            onPressed: () {
+              region.hideToolbar();
+              final messenger = ScaffoldMessenger.maybeOf(context);
+              Clipboard.setData(ClipboardData(text: message.text));
+              messenger?.hideCurrentSnackBar();
+              messenger?.showSnackBar(
+                  const SnackBar(content: Text('Message copied')));
+            },
+          ),
+        if (onReply != null)
+          ContextMenuButtonItem(
+            label: 'Reply',
+            onPressed: () {
+              region.hideToolbar();
+              onReply!(message);
+            },
+          ),
+      ],
+    );
+  }
 
   /// A tapped link in message text. A bridge attachment link (`/media?id=…`)
   /// is fetched in-app through the authenticated media stack, so the bearer
   /// token never rides in a browser-visible URL and mTLS still applies, then
-  /// opened locally. Everything else opens in the browser.
-  void _onTapLink(BuildContext context, String? href) {
+  /// saved to Downloads (with an Open action). Everything else opens in the
+  /// browser.
+  void _onTapLink(BuildContext context, String? href, {String? text}) {
     if (href == null) return;
     final media = bridgeMediaUrl(href, mediaBaseUrl);
     if (media != null) {
       final messenger = ScaffoldMessenger.maybeOf(context);
+      final suggestedName = _nameFromLink(text, href);
       AttachmentOpener.instance
-          .openLink(url: media, headers: mediaHeaders)
+          .saveLink(
+            url: media,
+            headers: mediaHeaders,
+            name: suggestedName,
+          )
+          .then((saved) => showSavedSnackBar(messenger, saved))
           .catchError((Object e) {
         messenger?.showSnackBar(
-          SnackBar(content: Text("Couldn't open link: $e")),
+          SnackBar(
+            duration: const Duration(seconds: 3),
+            showCloseIcon: true,
+            content: Text("Couldn't save link: $e"),
+          ),
         );
-        return File('');
       });
       return;
     }
     launchUrl(Uri.parse(href), mode: LaunchMode.externalApplication);
+  }
+
+  /// Extracts a clean file name from a tapped link label or query string,
+  /// or null if the link does not specify a filename.
+  static String? _nameFromLink(String? text, String href) {
+    final uri = Uri.tryParse(href);
+    final queryName =
+        uri?.queryParameters['filename'] ?? uri?.queryParameters['name'];
+    if (queryName != null && queryName.trim().isNotEmpty) {
+      return AttachmentOpener.safeName(queryName.trim());
+    }
+    if (text != null) {
+      final t = text.trim();
+      if (t.isNotEmpty &&
+          !t.startsWith('http://') &&
+          !t.startsWith('https://') &&
+          !t.contains('/') &&
+          !t.contains(r'\') &&
+          t.contains('.') &&
+          !t.endsWith('.')) {
+        return AttachmentOpener.safeName(t);
+      }
+    }
+    return null;
   }
 
   /// The URL to fetch in-app for a `/media?id=…` link, or null when [href]
@@ -376,7 +473,14 @@ class MessageBubble extends StatelessWidget {
     final base = baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
-    return '$base/media?id=${Uri.encodeQueryComponent(id)}';
+    final filename =
+        link.queryParameters['filename'] ?? link.queryParameters['name'];
+    final q = [
+      'id=${Uri.encodeQueryComponent(id)}',
+      if (filename != null && filename.isNotEmpty)
+        'filename=${Uri.encodeQueryComponent(filename)}',
+    ].join('&');
+    return '$base/media?$q';
   }
 
   /// Selection highlight for text inside the user's own bubble. White, so
@@ -552,7 +656,13 @@ class _InlineImage extends StatelessWidget {
 /// (duration + token usage) once the turn has ended.
 class _MessageActions extends StatefulWidget {
   final ClientMessage message;
-  const _MessageActions({required this.message});
+  final String copyText;
+  final bool showTime;
+  const _MessageActions({
+    required this.message,
+    required this.copyText,
+    this.showTime = true,
+  });
 
   @override
   State<_MessageActions> createState() => _MessageActionsState();
@@ -562,7 +672,7 @@ class _MessageActionsState extends State<_MessageActions> {
   bool _copied = false;
 
   Future<void> _copy() async {
-    await Clipboard.setData(ClipboardData(text: widget.message.text));
+    await Clipboard.setData(ClipboardData(text: widget.copyText));
     if (!mounted) return;
     setState(() => _copied = true);
     Future.delayed(const Duration(milliseconds: 1400), () {
@@ -573,12 +683,17 @@ class _MessageActionsState extends State<_MessageActions> {
   @override
   Widget build(BuildContext context) {
     final m = widget.message;
-    if (m.text.isEmpty && !m.hasStats) return const SizedBox.shrink();
+    final canCopy = widget.copyText.isNotEmpty;
+    final meta = [
+      if (widget.showTime) _clock(m.time),
+      if (m.hasStats) _stats(m),
+    ].join(' · ');
+    if (!canCopy && meta.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: 6),
       child: Row(
         children: [
-          if (m.text.isNotEmpty)
+          if (canCopy)
             // Text child announces itself; this only adds the missing role.
             Semantics(
               button: true,
@@ -604,16 +719,19 @@ class _MessageActionsState extends State<_MessageActions> {
                 ),
               ),
             ),
-          if (m.hasStats) ...[
-            const SizedBox(width: TalonSpace.sm),
+          if (meta.isNotEmpty) ...[
+            SizedBox(width: canCopy ? TalonSpace.xs : 6),
             // Flexible + ellipsis: on a narrow phone column the full
-            // "2.1k in · 460 out · 9.4s" readout can outgrow the row.
+            // "14:32 · 2.1k in · 460 out · 9.4s" readout can outgrow the row.
             Flexible(
               child: Text(
-                _stats(m),
+                meta,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TalonType.caption.copyWith(fontSize: 11),
+                style: TalonType.caption.copyWith(
+                  fontSize: 11,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
               ),
             ),
           ],
@@ -713,11 +831,100 @@ class _FileChip extends StatefulWidget {
   State<_FileChip> createState() => _FileChipState();
 }
 
-/// Tapping downloads the file with the auth header and opens the local copy
-/// (see [AttachmentOpener]); the trailing icon turns into a spinner while
+Timer? _savedSnackBarTimer;
+
+/// Cancels any active auto-dismiss timer for the saved snackbar (e.g. in test teardowns).
+@visibleForTesting
+void cancelSavedSnackBarTimer() {
+  _savedSnackBarTimer?.cancel();
+  _savedSnackBarTimer = null;
+}
+
+/// "Saved to …" with an Open action for the cached copy.
+///
+/// On Linux desktop (and other platforms with assistive technologies /
+/// accessible navigation enabled), Flutter suppresses the auto-dismiss timer
+/// for any [SnackBar] that contains a [SnackBarAction]. We manage an explicit
+/// 3-second timer here and provide [showCloseIcon] so the banner reliably
+/// fades away without requiring the user to tap Open.
+void showSavedSnackBar(ScaffoldMessengerState? messenger, SavedAttachment saved) {
+  if (messenger == null) return;
+  _savedSnackBarTimer?.cancel();
+  _savedSnackBarTimer = null;
+  messenger.hideCurrentSnackBar();
+
+  final controller = messenger.showSnackBar(
+    SnackBar(
+      duration: const Duration(seconds: 3),
+      showCloseIcon: true,
+      content: Text('Saved to ${saved.location}'),
+      action: SnackBarAction(
+        label: 'Open',
+        onPressed: () {
+          _savedSnackBarTimer?.cancel();
+          _savedSnackBarTimer = null;
+          messenger.hideCurrentSnackBar();
+          AttachmentOpener.instance
+              .openLocal(saved.file, saved.mimeType)
+              .catchError((Object e) {
+            messenger.showSnackBar(SnackBar(
+              duration: const Duration(seconds: 3),
+              showCloseIcon: true,
+              content: Text('$e'),
+            ));
+          });
+        },
+      ),
+    ),
+  );
+
+  final timer = Timer(const Duration(seconds: 3), () {
+    try {
+      controller.close();
+    } catch (_) {}
+  });
+  _savedSnackBarTimer = timer;
+
+  // Only clear the timer this banner owns: a superseded banner closes after
+  // its replacement is shown and must not cancel the replacement's timer.
+  controller.closed.then((_) {
+    timer.cancel();
+    if (identical(_savedSnackBarTimer, timer)) _savedSnackBarTimer = null;
+  });
+}
+
+/// Tapping downloads the file with the auth header and saves it to the
+/// user's Downloads (see [AttachmentOpener]), offering to open it; a
+/// long-press opens it directly. The trailing icon turns into a spinner while
 /// the download runs, and a failure says so in a snackbar.
 class _FileChipState extends State<_FileChip> {
   bool _busy = false;
+
+  Future<void> _save() async {
+    if (_busy) return;
+    final file = widget.file;
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    setState(() => _busy = true);
+    try {
+      final saved = await AttachmentOpener.instance.save(
+        url: file.url,
+        name: file.name,
+        mimeType: file.mimeType,
+        headers: widget.headers,
+      );
+      showSavedSnackBar(messenger, saved);
+    } catch (e) {
+      messenger?.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          showCloseIcon: true,
+          content: Text("Couldn't save ${file.name}: $e"),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _open() async {
     if (_busy) return;
@@ -733,7 +940,11 @@ class _FileChipState extends State<_FileChip> {
       );
     } catch (e) {
       messenger?.showSnackBar(
-        SnackBar(content: Text("Couldn't open ${file.name}: $e")),
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          showCloseIcon: true,
+          content: Text("Couldn't open ${file.name}: $e"),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -749,11 +960,13 @@ class _FileChipState extends State<_FileChip> {
         onAccent ? Colors.white.withValues(alpha: 0.75) : TalonColors.textFaint;
     return Semantics(
       button: true,
-      label: 'Attached file ${file.name}, ${file.sizeLabel}. Open',
+      label: 'Attached file ${file.name}, ${file.sizeLabel}. Save to Downloads',
+      onLongPressHint: 'Open',
       child: Tooltip(
-        message: 'Open ${file.name}',
+        message: 'Save ${file.name} to Downloads (long-press to open)',
         child: GestureDetector(
-          onTap: _open,
+          onTap: _save,
+          onLongPress: _open,
           child: Container(
             constraints: const BoxConstraints(maxWidth: 280),
             padding: const EdgeInsets.symmetric(
@@ -806,7 +1019,7 @@ class _FileChipState extends State<_FileChip> {
                         strokeWidth: 1.6, color: faint),
                   )
                 else
-                  Icon(Icons.open_in_new_rounded, size: 14, color: faint),
+                  Icon(Icons.download_rounded, size: 14, color: faint),
               ],
             ),
           ),

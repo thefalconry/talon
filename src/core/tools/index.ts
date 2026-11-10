@@ -15,7 +15,7 @@ import { mediaTools } from "./chat/media.js";
 import { stickerTools } from "./chat/stickers.js";
 import { schedulingTools } from "./ops/scheduling.js";
 import { triggerTools } from "./ops/triggers.js";
-import { agentTools } from "./ops/agents.js";
+import { agentTools, preflightTools } from "./ops/agents.js";
 import { goalTools } from "./ops/goals.js";
 import { memoryTools } from "./content/memory.js";
 import { scriptTools } from "./ops/scripts.js";
@@ -29,6 +29,7 @@ import { whatsappTools } from "./chat/whatsapp.js";
 import { moderationTools } from "./chat/moderation.js";
 import { nativeTools } from "./ops/native.js";
 import { backupTools } from "./ops/backup.js";
+import { secretTools } from "./ops/secrets.js";
 
 /** All built-in tool definitions. */
 export const ALL_TOOLS: readonly ToolDefinition[] = [
@@ -56,6 +57,8 @@ export const ALL_TOOLS: readonly ToolDefinition[] = [
   // system prompt (see compose-tools.test.ts).
   ...agentTools,
   ...backupTools,
+  ...preflightTools,
+  ...secretTools,
 ];
 
 /**

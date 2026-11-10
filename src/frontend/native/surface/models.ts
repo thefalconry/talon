@@ -25,7 +25,7 @@ import { getActiveReasoningLevels } from "../../presentation/reasoning-levels.js
 import { broadcastChatUpdated } from "../chats/chat-wire.js";
 import { emitSystem } from "../turn/emit.js";
 import type { BackendOption, ModelOption } from "../protocol.js";
-import { wipeChatConversation } from "../chats/reset.js";
+import { handOffChatBackend } from "../chats/reset.js";
 import type { NativeRuntime } from "../runtime.js";
 import { broadcastStatus } from "./status.js";
 
@@ -156,7 +156,8 @@ export async function setBackend(
     return { ok: false, error: "Backend not available" };
   }
   const persisted = getChatSettings(chatId).backend;
-  if (getBackendIdForChat(chatId) === target) {
+  const previousId = getBackendIdForChat(chatId);
+  if (previousId === target) {
     // Already live on the target — just make sure the choice is persisted.
     if (persisted !== target && target !== config.backend) {
       setChatBackend(chatId, target);
@@ -182,11 +183,16 @@ export async function setBackend(
   }
 
   setChatBackend(chatId, target);
-  wipeChatConversation(runtime, chatId);
+  const kept = handOffChatBackend(runtime, chatId, {
+    from: previousId,
+    to: target,
+  });
   emitSystem(
     runtime,
     entry,
-    `Switched to ${target} — starting a fresh conversation.`,
+    kept
+      ? `Switched to ${target} — session and chat history kept.`
+      : `Switched to ${target} — new session, chat history kept.`,
   );
   broadcastChatUpdated(runtime, entry);
   broadcastStatus(runtime);

@@ -33,15 +33,15 @@ export async function handleEffortCallback(
     backendId: beId,
     config,
   });
-  if (reasoning.levels.length === 0) {
+  if (level === "adaptive") {
+    // Needs no model levels — reachable even when the model has none.
+    setChatEffort(cid, undefined);
+    await answerCallbackQuerySafe(ctx, { text: "Effort: adaptive" });
+  } else if (reasoning.levels.length === 0) {
     await answerCallbackQuerySafe(ctx, {
       text: "No valid reasoning levels found",
     });
     return;
-  }
-  if (level === "adaptive") {
-    setChatEffort(cid, undefined);
-    await answerCallbackQuerySafe(ctx, { text: "Effort: adaptive" });
   } else if (supportsReasoningLevel(level, reasoning.levels)) {
     setChatEffort(cid, level as EffortLevel);
     await answerCallbackQuerySafe(ctx, { text: `Effort: ${level}` });

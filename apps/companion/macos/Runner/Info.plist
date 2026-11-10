@@ -24,6 +24,23 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>org.talon.companion.pair</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>talon</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSLocationUsageDescription</key>
+	<string>Talon shares this Mac's location with your assistant while Location sharing is on (Settings → Mesh).</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Talon shares this Mac's location with your assistant while Location sharing is on (Settings → Mesh).</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock Talon with Touch ID when the optional app lock is on.</string>
 	<key>NSHumanReadableCopyright</key>

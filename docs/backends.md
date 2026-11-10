@@ -263,10 +263,14 @@ all see `end_turn` / `send` / `check_time` like any other backend.
 
 **Models.** `agy models` prints `id<TAB>label`; the catalog is parsed
 at init and behind a 10-minute TTL. Effort is baked into most ids
-(`gemini-3.8-flash-high|medium|low`), so a requested level first
-re-points the model at the sibling slug carrying that suffix and is
-then also passed as `--effort` — see `backend/agy/effort.ts` for the
-precedence. Default model: `gemini-3.8-flash-high`.
+(`gemini-3.8-flash-high|medium|low`, `gemini-4-argon-*`), and since
+agy 1.4 the CLI rejects a suffixed id paired with a different
+`--effort`. So a requested level re-points the model at the sibling
+slug carrying that suffix and sends no `--effort`; only a suffix-less
+id (`claude-sonnet-5-5`) gets the flag, and a level the catalog can't
+express is dropped rather than sent as a conflicting pair — see
+`backend/agy/effort.ts`. Default model:
+`gemini-3.8-flash-high`.
 
 **System prompt.** No flag exists. The assembled prompt is prepended
 as a fenced block on the FIRST turn of a conversation only; resumed
@@ -328,6 +332,15 @@ any task-class preference, so "reasoning runs on Claude" cannot send
 work to a spent plan; and routing never boots a cold provider to measure
 it, so a backend joins the rotation once it is running (bound to a role
 or serving a chat) or once you give it a `backendBudgets` entry.
+
+A backend that isn't working is routed around. If its runs fail
+repeatedly (3 in a row), or fail on a credential (401, expired login),
+a breaker opens and it scores zero headroom for a cool-off period. The
+cool-off starts at 15 minutes and doubles each time the breaker re-opens,
+up to 4 hours. The same happens while its usage endpoint reports a rejected login. A
+backend with no usage signal at all scores zero too: it still takes work
+when nothing measured is available, but it is never preferred over a
+backend that can show it has room.
 
 ## Adding a new backend
 

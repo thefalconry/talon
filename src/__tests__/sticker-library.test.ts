@@ -24,6 +24,9 @@ const STICKERS_DIR = join(TEST_ROOT, ".talon", "workspace", "stickers");
 
 beforeEach(() => {
   vi.resetModules();
+  // The worker home sets TALON_HOME, which outranks the homedir() mock
+  // below; point it at this suite's root too.
+  vi.stubEnv("TALON_HOME", join(TEST_ROOT, ".talon"));
   if (existsSync(TEST_ROOT)) rmSync(TEST_ROOT, { recursive: true });
   mkdirSync(STICKERS_DIR, { recursive: true });
 
@@ -40,6 +43,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (existsSync(TEST_ROOT)) rmSync(TEST_ROOT, { recursive: true });
 });
 

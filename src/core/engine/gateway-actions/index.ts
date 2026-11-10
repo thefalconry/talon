@@ -22,6 +22,7 @@
  *   - `mesh`      — companion device mesh (presence + location)
  *   - `cross-send` — explicit-target sends through any enabled frontend
  *   - `backup`    — snapshots and checkpoints (chat-free; no restore)
+ *   - `secrets`   — secret-drop links (core/secrets; needs the chat)
  */
 
 import type { ActionResult } from "../../types.js";
@@ -49,6 +50,8 @@ import {
 } from "./whatsapp-account.js";
 import { nativeActionRefusal, nativeHandlers } from "./native/index.js";
 import { backupChatFreeActions, backupHandlers } from "./backup/index.js";
+import { secretHandlers } from "../../secrets/actions.js";
+import { attachInboxNotice } from "./agents/inbox-notice.js";
 
 // Null-prototype so a request `action` of "toString" / "constructor" / etc.
 // can't resolve an inherited Object.prototype method — `handlers[action]` only
@@ -70,6 +73,7 @@ const handlers: SharedActionHandlers = Object.assign(Object.create(null), {
   ...whatsappAccountHandlers,
   ...nativeHandlers,
   ...backupHandlers,
+  ...secretHandlers,
 });
 
 /**
@@ -100,7 +104,8 @@ export async function handleSharedAction(
   if (!handler) return null; // not a shared action — delegate to frontend
   const refusal = nativeActionRefusal(action);
   if (refusal) return refusal;
-  return handler(body, chatId, backend, chatKey);
+  const result = await handler(body, chatId, backend, chatKey);
+  return result ? attachInboxNotice(result, chatKey) : null;
 }
 
 /**
@@ -135,7 +140,8 @@ export async function handleAgentContextAction(
   if (!isAgentContextAction(action)) return null;
   const handler = handlers[action];
   if (!handler) return null;
-  return handler(body, 0, undefined, contextKey);
+  const result = await handler(body, 0, undefined, contextKey);
+  return result ? attachInboxNotice(result, contextKey) : null;
 }
 
 /**

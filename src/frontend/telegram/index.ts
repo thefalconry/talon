@@ -66,7 +66,7 @@ type UpdateContext = {
  */
 function applyAccessControl(config: TalonConfig): void {
   if (!config.adminUserId) throw new Error(TELEGRAM_ADMIN_REQUIRED);
-  setAdminUserId(config.adminUserId);
+  setAdminUserId(config.adminUserId, config.operatorIds);
   setAccessControl({
     allowedUsers: config.allowedUsers,
     blockedUsers: config.blockedUsers,

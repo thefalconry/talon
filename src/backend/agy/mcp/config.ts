@@ -28,7 +28,6 @@
  * touch the real files.
  */
 
-import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
@@ -47,6 +46,7 @@ import { frontendsForChat } from "../../runtime/frontends.js";
 import { logWarn } from "../../../util/log.js";
 import { gatewayAuthHeaders } from "../../../core/engine/gateway-auth.js";
 import { AGY_MCP_PREFIX } from "../constants.js";
+import { userHome } from "../../../util/fs-path.js";
 
 // ── Paths ───────────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ function agyMcpConfigPath(override?: string): string {
   return (
     override ||
     process.env.TALON_AGY_MCP_CONFIG ||
-    join(homedir(), ".gemini", "config", "mcp_config.json")
+    join(userHome(), ".gemini", "config", "mcp_config.json")
   );
 }
 
@@ -64,7 +64,7 @@ function agyMcpSnapshotDir(override?: string): string {
   return (
     override ||
     process.env.TALON_AGY_MCP_SNAPSHOT_DIR ||
-    join(homedir(), ".gemini", "antigravity-cli", "mcp")
+    join(userHome(), ".gemini", "antigravity-cli", "mcp")
   );
 }
 

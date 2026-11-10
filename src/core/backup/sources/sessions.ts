@@ -20,12 +20,19 @@
  * install used for unrelated work is not Talon's state. Claude is always
  * considered: it is the default backend and its store is scoped by cwd.
  *
+ * Extra Claude accounts (`claudeAccounts`) add nothing here: each one's
+ * `projects` is a link to the default account's (core/auth/claude-projects.ts),
+ * so the transcripts are captured once, from the default store, and never
+ * twice through a link. Sign-ins are not captured for any Claude account —
+ * the default account's `.credentials.json` isn't, so neither is theirs.
+ *
  * Pure discovery: this reads directory listings, never file contents.
  */
 
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ExternalRoot } from "../types.js";
+import { claudeAccountsFromRaw } from "../../config/claude-accounts.js";
 
 /** What discovery needs to know about this machine. */
 export type SourceContext = {
@@ -177,6 +184,40 @@ async function storeRoots(
     }
   }
   return roots;
+}
+
+/**
+ * The directory each configured backend keeps its sessions (and sign-in)
+ * under, whether or not it exists yet. Claude is always listed: it is the
+ * default backend; each extra Claude account follows it, under its own id
+ * (its dir holds that account's sign-in). The container storage check uses
+ * this to tell which of them would vanish with the container.
+ */
+export function backendStoreDirs(
+  userHome: string,
+  env: SourceContext["env"],
+  config: Record<string, unknown>,
+): { backend: string; path: string }[] {
+  const configDir = env.CLAUDE_CONFIG_DIR?.trim();
+  const out = [
+    { backend: "claude", path: configDir || join(userHome, ".claude") },
+    ...claudeAccountsFromRaw(config, userHome).map((account) => ({
+      backend: account.id as string,
+      path: account.configDir,
+    })),
+  ];
+  const backends = enabledBackends(config);
+  for (const spec of STORES) {
+    if (!backends.has(spec.backend)) continue;
+    const dir = spec.dir(userHome, env);
+    // agy's store is one level inside ~/.gemini, which also holds its
+    // sign-in: check the whole directory.
+    out.push({
+      backend: spec.backend,
+      path: spec.backend === "agy" ? join(userHome, ".gemini") : dir,
+    });
+  }
+  return out;
 }
 
 /**

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // system templates (prompts/system/*.md) are part of the code under
 // test, so the mock delegates those reads to the real filesystem.
 import { readFileSync as realReadFileSync } from "node:fs";
+import { resolve } from "node:path";
 // The prompt embeds the date in the configured timezone (util/time.ts),
 // not UTC — computing "today" via toISOString() makes these tests fail
 // around midnight in any non-UTC timezone.
@@ -111,6 +112,48 @@ describe("config", () => {
       const config = loadConfig();
       expect(config.frontend).toBe("terminal");
       expect(config.model).toBe("default");
+    });
+
+    it("accepts a declared Claude account anywhere a backend id goes", async () => {
+      mockFs({
+        frontend: "terminal",
+        backend: "claude-2",
+        heartbeatBackend: "claude",
+        enabledBackends: ["claude", "claude-2", "codex"],
+        claudeAccounts: [
+          { id: "claude-2", configDir: "/srv/talon-test/accounts/claude-2" },
+        ],
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      const { listClaudeAccounts } =
+        await import("../core/config/claude-accounts.js");
+      const config = loadConfig();
+      expect(config.backend).toBe("claude-2");
+      expect(listClaudeAccounts()).toEqual([
+        {
+          id: "claude-2",
+          label: "Claude (claude-2)",
+          // Host-absolute: gains the current drive letter on Windows.
+          configDir: resolve("/srv/talon-test/accounts/claude-2"),
+        },
+      ]);
+    });
+
+    it("refuses a backend field naming an undeclared Claude account", async () => {
+      mockFs({ frontend: "terminal", dreamBackend: "claude-9" });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(
+        /dreamBackend: "claude-9" is not a declared Claude account/,
+      );
+    });
+
+    it("refuses a malformed Claude account id", async () => {
+      mockFs({
+        frontend: "terminal",
+        claudeAccounts: [{ id: "Claude_Two", configDir: "/srv/x" }],
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(() => loadConfig()).toThrow(/claudeAccounts\.0\.id/);
     });
 
     it("normalizes deprecated desktop frontend aliases to native", async () => {
@@ -222,6 +265,41 @@ describe("config", () => {
 
       const { loadConfig } = await import("../core/config/index.js");
       expect(() => loadConfig()).toThrow(/heartbeatEffort/);
+    });
+
+    it("accepts native.endpoints with IP dial overrides", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          publicUrl: "https://mesh.example.org",
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "203.0.113.7:443" },
+            { url: "https://mesh.example.org", dial: "[2001:db8::1]:443" },
+          ],
+        },
+      });
+      const { loadConfig } = await import("../core/config/index.js");
+      expect(loadConfig().native?.endpoints).toHaveLength(2);
+    });
+
+    it("rejects a native.endpoints dial that is a hostname, or a plain-http url", async () => {
+      mockFs({
+        frontend: "terminal",
+        native: {
+          endpoints: [
+            { url: "https://mesh.example.org", dial: "evil.example:443" },
+          ],
+        },
+      });
+      const first = await import("../core/config/index.js");
+      expect(() => first.loadConfig()).toThrow(/dial must be an IP literal/);
+      vi.resetModules();
+      mockFs({
+        frontend: "terminal",
+        native: { endpoints: [{ url: "http://mesh.example.org" }] },
+      });
+      const second = await import("../core/config/index.js");
+      expect(() => second.loadConfig()).toThrow(/plain https URL/);
     });
 
     it("reads custom maxMessageLength", async () => {

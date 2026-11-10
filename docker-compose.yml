@@ -3,30 +3,37 @@ services:
     build:
       context: .
       # RUNTIME=node builds the Node 24 + tsx fallback image instead of
-      # the default Bun one. Both use HOME=/home/bun, so the mounts below
-      # are identical either way.
+      # the default Bun one. Both use HOME=/data, so the mount below is
+      # identical either way.
       args:
         RUNTIME: bun
     restart: unless-stopped
     volumes:
-      # Talon's persistent home: config, sessions, workspace, palace, userbot session.
-      # Container's HOME=/home/bun (the oven/bun image's UID-1000 user), so
-      # this must land at /home/bun/.talon.
-      - ${HOME}/.talon:/home/bun/.talon
-      # Claude Code credentials. The Agent SDK spawns claude as a subprocess and
-      # reads $HOME/.claude/.credentials.json — mount the host's auth at the
-      # container user's HOME, not /root, since we run as an unprivileged user.
+      # ONE data root, and it is HOME inside the container (HOME=/data).
+      # Everything that must survive an image update lives in it:
+      #   .talon/          config, chat history, memory, workspace, keys
+      #   .claude/         Claude sign-in AND every Claude transcript
+      #   .claude.json     Claude Code account/onboarding state
+      #   .codex/          Codex sign-in and sessions
+      #   .gemini/         Antigravity sign-in and conversations
+      #   .local/share/    OpenCode / Kilo session databases
+      # Create the directory first (owned by the container's UID, 1000 by
+      # default) or Docker creates it as root:
+      #   mkdir -p ~/talon-data
       #
-      # Two bootstrap paths, both work with this rw mount:
-      #  1. You already ran `claude auth login` on the host: existing
-      #     ~/.claude/.credentials.json is reused inside the container.
-      #  2. Fresh setup, no host install: `docker compose exec talon bash` then
-      #     `claude auth login` — paste the OAuth URL into your host browser,
-      #     paste the code back, and creds land in this mount. (The image's
-      #     `claude` is the CLI the Agent SDK ships, linked onto PATH.)
-      # Don't add :ro here — path 2 needs writes to land the OAuth callback,
-      # and Claude Code rotates its session/projects state inside this dir.
-      - ${HOME}/.claude:/home/bun/.claude
+      # Upgrading from the old layout (separate ~/.talon and ~/.claude
+      # mounts at /home/bun)? Copy both into this directory before the
+      # first `up` — docs/docker.md, "Upgrading from the old layout".
+      # This file no longer mounts /home/bun/..., so an `up` before the
+      # copy starts an empty Talon; your old data stays untouched on the
+      # host. (A container still started with only the old mounts keeps
+      # running on them: the entrypoint detects that layout.)
+      #
+      # Fresh setup, Claude backend: `docker compose exec talon claude auth
+      # login`, paste the OAuth URL into your browser and the code back;
+      # the sign-in lands in <data>/.claude. (The image's `claude` is the
+      # CLI the Agent SDK ships, linked onto PATH.)
+      - ${TALON_DATA_DIR:-${HOME}/talon-data}:/data
     environment:
       - NODE_ENV=production
       # First boot only: with no ~/.talon/config.json yet, the entrypoint

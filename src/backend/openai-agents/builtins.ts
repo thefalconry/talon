@@ -37,6 +37,19 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { createOutputCapture } from "../../util/exec-output.js";
 import { expandFsPath as expandPath } from "../../util/fs-path.js";
 
+/**
+ * Hand the model the real failure. From 0.19 the SDK's default error
+ * function returns a fixed "An error occurred" line and drops the
+ * exception, so a missing file or a non-unique edit would read as a
+ * transient fault the model just retries. These are Talon's own local
+ * tools; their errors (ENOENT, "not unique", exit codes) are what the
+ * model needs to correct the call.
+ */
+function surfaceToolError(_context: unknown, error: unknown): string {
+  const details = error instanceof Error ? error.toString() : String(error);
+  return `An error occurred while running the tool. Please try again. Error: ${details}`;
+}
+
 // ── Read ────────────────────────────────────────────────────────────────────
 
 interface ReadInput {
@@ -46,6 +59,7 @@ interface ReadInput {
 }
 
 const readTool = tool({
+  errorFunction: surfaceToolError,
   name: "Read",
   description:
     "Read a text file from disk. Returns the file contents with " +
@@ -95,6 +109,7 @@ interface WriteInput {
 }
 
 const writeTool = tool({
+  errorFunction: surfaceToolError,
   name: "Write",
   description:
     "Write a string to a file, creating it (and any missing parent " +
@@ -135,6 +150,7 @@ interface EditInput {
 }
 
 const editTool = tool({
+  errorFunction: surfaceToolError,
   name: "Edit",
   description:
     "Replace text in a file. `old_string` must appear verbatim in " +
@@ -218,9 +234,40 @@ interface BashInput {
   timeout_ms?: number;
 }
 
+/**
+ * Optional run context a caller can hand `run(agent, input, { context })`
+ * to scope the shell tools. The chat path passes none (daemon cwd and
+ * environment, as before); an isolated one-shot passes its workspace as
+ * `cwd` and its extra environment (a sub-agent's private `TMPDIR`) as
+ * `env`, layered over the daemon's.
+ */
+export interface BuiltinRunContext {
+  cwd?: string;
+  env?: Readonly<Record<string, string>>;
+}
+
+/** Where a shell child runs, as resolved from a tool's run context. */
+interface ShellScope {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+}
+
+/** Resolve the shell scope from the SDK's `RunContext` (or its absence). */
+function shellScope(runContext: unknown): ShellScope {
+  const ctx = (runContext as { context?: unknown } | undefined)?.context as
+    BuiltinRunContext | undefined;
+  const cwd = typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
+  const env =
+    ctx?.env && typeof ctx.env === "object"
+      ? { ...process.env, ...ctx.env }
+      : process.env;
+  return { cwd, env };
+}
+
 function runShell(
   command: string,
   timeoutMs: number,
+  scope: ShellScope = { cwd: process.cwd(), env: process.env },
 ): Promise<{
   stdout: string;
   stderr: string;
@@ -247,8 +294,8 @@ function runShell(
     // `sleep 30; echo`) holds stdout open, and `close` waits for it.
     const detached = process.platform !== "win32";
     const child = spawn(shell.cmd, shell.args, {
-      cwd: process.cwd(),
-      env: process.env,
+      cwd: scope.cwd,
+      env: scope.env,
       stdio: ["ignore", "pipe", "pipe"],
       detached,
     });
@@ -301,13 +348,15 @@ function killGroup(child: ChildProcess, detached: boolean): void {
 }
 
 const bashTool = tool({
+  errorFunction: surfaceToolError,
   name: "Bash",
   description:
     "Run a shell command. Uses PowerShell on Windows and `bash -lc` elsewhere. Returns combined stdout " +
     "and stderr along with the exit code. Default timeout 30s, max " +
     "10min. Use for inspecting files, running scripts, package " +
-    "managers, git, etc. Do not start long-running servers — there " +
-    "is no background mode here.",
+    "managers, git, etc. Every command runs in the foreground until it " +
+    "exits or times out, so do not start long-running servers or " +
+    "watchers here.",
   strict: false,
   parameters: {
     type: "object" as const,
@@ -328,10 +377,10 @@ const bashTool = tool({
       },
     },
   },
-  async execute(input) {
+  async execute(input, runContext) {
     const { command, timeout_ms } = input as BashInput;
     const timeout = timeout_ms ?? BASH_DEFAULT_TIMEOUT_MS;
-    const result = await runShell(command, timeout);
+    const result = await runShell(command, timeout, shellScope(runContext));
     const parts: string[] = [];
     if (result.stdout) parts.push(`--- stdout ---\n${result.stdout}`);
     if (result.stderr) parts.push(`--- stderr ---\n${result.stderr}`);
@@ -350,6 +399,7 @@ interface GlobInput {
 }
 
 const globTool = tool({
+  errorFunction: surfaceToolError,
   name: "Glob",
   description:
     "List files matching a glob pattern (e.g. `**/*.ts`, " +
@@ -373,9 +423,9 @@ const globTool = tool({
       },
     },
   },
-  async execute(input) {
+  async execute(input, runContext) {
     const { pattern, path } = input as GlobInput;
-    const cwd = path ? expandPath(path) : process.cwd();
+    const cwd = path ? expandPath(path) : shellScope(runContext).cwd;
     const matches: string[] = [];
     for await (const entry of glob(pattern, { cwd })) {
       matches.push(resolvePath(cwd, entry));
@@ -394,6 +444,7 @@ interface GrepInput {
 }
 
 const grepTool = tool({
+  errorFunction: surfaceToolError,
   name: "Grep",
   description:
     "Search for a regular expression in files using the system " +
@@ -420,9 +471,10 @@ const grepTool = tool({
       },
     },
   },
-  async execute(input) {
+  async execute(input, runContext) {
     const { pattern, path, include } = input as GrepInput;
-    const target = path ? expandPath(path) : process.cwd();
+    const scope = shellScope(runContext);
+    const target = path ? expandPath(path) : scope.cwd;
     // Prefer ripgrep if installed; fall back to GNU/BSD grep.
     const rgCheck = await runShell(
       process.platform === "win32" ? "where.exe rg" : "command -v rg",
@@ -440,7 +492,7 @@ const grepTool = tool({
         : "";
       command = `grep -RIn${includeFlag} -E ${JSON.stringify(pattern)} ${JSON.stringify(target)}`;
     }
-    const result = await runShell(command, 30_000);
+    const result = await runShell(command, 30_000, scope);
     // Both rg and grep return non-zero exit when there are no matches; that
     // isn't an error from the model's perspective, surface it as "no matches".
     if (result.code !== 0 && !result.stdout && !result.stderr) {

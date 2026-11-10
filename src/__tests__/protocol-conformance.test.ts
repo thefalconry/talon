@@ -34,6 +34,10 @@ import {
 } from "../frontend/native/protocol.js";
 import { MeshRegistry } from "../core/mesh/index.js";
 import {
+  advertisedEndpoints,
+  type MeshEndpoint,
+} from "../core/mesh/links/endpoints.js";
+import {
   DeviceFiles,
   type DeviceFilesHost,
 } from "../core/mesh/transfers/device-files.js";
@@ -68,10 +72,13 @@ const meshFixture = JSON.parse(
 ) as {
   protocol: number;
   nodeCapabilities: string[];
+  nodeDesktopCapabilities: string[];
   companionCoreCapabilities: string[];
   companionDeviceControlCapabilities: string[];
   registration: Record<string, unknown>;
   companionRegistration: Record<string, unknown>;
+  endpointsConfig: { publicUrl: string; endpoints: MeshEndpoint[] };
+  registerReplyWithEndpoints: { endpoints: unknown };
   device: DeviceInfo;
   location: DeviceLocation;
   resultOk: DeviceCommandResult;
@@ -107,6 +114,7 @@ const EVENT_KINDS = [
   "locate",
   "device_command",
   "error",
+  "bye",
 ] as const satisfies readonly BridgeEvent["kind"][];
 
 type MissingKind = Exclude<BridgeEvent["kind"], (typeof EVENT_KINDS)[number]>;
@@ -201,6 +209,12 @@ describe("events fixture (protocol/fixtures/events_v1.json)", () => {
         case "error":
           expect(e.message).toBeTypeOf("string");
           break;
+        case "bye":
+          expect(["restart", "shutdown"]).toContain(e.reason);
+          if (e.reconnectAfterMs !== undefined) {
+            expect(e.reconnectAfterMs).toBeGreaterThanOrEqual(0);
+          }
+          break;
         default: {
           const unreachable: never = e;
           throw new Error(`unhandled kind ${JSON.stringify(unreachable)}`);
@@ -231,6 +245,7 @@ describe("events fixture (protocol/fixtures/events_v1.json)", () => {
   it("device_command samples use advertised capability names", () => {
     const known = new Set([
       ...meshFixture.nodeCapabilities,
+      ...meshFixture.nodeDesktopCapabilities,
       ...meshFixture.companionCoreCapabilities,
       ...meshFixture.companionDeviceControlCapabilities,
     ]);
@@ -259,6 +274,13 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
 
   it("carries the daemon's protocol version", () => {
     expect(meshFixture.protocol).toBe(BRIDGE_PROTOCOL_VERSION);
+  });
+
+  it("the register reply's endpoints field is what the daemon derives from config", () => {
+    const { publicUrl, endpoints } = meshFixture.endpointsConfig;
+    expect(advertisedEndpoints(publicUrl, endpoints)).toEqual(
+      meshFixture.registerReplyWithEndpoints.endpoints,
+    );
   });
 
   it("node registration passes the real registry validation unchanged", async () => {
@@ -293,6 +315,7 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
   it("capability lists are canonical and within registry bounds", () => {
     for (const list of [
       meshFixture.nodeCapabilities,
+      [...meshFixture.nodeCapabilities, ...meshFixture.nodeDesktopCapabilities],
       meshFixture.companionCoreCapabilities,
       meshFixture.companionDeviceControlCapabilities,
     ]) {
@@ -315,6 +338,7 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
     const sampled = new Set(meshFixture.commands.map((c) => c.command.name));
     for (const name of [
       ...meshFixture.nodeCapabilities,
+      ...meshFixture.nodeDesktopCapabilities,
       ...meshFixture.companionCoreCapabilities,
       ...meshFixture.companionDeviceControlCapabilities,
     ]) {
@@ -326,6 +350,7 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
     // And no sample invents a command outside the advertised surfaces.
     const known = new Set([
       ...meshFixture.nodeCapabilities,
+      ...meshFixture.nodeDesktopCapabilities,
       ...meshFixture.companionCoreCapabilities,
       ...meshFixture.companionDeviceControlCapabilities,
     ]);
@@ -334,9 +359,10 @@ describe("mesh fixture (protocol/fixtures/mesh_v1.json)", () => {
 
   it("commands marked node-unsupported are outside the node's surface", () => {
     for (const entry of meshFixture.commands) {
-      const inNodeList = meshFixture.nodeCapabilities.includes(
-        entry.command.name,
-      );
+      const inNodeList = [
+        ...meshFixture.nodeCapabilities,
+        ...meshFixture.nodeDesktopCapabilities,
+      ].includes(entry.command.name);
       expect(inNodeList).toBe(!entry.nodeUnsupported);
     }
   });

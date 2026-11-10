@@ -112,6 +112,13 @@ export interface ChatBackend {
  */
 export interface BackgroundRunner {
   runOneShotAgent(params: OneShotAgentParams): Promise<OneShotUsage | void>;
+  /**
+   * Whether `runOneShotAgent` honours `resumeSessionId` (and reports the
+   * handle through `onSessionId`). A sub-agent interrupted by a daemon
+   * restart resumes its conversation on such a backend; on any other it is
+   * re-briefed with its previous transcript instead.
+   */
+  readonly supportsResume?: boolean;
   evictOrphanSubprocesses?(contextLabel: string): Promise<{
     found: number;
     termed: number;
@@ -243,6 +250,13 @@ export interface UsageTelemetry {
    * plan concept; resolves `undefined` when the data can't be read.
    */
   getPlanUsage?(): Promise<PlanUsage | undefined>;
+  /**
+   * Why the backend's credential is known to be rejected (e.g. the usage
+   * endpoint returned 401), or `undefined` when nothing says it is.
+   * Synchronous and cheap: it reports what the last `getPlanUsage` saw.
+   * The router treats a backend that reports one as having no headroom.
+   */
+  getAuthFailure?(): string | undefined;
   /**
    * Banked one-shot limit resets, where the plan has them. Spending one is
    * irreversible, so this is reachable only from a human-pressed confirm

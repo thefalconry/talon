@@ -271,6 +271,29 @@ void main() {
       });
       expect(chat.title, 'General');
 
+      final quotedChat = ClientChat.fromJson({
+        'id': 'quoted',
+        'title': 'Test &quot;Quotes&quot; &amp; &#34;More&#34;',
+        'createdAt': 1,
+        'lastActive': 2,
+        'preview': 'Preview says &quot;Hello World&quot;',
+      });
+      expect(quotedChat.title, 'Test "Quotes" & "More"');
+      expect(quotedChat.preview, 'Preview says "Hello World"');
+
+      final hit = SearchHit.fromJson({
+        'chatId': 'quoted',
+        'chatTitle': 'Search &quot;Hit&quot;',
+        'message': {
+          'id': '1',
+          'chatId': 'quoted',
+          'role': 'user',
+          'text': 'hello',
+          'ts': 1,
+        },
+      });
+      expect(hit.chatTitle, 'Search "Hit"');
+
       final cfg = ConfigSnapshot.fromJson({
         'backend': 'claude',
         'model': 'default',
@@ -288,6 +311,22 @@ void main() {
       expect(cfg.sessions, 3);
       expect(cfg.healthy, isTrue);
       expect(cfg.editable, contains('model'));
+    });
+  });
+
+  group('compareMessageOrder', () {
+    ClientMessage m(String id, int ts) => ClientMessage.fromJson(
+        {'id': id, 'chatId': 'c', 'role': 'user', 'text': id, 'ts': ts});
+
+    test('orders by timestamp, then numeric id, local notes after', () {
+      final list = [
+        m('sys-a', 5),
+        m('12', 5),
+        m('3', 9),
+        m('11', 5),
+        m('1', 1),
+      ]..sort(compareMessageOrder);
+      expect(list.map((x) => x.id), ['1', '11', '12', 'sys-a', '3']);
     });
   });
 }

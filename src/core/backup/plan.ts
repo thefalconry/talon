@@ -21,8 +21,8 @@
 
 import { lstat, readdir, readlink } from "node:fs/promises";
 import { isAbsolute, join, resolve, sep } from "node:path";
-import { homedir } from "node:os";
 import type { BackupSettings } from "./types.js";
+import { userHome } from "../../util/fs-path.js";
 
 /**
  * The workspace is mostly machine-generated bulk (uploads, media, build
@@ -51,6 +51,9 @@ export const DEFAULT_BACKUP_SETTINGS = {
   intervalHours: 6,
   keepLocal: 12,
   keepRemote: 30,
+  keepDaily: 7,
+  keepWeekly: 4,
+  keepCheckpoints: 10,
   includePalace: true,
   loginSessions: "local",
   includeSessions: true,
@@ -72,6 +75,10 @@ export const HOME_INCLUDES: readonly string[] = [
   "prompts",
   "data",
   "keys",
+  // Operator secrets (~/.talon/secrets, the secret drop's folder). Held to
+  // the same rule as keys/ and workspace/secrets: in the snapshot, so
+  // encrypt backups (docs/backup-security.md).
+  "secrets",
   "google",
   "plugins",
   "mesh-devices.json",
@@ -216,9 +223,9 @@ export function workspaceRoots(patterns: readonly string[]): string[] {
 /** Expand a leading `~` and resolve against the home directory. */
 export function expandUserPath(path: string): string {
   const trimmed = path.trim();
-  if (trimmed === "~") return homedir();
-  if (trimmed.startsWith("~/")) return resolve(homedir(), trimmed.slice(2));
-  return isAbsolute(trimmed) ? resolve(trimmed) : resolve(homedir(), trimmed);
+  if (trimmed === "~") return userHome();
+  if (trimmed.startsWith("~/")) return resolve(userHome(), trimmed.slice(2));
+  return isAbsolute(trimmed) ? resolve(trimmed) : resolve(userHome(), trimmed);
 }
 
 /** One member the builder will hand to the tar writer. */

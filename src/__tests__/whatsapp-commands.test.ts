@@ -312,7 +312,7 @@ describe("/settings, /status, /reset, /help", () => {
     expect(reply).toContain("effort: adaptive");
   });
 
-  it("/reset clears the session and keeps the chat log", async () => {
+  it("/reset soft-resets: the chat log is kept, the context starts fresh", async () => {
     const sent: string[] = [];
     const runtime = makeRuntime(sent);
     const inbound = inboundFor("/reset");
@@ -325,7 +325,14 @@ describe("/settings, /status, /reset, /help", () => {
     });
     await handleWhatsAppCommand(runtime, inbound);
     expect(sent[0]).toBe("Session cleared.");
-    expect(getRecentHistory(inbound.chat.chatId, 5)[0].text).toBe("kept");
+    expect(
+      getRecentHistory(inbound.chat.chatId, 5, { includeCleared: true })[0]
+        .text,
+    ).toBe("kept");
+    // The context view starts after the reset (only the bot's own reply).
+    expect(
+      getRecentHistory(inbound.chat.chatId, 5).map((m) => m.text),
+    ).not.toContain("kept");
   });
 
   it("/help lists every command", async () => {

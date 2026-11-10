@@ -51,6 +51,22 @@ vi.mock("../core/models/catalog.js", async (importOriginal) => ({
   resolveModelId: (s: string) => mockResolveModelName(s),
 }));
 
+// /effort validates against the active model's levels, as on every
+// other frontend. Pretend the active model registers these.
+const mockReasoningLevels = vi.fn(() => ["low", "medium", "high", "max"]);
+vi.mock(
+  "../frontend/presentation/reasoning-levels.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../frontend/presentation/reasoning-levels.js")
+    >()),
+    getActiveReasoningLevels: async () => ({
+      activeModel: "claude-sonnet-4-6",
+      levels: mockReasoningLevels(),
+    }),
+  }),
+);
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const mockGetSession = vi.fn((_chatId: string): any => ({
   turns: 0,
@@ -711,6 +727,8 @@ describe("/effort command", () => {
     clearCommands();
     registerBuiltinCommands();
     vi.clearAllMocks();
+    mockReasoningLevels.mockReset();
+    mockReasoningLevels.mockReturnValue(["low", "medium", "high", "max"]);
   });
 
   it("shows current effort when no arg given", async () => {
@@ -737,7 +755,7 @@ describe("/effort command", () => {
     const ctx = makeMockContext();
     await tryRunCommand("/effort max", ctx);
     expect(mockSetChatEffort).toHaveBeenCalledWith("t_test_123", "max");
-    expect(ctx.renderer.writeSystem).toHaveBeenCalledWith("Effort → max");
+    expect(ctx.renderer.writeSystem).toHaveBeenCalledWith("Effort set to max.");
     expect(ctx.reprompt).toHaveBeenCalled();
   });
 
@@ -746,6 +764,31 @@ describe("/effort command", () => {
     await tryRunCommand("/effort adaptive", ctx);
     expect(mockSetChatEffort).toHaveBeenCalledWith("t_test_123", undefined);
     expect(ctx.reprompt).toHaveBeenCalled();
+  });
+
+  it("rejects a value that is not a reasoning level", async () => {
+    const ctx = makeMockContext();
+    await tryRunCommand("/effort banana", ctx);
+    expect(mockSetChatEffort).not.toHaveBeenCalled();
+    expect(ctx.renderer.writeError).toHaveBeenCalledWith(
+      expect.stringContaining("Valid: low, medium, high, max, or adaptive"),
+    );
+    expect(ctx.reprompt).toHaveBeenCalled();
+  });
+
+  it("rejects a level the active model does not register", async () => {
+    mockReasoningLevels.mockReturnValue(["low", "high"]);
+    const ctx = makeMockContext();
+    await tryRunCommand("/effort max", ctx);
+    expect(mockSetChatEffort).not.toHaveBeenCalled();
+    expect(ctx.renderer.writeError).toHaveBeenCalled();
+  });
+
+  it("accepts adaptive on a model with no levels", async () => {
+    mockReasoningLevels.mockReturnValue([]);
+    const ctx = makeMockContext();
+    await tryRunCommand("/effort adaptive", ctx);
+    expect(mockSetChatEffort).toHaveBeenCalledWith("t_test_123", undefined);
   });
 });
 

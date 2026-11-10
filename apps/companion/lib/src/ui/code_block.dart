@@ -55,6 +55,12 @@ class CodeBlock extends StatefulWidget {
   /// seconds, and nobody reads line 40,000 of a log in a chat bubble.
   static const int maxDisplayLines = 1500;
 
+  /// A finished block longer than this many lines opens folded to
+  /// [collapsedLines], with a "Show all" toggle: a 60-line listing otherwise
+  /// pushes the rest of the reply a screen or more down on a phone.
+  static const int collapseAbove = 24;
+  static const int collapsedLines = 14;
+
   @override
   State<CodeBlock> createState() => _CodeBlockState();
 }
@@ -67,6 +73,10 @@ class _CodeBlockState extends State<CodeBlock> {
   /// [CodeBlock.maxDisplayLines]. The clipboard keeps the original.
   String _display = '';
   int _hiddenLines = 0;
+  int _lines = 0;
+
+  /// The reader opened a folded block (see [CodeBlock.collapseAbove]).
+  bool _expanded = false;
 
   /// Highlight runs for [_display], or null to draw it plain (no language,
   /// too big, or a background highlight still in flight).
@@ -97,9 +107,11 @@ class _CodeBlockState extends State<CodeBlock> {
       }
       _display = expanded.substring(0, cut);
       _hiddenLines = lines - CodeBlock.maxDisplayLines;
+      _lines = CodeBlock.maxDisplayLines;
     } else {
       _display = expanded;
       _hiddenLines = 0;
+      _lines = lines;
     }
     _runs = null;
     final language = widget.language;
@@ -145,8 +157,12 @@ class _CodeBlockState extends State<CodeBlock> {
 
   /// Plain `Text` / `Text.rich` (not the raw `RichText` HighlightView drew),
   /// so the enclosing SelectionArea can select it.
+  static const double _codeFontSize = 12.5;
+  static const double _codeLineHeight = 1.5;
+
   Widget _code() {
-    final style = TalonType.mono.copyWith(fontSize: 12.5, height: 1.5);
+    final style = TalonType.mono
+        .copyWith(fontSize: _codeFontSize, height: _codeLineHeight);
     final runs = _runs;
     if (runs == null) return Text(_display, style: style);
     final theme = TalonTheme.isDark ? atomOneDarkTheme : atomOneLightTheme;
@@ -155,6 +171,77 @@ class _CodeBlockState extends State<CodeBlock> {
         style: TextStyle(color: theme['root']?.color).merge(style),
         children: HighlightCache.spans(runs, theme),
       ),
+    );
+  }
+
+  bool get _collapsible => !widget.live && _lines > CodeBlock.collapseAbove;
+
+  /// The scrolling code, folded to its first [CodeBlock.collapsedLines]
+  /// lines (fading out at the cut) until the reader asks for the rest.
+  Widget _body() {
+    final Widget scroller = _FadingHScroll(
+      padding: const EdgeInsets.all(12),
+      child: _code(),
+    );
+    if (!_collapsible) return scroller;
+    final folded = !_expanded;
+    const line = _codeFontSize * _codeLineHeight;
+    final full = _lines * line + 24;
+    const shown = CodeBlock.collapsedLines * line + 12;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (folded)
+          ClipRect(
+            child: ShaderMask(
+              blendMode: BlendMode.dstIn,
+              shaderCallback: (rect) => const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.white, Colors.white, Colors.transparent],
+                stops: [0, 0.72, 1],
+              ).createShader(rect),
+              child: Align(
+                alignment: Alignment.topLeft,
+                heightFactor: (shown / full).clamp(0.0, 1.0),
+                child: scroller,
+              ),
+            ),
+          )
+        else
+          scroller,
+        Semantics(
+          button: true,
+          expanded: !folded,
+          child: InkWell(
+            key: const Key('code-block-expand'),
+            onTap: () => setState(() => _expanded = folded),
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 7),
+              decoration: BoxDecoration(
+                border: Border(
+                  top: BorderSide(color: TalonColors.glassStroke),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    folded ? Icons.unfold_more_rounded : Icons.unfold_less_rounded,
+                    size: 14,
+                    color: TalonColors.textFaint,
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    folded ? 'Show all $_lines lines' : 'Show less',
+                    style: TextStyle(fontSize: 11.5, color: TalonColors.textDim),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -234,10 +321,7 @@ class _CodeBlockState extends State<CodeBlock> {
               ],
             ),
           ),
-          _FadingHScroll(
-            padding: const EdgeInsets.all(12),
-            child: _code(),
-          ),
+          _body(),
           if (_hiddenLines > 0)
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),

@@ -37,6 +37,11 @@ export const BRIDGE_ROUTE_AUTH = {
   "GET /pair": "public",
   "GET /node/install": "public",
   "GET /node/binary": "public",
+  // Secret drop: a browser with no credential pastes one value, once. GET
+  // shows the form without spending the grant (link previews fetch it);
+  // POST spends it, and its body is read only after the grant checks out.
+  "GET /secret": "public",
+  "POST /secret": "public",
 
   // Credential self-service. Any credential may ask who it is, and trade
   // itself (or the shared legacy token) for a fresh per-device credential
@@ -67,6 +72,10 @@ export const BRIDGE_ROUTE_AUTH = {
   "GET /memory/why": "client",
 
   "POST /send": "client",
+  // The slash commands /send answers itself — names and one-liners for
+  // autocomplete. Operator-only ones are listed (flagged `admin`) and
+  // refused at /send time for a credential without the scope.
+  "GET /commands": "client",
   "POST /upload": "client",
   "GET /media": "client",
   "GET /models": "client",
@@ -104,6 +113,19 @@ export const BRIDGE_ROUTE_AUTH = {
 } as const satisfies Record<string, BridgeRouteAuth>;
 
 export type BridgeRouteKey = keyof typeof BRIDGE_ROUTE_AUTH;
+
+/**
+ * The only routes that take the credential as a `?token=` query parameter.
+ * Everywhere else it must come as `Authorization: Bearer`. A token in a URL
+ * ends up in proxy logs, browser history and screenshots, so it is accepted
+ * only where a client can't set a header: an EventSource stream, and media
+ * handed to an image widget or an external viewer. Those are the only two
+ * places shipped companions put it; talon-node never does.
+ */
+export const QUERY_TOKEN_ROUTES: ReadonlySet<BridgeRouteKey> = new Set([
+  "GET /events",
+  "GET /media",
+]);
 
 /** What a route handler receives; `auth` is already evaluated. */
 export type RouteContext = {

@@ -15,7 +15,7 @@
  */
 
 import { log, logWarn } from "../../util/log.js";
-import { notifyAdmin } from "./admin-notify.js";
+import { notifyAdmin, withdrawAdminNotification } from "./admin-notify.js";
 
 export type AlertSeverity = "warn" | "error" | "critical";
 
@@ -39,7 +39,8 @@ const RANK: Record<AlertSeverity, number> = { warn: 0, error: 1, critical: 2 };
 const active = new Map<string, ActiveAlert>();
 let cooldownMs = DEFAULT_COOLDOWN_MS;
 let enabled = true;
-let send: (text: string) => Promise<unknown> = notifyAdmin;
+type Send = (text: string, key?: string) => Promise<unknown>;
+let send: Send = notifyAdmin;
 
 /** Apply operator settings (config `alerts`). */
 export function configureAlerts(opts: {
@@ -86,7 +87,9 @@ export function raiseAlert(
     // Nobody heard it: don't let the cooldown swallow the next raise.
     if (active.get(key) === entry) entry.lastSentAt = 0;
   };
-  void send(`${ICON[severity]} ${message}${repeat}`).then((ok) => {
+  // The key lets a still-queued copy (no notifier wired yet) be replaced by
+  // this raise rather than queued twice.
+  void send(`${ICON[severity]} ${message}${repeat}`, key).then((ok) => {
     if (ok === false) undelivered();
   }, undelivered);
 }
@@ -99,6 +102,9 @@ export function resolveAlert(key: string, message?: string): void {
   const mins = Math.max(1, Math.round((Date.now() - prior.firstAt) / 60_000));
   log("alert", `resolved ${key} after ${mins} min`);
   if (!enabled) return;
+  // Still queued for a notifier that never got to send it: withdraw it, and
+  // there is nothing to announce a recovery from.
+  if (withdrawAdminNotification(key)) return;
   void send(`✅ ${message ?? `Recovered: ${key}`} (after ${mins} min)`).catch(
     () => {},
   );
@@ -120,9 +126,7 @@ export function activeAlerts(): ReadonlyArray<{
 }
 
 /** Test seam: reset state and swap the delivery function. */
-export function resetAlertsForTest(
-  deliver: (text: string) => Promise<unknown> = notifyAdmin,
-): void {
+export function resetAlertsForTest(deliver: Send = notifyAdmin): void {
   active.clear();
   cooldownMs = DEFAULT_COOLDOWN_MS;
   enabled = true;

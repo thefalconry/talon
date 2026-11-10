@@ -1,3 +1,4 @@
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { RouteHost } from "./host.js";
 import type { BridgeRoutes } from "./table.js";
 import { BRIDGE_PROTOCOL_VERSION } from "../../protocol.js";
@@ -6,7 +7,12 @@ export function preAuthRoutes(
   host: RouteHost,
 ): Pick<
   BridgeRoutes,
-  "GET /health" | "GET /pair" | "GET /node/install" | "GET /node/binary"
+  | "GET /health"
+  | "GET /pair"
+  | "GET /node/install"
+  | "GET /node/binary"
+  | "GET /secret"
+  | "POST /secret"
 > {
   const { json, handlers: h } = host;
   return {
@@ -90,6 +96,37 @@ export function preAuthRoutes(
       });
       res.end(install.script);
     },
+    // Secret drop. GET shows the paste form and leaves the grant live, so
+    // a chat app fetching the link for a preview can't burn it. POST
+    // checks the grant BEFORE reading a byte of body — an anonymous caller
+    // without one gets nothing read and a closed socket — then reads at
+    // most SECRET_BODY_MAX bytes. The value goes to the core service and
+    // nowhere else: not a log line, not an error message.
+    "GET /secret": ({ res, url }) => {
+      const form = h.openSecretDrop(url.searchParams.get("grant") ?? "");
+      if (!form) return sendSecretPage(res, 404, notFoundPage());
+      sendSecretPage(res, 200, form);
+    },
+    "POST /secret": async ({ req, res, url }) => {
+      const token = url.searchParams.get("grant") ?? "";
+      if (!h.isLiveSecretDrop(token)) {
+        res.setHeader("Connection", "close");
+        return sendSecretPage(res, 404, notFoundPage());
+      }
+      let body: string;
+      try {
+        body = await readCappedBody(req, SECRET_BODY_MAX);
+      } catch {
+        res.setHeader("Connection", "close");
+        return sendSecretPage(res, 413, notFoundPage("Too large."));
+      }
+      const result = await h.submitSecretDrop(
+        token,
+        body,
+        req.headers["content-type"],
+      );
+      sendSecretPage(res, result.status, result.html);
+    },
     "GET /node/binary": ({ res, url }) => {
       const token = url.searchParams.get("provision") ?? "";
       const binary = token ? h.openNodeBinary(token) : null;
@@ -97,4 +134,48 @@ export function preAuthRoutes(
       host.streamFile(res, binary);
     },
   };
+}
+
+/** A form-encoded 64 KB value plus its encoding overhead, and no more. */
+const SECRET_BODY_MAX = 200 * 1024;
+
+/** Read a request body as UTF-8, refusing anything over `max` bytes. */
+async function readCappedBody(
+  req: IncomingMessage,
+  max: number,
+): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length;
+    if (total > max) throw new Error("too large");
+    chunks.push(chunk as Buffer);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+/**
+ * Secret-drop pages: no caching anywhere, no framing, no referrer, and a
+ * CSP that allows inline style and a same-origin form post — nothing else.
+ */
+function sendSecretPage(
+  res: ServerResponse,
+  status: number,
+  html: string,
+): void {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy":
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+  });
+  res.end(html);
+}
+
+function notFoundPage(message?: string): string {
+  const text = message ?? "This link is unknown, expired, or already used.";
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Not available</title><p style="font:15px system-ui,sans-serif;padding:24px">${text} Ask for a fresh one with /secret &lt;name&gt;.</p>\n`;
 }

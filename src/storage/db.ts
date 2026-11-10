@@ -93,6 +93,7 @@ function ensureSchema(database: SqlDatabase): void {
     dbSql.addSessionsMetricsColumn,
     dbSql.addHistoryAttachmentsColumn,
     dbSql.addSessionsLastTurnEndedAtColumn,
+    dbSql.addCronTimeoutMsColumn,
   ]) {
     try {
       database.exec(addColumn);
@@ -142,6 +143,11 @@ function defaultPath(): string {
   // Test isolation: the vitest setup file points every worker at a
   // throwaway database so suites never touch ~/.talon/data/talon.db.
   return process.env.TALON_DB_PATH || files.database;
+}
+
+/** Where the process-wide database lives (or will, once opened). */
+export function databasePath(): string {
+  return defaultPath();
 }
 
 /**

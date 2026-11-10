@@ -21,15 +21,11 @@ func (n *Node) uploadStream(
 	size int64,
 ) (int64, error) {
 	q := url.Values{"transfer": {token}, "deviceId": {n.DeviceID}}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, n.apiURL("/devices/file", q), body,
-	)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	req.ContentLength = size
-	res, err := n.client.Do(n.authed(req))
+	res, _, err := n.send(ctx, http.MethodPost, "/devices/file", q, body, func(req *http.Request) {
+		req.Header.Set("Content-Type", "application/octet-stream")
+		req.ContentLength = size
+		n.authed(req)
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -52,13 +48,9 @@ func (n *Node) downloadStream(
 	dst io.Writer,
 ) (int64, error) {
 	q := url.Values{"transfer": {token}, "deviceId": {n.DeviceID}}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodGet, n.apiURL("/devices/file", q), nil,
-	)
-	if err != nil {
-		return 0, err
-	}
-	res, err := n.client.Do(n.authed(req))
+	res, _, err := n.send(ctx, http.MethodGet, "/devices/file", q, nil, func(req *http.Request) {
+		n.authed(req)
+	})
 	if err != nil {
 		return 0, err
 	}

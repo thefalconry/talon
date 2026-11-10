@@ -69,6 +69,9 @@ Usage:
   talon-node status     Show config, bridge reachability, service state, and
                         the last commands run here
   talon-node audit      Print the on-device command log (-n <count>, --json)
+  talon-node permissions
+                        macOS: open the Screen Recording and Accessibility
+                        panes the computer capability needs
   talon-node version    Print the version
 
 Flags (run/install/status):
@@ -114,6 +117,8 @@ func main() {
 		statusCmd(cfg)
 	case "audit":
 		auditCmd(rest)
+	case "permissions":
+		permissionsCmd()
 	case "version", "--version", "-v":
 		fmt.Println(version)
 	case "help", "--help", "-h":
@@ -166,6 +171,13 @@ func statusCmd(cfg *Config) {
 	fmt.Printf("talon-node %s\n", version)
 	fmt.Printf("config:      %s\n", cfg.Path)
 	fmt.Printf("bridge:      %s\n", cfg.Bridge)
+	for _, ep := range cfg.Endpoints {
+		if ep.Label != "" {
+			fmt.Printf("fallback:    %s — %s\n", ep, ep.Label)
+		} else {
+			fmt.Printf("fallback:    %s\n", ep)
+		}
+	}
 	fmt.Printf("device name: %s\n", cfg.Name)
 	fmt.Printf("device id:   %s\n", cfg.DeviceID)
 	switch {

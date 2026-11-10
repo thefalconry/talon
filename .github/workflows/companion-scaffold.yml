@@ -27,6 +27,11 @@ on:
 permissions:
   contents: write
 
+# It commits to the branch it runs on: serialize per branch, never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   FLUTTER_VERSION: "3.44.4"
 

@@ -13,7 +13,7 @@ import (
 )
 
 func TestPolicyCapabilitiesFollowTheSwitches(t *testing.T) {
-	if got := (Policy{}).capabilities(); !slices.Equal(got, nodeCapabilities) {
+	if got := (Policy{}).capabilities(); !slices.Equal(got, allCapabilities()) {
 		t.Fatalf("default policy must advertise everything, got %v", got)
 	}
 	got := Policy{DisableExec: true, DisableUpdate: true}.capabilities()

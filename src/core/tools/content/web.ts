@@ -14,7 +14,7 @@ export const webTools: ToolDefinition[] = [
   {
     name: "fetch_url",
     description:
-      "Fetch a URL — web pages return text content, image URLs are downloaded to workspace. Use to read articles, download images, or fetch any URL.",
+      "Fetch a URL — web pages return text content, image URLs are downloaded to workspace. Use to read articles, download images, or fetch any URL. Bot walls are retried automatically (browser-TLS impersonation, then any configured exits/browser); the result footer names the route that worked. A 404 means the URL is wrong, not that you were blocked.",
     schema: {
       url: z.string().describe("The URL to fetch"),
     },

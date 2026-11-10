@@ -29,6 +29,52 @@ String _link(String bridgeUrl, {String? fp, String? name, String t = 'tok'}) {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  group('pasted pairing text', () {
+    test('finds the talon://pair link inside surrounding text', () {
+      final link = _link('https://bridge.example.org', fp: _fp);
+      expect(ConnectionConfig.findPairLink(link), link);
+      expect(
+        ConnectionConfig.findPairLink('Open this on the device:\n$link\nthanks'),
+        link,
+      );
+      final found = ConnectionConfig.findPairLink('see <$link>');
+      expect(found, link);
+      expect(ConnectionConfig.fromPairLink(found!), isNotNull);
+      expect(ConnectionConfig.findPairLink('no link here'), isNull);
+      expect(
+        ConnectionConfig.findPairLink('https://bridge.example.org/pair?grant=x'),
+        isNull,
+      );
+    });
+
+    test('accepts the talon:pair form too', () {
+      final link = _link('https://bridge.example.org', fp: _fp)
+          .replaceFirst('talon://pair', 'talon:pair');
+      final found = ConnectionConfig.findPairLink(link);
+      expect(found, link);
+      expect(ConnectionConfig.fromPairLink(found!), isNotNull);
+    });
+
+    test('recognises the pairing page URL', () {
+      expect(
+        ConnectionConfig.isPairPageUrl(
+          'https://bridge.example.org:19880/pair?grant=abc123',
+        ),
+        isTrue,
+      );
+      expect(
+        ConnectionConfig.isPairPageUrl('https://bridge.example.org/pair'),
+        isFalse,
+      );
+      expect(
+        ConnectionConfig.isPairPageUrl(
+          _link('https://bridge.example.org', fp: _fp),
+        ),
+        isFalse,
+      );
+    });
+  });
+
   group('pairing link rules', () {
     test('an https link must carry a well-formed fingerprint', () {
       expect(

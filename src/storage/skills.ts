@@ -62,6 +62,11 @@ const SKILL_FILE = "SKILL.md";
  * sibling file survives every update, and is visible in the filesystem.
  */
 const DISABLED_FILE = ".disabled";
+/**
+ * Provenance `talon skill install` writes for a cloned source (repo URL,
+ * commit) — metadata, not a resource the skill offers.
+ */
+const INSTALL_RECORD_FILE = ".talon-install.json";
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const DESCRIPTION_MAX_CHARS = 300;
 const BODY_MAX_BYTES = 128 * 1024;
@@ -212,7 +217,8 @@ function listResources(dir: string): string[] {
         (entry) =>
           entry.isFile() &&
           entry.name !== SKILL_FILE &&
-          entry.name !== DISABLED_FILE,
+          entry.name !== DISABLED_FILE &&
+          entry.name !== INSTALL_RECORD_FILE,
       )
       .map((entry) => entry.name)
       .sort((a, b) => a.localeCompare(b));

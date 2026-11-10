@@ -19,16 +19,16 @@ import {
   type ModelCatalog,
   type UsageTelemetry,
 } from "../../core/agent-runtime/capabilities.js";
-import { getPlanUsage as getCodexPlanUsage } from "./plan-usage.js";
+import {
+  getAuthFailure as getCodexAuthFailure,
+  getPlanUsage as getCodexPlanUsage,
+} from "./plan-usage.js";
 
 import { initCodexAgent, getCodexAuthInfo } from "./init.js";
 import { handleMessage as codexHandleMessage } from "./handler/index.js";
 import { runOneShotAgent as codexRunOneShotAgent } from "./one-shot.js";
 import { resetState as resetCodexState } from "./state.js";
-import {
-  CODEX_DEFAULT_MODEL,
-  CODEX_CHATGPT_DEFAULT_MODEL,
-} from "./constants.js";
+import { CODEX_DEFAULT_MODEL } from "./constants.js";
 import {
   resolveModel as codexResolveModel,
   getModelInfo as codexGetModelInfo,
@@ -37,6 +37,7 @@ import {
   getProviderModels as codexGetProviderModels,
   formatModelError as codexFormatModelError,
   listModels as codexListModels,
+  getCodexChatGptDefaultModel,
 } from "./models.js";
 
 const codexFactory: BackendFactory = {
@@ -59,6 +60,8 @@ const codexFactory: BackendFactory = {
 
     const background: BackgroundRunner = {
       runOneShotAgent: (p) => codexRunOneShotAgent(p),
+      // Honours resumeSessionId (resumeThread) and reports the thread id.
+      supportsResume: true,
       // Codex spawns per-turn CLI subprocesses that the SDK reaps on its own
       // — no explicit orphan-eviction path needed here.
     };
@@ -68,7 +71,7 @@ const codexFactory: BackendFactory = {
       getDefaultModelId: () => {
         const auth = getCodexAuthInfo();
         return auth?.mode === "chatgpt"
-          ? CODEX_CHATGPT_DEFAULT_MODEL
+          ? getCodexChatGptDefaultModel()
           : CODEX_DEFAULT_MODEL;
       },
       getRawModelInfo: (id) => codexGetModelInfo(id),
@@ -88,6 +91,7 @@ const codexFactory: BackendFactory = {
     // report its rate-limit windows.
     const usage: UsageTelemetry = {
       getPlanUsage: () => getCodexPlanUsage(),
+      getAuthFailure: () => getCodexAuthFailure(),
     };
 
     const backend = composeBackend({

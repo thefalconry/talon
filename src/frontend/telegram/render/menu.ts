@@ -18,6 +18,7 @@ import {
   type ModelInfo,
 } from "../../../core/models/catalog.js";
 import { renderSettingsText as renderSettingsTextWith } from "../../presentation/reports.js";
+import { formatModelLabel } from "../../presentation/format.js";
 import { TELEGRAM_REPORTS } from "./html.js";
 
 /** Display name for a known ModelInfo. */
@@ -440,49 +441,39 @@ export function renderModelBrowseKeyboard(
   ];
 }
 
+/**
+ * The /settings keyboard: one button that opens the /model menu (the single
+ * place models are browsed and picked), the effort levels the active model
+ * registers, and the pulse toggle. `hasModelMenu` is false when the backend
+ * has no model catalog — the /model menu cannot render there, so the button
+ * would do nothing.
+ */
 export function renderSettingsKeyboard(
-  model: string,
+  model: string | null,
   effort: string,
   proactive: boolean,
-  modelButtons?: Array<SettingsButton>,
-  pager?: SettingsPager,
-  view: "models" | "groups" = "models",
-  activeProvider?: string,
   reasoningLevels: readonly ReasoningEffortLevel[] = [],
+  hasModelMenu = true,
 ): Array<Array<SettingsButton>> {
-  const selectedButtons = modelButtons?.length
-    ? modelButtons
-    : getTelegramModelOptions().map((m) => ({
-        text: isSelectedModel(model, m.id)
-          ? `✓ ${formatCompactModelLabel(m)}`
-          : formatCompactModelLabel(m),
-        callback_data: `settings:model:${m.id}`,
-      }));
-  const cols = modelButtons?.length ? 2 : 3;
-  const modelRows: Array<Array<SettingsButton>> = [];
-  for (let i = 0; i < selectedButtons.length; i += cols) {
-    modelRows.push(selectedButtons.slice(i, i + cols));
-  }
-
-  const controlRows = pager
-    ? renderModelPickerControlRows(
-        pager,
-        "settings:models",
-        "settings:noop",
-        view,
-        activeProvider,
-      )
-    : [];
-
   const effortRows = renderEffortRows(
     effort,
     reasoningLevels,
     "settings:effort:",
   );
 
+  const modelRows: Array<Array<SettingsButton>> = hasModelMenu
+    ? [
+        [
+          {
+            text: model ? `Model: ${formatModelLabel(model)}` : "Choose model",
+            callback_data: "model:menu",
+          },
+        ],
+      ]
+    : [];
+
   return [
     ...modelRows,
-    ...controlRows,
     ...effortRows,
     [
       {

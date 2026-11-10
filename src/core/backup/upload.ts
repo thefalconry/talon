@@ -30,11 +30,11 @@ import {
 } from "../../storage/backup/index.js";
 import { isEncryptedFile } from "./archive/crypt.js";
 import {
-  partPath,
-  reindexSnapshot,
-  selectPrunable,
-  writeManifest,
-} from "./store.js";
+  describeRetention,
+  planRetention,
+  type RetentionPolicy,
+} from "./retention/policy.js";
+import { partPath, reindexSnapshot, writeManifest } from "./store.js";
 import type { BackupTarget } from "./targets.js";
 import type { Manifest, RemoteState, SnapshotPart } from "./types.js";
 
@@ -182,14 +182,19 @@ async function uploadToAll(
 }
 
 /**
- * Apply the remote retention policy on each target. Same rule as local:
- * the newest `keep` unpinned snapshots survive, pinned ones always do.
- * A target that cannot list is skipped — deleting on a partial listing is
- * how a retention pass turns into data loss.
+ * Apply the remote retention policy on each target — the same tiers as
+ * local (see retention/policy.ts), with `keepRemote` as the newest-N tier.
+ *
+ * Two refusals keep a retention pass from turning into data loss:
+ *   - A target that cannot list is skipped: deleting on a partial
+ *     listing is how that happens.
+ *   - An entry whose manifest is missing, unreadable, or has no
+ *     createdAt is never pruned. Without an age it cannot be ranked,
+ *     and treating it as the oldest would delete it first.
  */
 export async function pruneRemote(
   targets: readonly BackupTarget[],
-  keep: number,
+  policy: RetentionPolicy,
 ): Promise<void> {
   for (const target of targets) {
     if (!target.ready) continue;
@@ -203,15 +208,27 @@ export async function pruneRemote(
       );
       continue;
     }
-    const doomed = selectPrunable(
-      snapshots.map((entry) => ({
-        id: entry.snapshotId,
-        createdAt: entry.manifest?.createdAt ?? 0,
-        pinned: entry.manifest?.pinned === true,
-      })),
-      keep,
+    const plan = planRetention(
+      snapshots.map((entry) => {
+        const manifest = entry.manifest as Partial<Manifest> | undefined;
+        return {
+          id: entry.snapshotId,
+          createdAt: manifest?.createdAt as number,
+          pinned: manifest?.pinned === true,
+          kind: manifest?.kind,
+          verifiedAt: manifest?.verifiedAt,
+        };
+      }),
+      policy,
     );
-    for (const victim of doomed) {
+    if (plan.skipped.length > 0) {
+      logWarn(
+        "backup",
+        `Not pruning ${plan.skipped.length} snapshot(s) on ${target.id} whose manifest ` +
+          `is unreadable or has no createdAt: ${plan.skipped.map((s) => s.id).join(", ")}`,
+      );
+    }
+    for (const victim of plan.prune) {
       try {
         await target.remove(victim.id);
         deleteBackupRemote(victim.id, target.id);
@@ -222,10 +239,10 @@ export async function pruneRemote(
         );
       }
     }
-    if (doomed.length > 0) {
+    if (plan.prune.length > 0) {
       log(
         "backup",
-        `Pruned ${doomed.length} snapshot(s) from ${target.id} (keepRemote=${keep})`,
+        `Pruned ${plan.prune.length} snapshot(s) from ${target.id} (${describeRetention(policy)})`,
       );
     }
   }

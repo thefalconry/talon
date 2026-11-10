@@ -161,6 +161,28 @@ void main() {
       expect(UpdateRelease.assetNameFor('unsupported'), isNull);
     });
 
+    test('assetNameFor formats with version tag when provided', () {
+      expect(UpdateRelease.assetNameFor('android', '5.22.0'),
+          'talon-companion-android-5.22.0.apk');
+      expect(UpdateRelease.assetNameFor('windows', '5.22.0'),
+          'talon-companion-windows-5.22.0.zip');
+      expect(UpdateRelease.assetNameFor('macos', '5.22.0'),
+          'talon-companion-macos-5.22.0.dmg');
+      expect(UpdateRelease.assetNameFor('linux', '5.22.0'),
+          'talon-companion-linux-5.22.0.tar.gz');
+    });
+
+    test('fromFeedJson matches versioned release assets', () {
+      final feed = _feed(
+        tag: 'v5.22.0',
+        apkBytes: apk,
+        assetName: 'talon-companion-android-5.22.0.apk',
+      );
+      final rel = UpdateRelease.fromFeedJson(feed, platform: 'android');
+      expect(rel, isNotNull);
+      expect(rel!.assetName, 'talon-companion-android-5.22.0.apk');
+    });
+
     test('a release without this platform’s build reads as nothing to do', () {
       final rel = UpdateRelease.fromFeedJson(
         _feed(tag: 'v4.2.0', apkBytes: apk),
@@ -175,6 +197,38 @@ void main() {
         platform: 'android',
       );
       expect(rel, isNull);
+    });
+  });
+
+  group('UpdateRelease.newestFromFeed', () {
+    test('falls back past a newest release whose build has not landed', () {
+      final pending = _feed(tag: 'v5.31.0', apkBytes: apk)..['assets'] = [];
+      final older = _feed(tag: 'v5.30.0', apkBytes: apk);
+      final oldest = _feed(tag: 'v5.29.0', apkBytes: apk);
+      final rel = UpdateRelease.newestFromFeed(
+        [pending, oldest, older],
+        platform: 'android',
+      );
+      expect(rel?.version.toString(), '5.30.0');
+    });
+
+    test('skips drafts and pre-releases', () {
+      final draft = _feed(tag: 'v6.0.0', apkBytes: apk)..['draft'] = true;
+      final pre = _feed(tag: 'v5.32.0', apkBytes: apk)..['prerelease'] = true;
+      final stable = _feed(tag: 'v5.30.0', apkBytes: apk);
+      final rel = UpdateRelease.newestFromFeed(
+        [draft, pre, stable],
+        platform: 'android',
+      );
+      expect(rel?.version.toString(), '5.30.0');
+    });
+
+    test('still accepts a single release object', () {
+      final rel = UpdateRelease.newestFromFeed(
+        _feed(tag: 'v4.2.0', apkBytes: apk),
+        platform: 'android',
+      );
+      expect(rel?.version.toString(), '4.2.0');
     });
   });
 
@@ -404,6 +458,49 @@ void main() {
       await svc.downloadAndInstall();
       await svc.applyAndRestart();
       expect(installer.quits, 1);
+    });
+
+    test('installer failure keeps verified artifact and allows installStaged retry without re-downloading', () async {
+      int downloads = 0;
+      final prefs = await freshPrefs();
+      final installer = _FakeInstaller(
+        tmp,
+        outcome: const InstallOutcome.failed('Permission denied / Auto Blocker active'),
+      );
+      final client = MockClient((req) async {
+        if (req.url.path.endsWith('.apk')) {
+          downloads++;
+          return http.Response.bytes(apk, 200);
+        }
+        return http.Response(
+          jsonEncode(
+              _feed(tag: 'v4.2.0', apkBytes: apk, withDigest: true)),
+          200,
+        );
+      });
+      final svc = UpdateService(
+        prefs: prefs,
+        client: client,
+        installer: installer,
+        versionProvider: () async => '4.1.0',
+        platform: 'android',
+      );
+      addTearDown(svc.dispose);
+      await svc.check();
+
+      await svc.downloadAndInstall();
+      expect(svc.phase, UpdatePhase.error);
+      expect(downloads, 1);
+      expect(svc.canInstallStaged, isTrue);
+
+      // Retrying directly with installStaged does not re-download
+      await svc.installStaged();
+      expect(downloads, 1);
+      expect(svc.canInstallStaged, isTrue);
+
+      // Calling downloadAndInstall when already staged re-uses existing file
+      await svc.downloadAndInstall();
+      expect(downloads, 1);
     });
   });
 

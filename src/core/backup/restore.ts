@@ -4,7 +4,7 @@
  * The rules that make this safe to run on a live home directory:
  *
  *   1. Verify before you touch anything. The manifest's signature is
- *      checked (restore-guard.ts), then every part's sha256 and — for
+ *      checked (restore/guard.ts), then every part's sha256 and — for
  *      encrypted parts — every record's tag; a part that fails is a
  *      stopped restore, not a half-applied one.
  *   2. Stage, then swap. The archive is extracted into a staging
@@ -36,8 +36,7 @@ import {
   unlink,
   copyFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import writeFileAtomic from "write-file-atomic";
 import { dirs } from "../../util/paths.js";
 import { log, logWarn } from "../../util/log.js";
@@ -50,13 +49,13 @@ import {
 import { sha256File } from "./archive/digest.js";
 import { extractTar } from "./archive/tar.js";
 import { createDecompressor } from "./archive/zstd.js";
-import { requirePassphrase } from "./passphrase.js";
+import { passphraseFilePath, requirePassphrase } from "./passphrase.js";
 import { collectTree, excludeForRoot } from "./plan.js";
 import {
   authenticateManifest,
   makePrivate,
   type ManifestTrust,
-} from "./restore-guard.js";
+} from "./restore/guard.js";
 import { buildSnapshot } from "./snapshot.js";
 import {
   relocateRoot,
@@ -72,7 +71,13 @@ import {
   snapshotDir,
 } from "./store.js";
 import type { BackupTarget } from "./targets.js";
-import type { BackupSettings, Manifest, SnapshotPart } from "./types.js";
+import type {
+  BackupSettings,
+  Manifest,
+  SnapshotOrigin,
+  SnapshotPart,
+} from "./types.js";
+import { userHome } from "../../util/fs-path.js";
 
 /** A staged request older than this is stale and ignored. */
 export const RESTORE_PENDING_MAX_AGE_MS = 10 * 60_000;
@@ -84,6 +89,12 @@ export type RestorePending = {
   requestedAt: number;
   /** Chat key that asked, so the boot can report back. */
   requestedBy?: string;
+  /**
+   * Frontend the request came from ("telegram", "discord", "native"), so
+   * the report goes back the way it came. Absent in files staged before
+   * it was recorded — the boot then infers it from `requestedBy`.
+   */
+  frontend?: string;
 };
 
 export type RestoreReport = {
@@ -348,20 +359,32 @@ export function destinationFor(
   return join(home, ...segments);
 }
 
+/** True when `path` is the active backup passphrase file. */
+function isKeyFile(path: string, keyFile: string | null): boolean {
+  return keyFile !== null && resolve(path) === keyFile;
+}
+
 /**
  * Bring one include root to exactly the snapshot's state: remove what the
  * snapshot rules would have captured, keep what they deliberately skip.
  * Returns how many live files were removed.
+ *
+ * The active passphrase file is never removed. The snapshot builder leaves
+ * it out of every part (a key inside the backup it unlocks is no key), so
+ * when it sits inside an include root — `workspace/secrets/`, `keys/`, an
+ * extra path — nothing in the snapshot would ever put it back.
  */
 async function clearCovered(
   destRoot: string,
   archiveRoot: string,
+  keyFile: string | null,
 ): Promise<number> {
   const existing = await collectTree(destRoot, archiveRoot, {
     exclude: excludeForRoot(archiveRoot),
   });
   let removed = 0;
   for (const entry of [...existing].reverse()) {
+    if (isKeyFile(entry.source, keyFile)) continue;
     try {
       if (entry.type === "dir") await rmdir(entry.source).catch(() => {});
       else {
@@ -410,6 +433,7 @@ async function applyStaged(
   staging: string,
   home: string,
   external: readonly ExternalDestination[],
+  keyFile: string | null,
 ): Promise<RestoreReport> {
   const extras = manifest.extras ?? [];
   const report: RestoreReport = {
@@ -429,7 +453,7 @@ async function applyStaged(
       logWarn("backup", `No destination for ${root} on this machine — skipped`);
       continue;
     }
-    report.removed += await clearCovered(destRoot, root);
+    report.removed += await clearCovered(destRoot, root, keyFile);
     // A session database's sidecars describe the file being replaced.
     if (external.some((entry) => entry.root === root && entry.sqlite)) {
       await rm(`${destRoot}-wal`, { force: true });
@@ -439,6 +463,15 @@ async function applyStaged(
     for (const entry of staged) {
       const dest = destinationFor(entry.archivePath, home, extras, external);
       if (!dest) continue;
+      // An older snapshot (or one from another machine) may carry a file
+      // where this machine keeps its key. The key path is never written.
+      if (entry.type !== "dir" && isKeyFile(dest, keyFile)) {
+        logWarn(
+          "backup",
+          `Left the backup passphrase file ${dest} untouched — the snapshot's copy was not applied`,
+        );
+        continue;
+      }
       if (entry.type === "dir") await mkdir(dest, { recursive: true });
       else {
         await placeFile(entry.source, dest);
@@ -485,7 +518,7 @@ export type RestoreOptions = {
   beforeApply?: () => void | Promise<void>;
   /** Skip the automatic pre-restore checkpoint (it has already been taken). */
   skipCheckpoint?: boolean;
-  /** Restore a manifest that carries no signature (see restore-guard.ts). */
+  /** Restore a manifest that carries no signature (see restore/guard.ts). */
   allowUnauthenticated?: ManifestTrust["allowUnauthenticated"];
   /**
    * Restoring onto a different machine: relocate the session stores and
@@ -496,6 +529,13 @@ export type RestoreOptions = {
   clone?: boolean;
   /** This machine's user home; defaults to `os.homedir()`. */
   userHome?: string;
+  /**
+   * The user home the snapshot was taken under, for a clone of a manifest
+   * that carries no `origin` (scheduler snapshots before the origin record
+   * was decoupled from outside-store discovery). The Talon home is taken
+   * to be `<originUserHome>/.talon`.
+   */
+  originUserHome?: string;
   /** Environment for locating stores (CLAUDE_CONFIG_DIR, …). */
   env?: Readonly<Record<string, string | undefined>>;
 };
@@ -508,8 +548,20 @@ function externalDestinations(
   manifest: Manifest,
   clone: boolean,
   target: CloneTarget,
+  origin: SnapshotOrigin | undefined,
 ): ExternalDestination[] {
-  const origin = manifest.origin;
+  if (clone && !origin && (manifest.external ?? []).length > 0) {
+    // Without an origin the roots would be written back to the paths of
+    // the machine they came from — on another OS that fails halfway
+    // through the apply, after the Talon home has already been replaced.
+    throw new TalonError(
+      `Snapshot ${manifest.id} does not record the home it was taken under, so ` +
+        `--clone cannot relocate its ${(manifest.external ?? []).length} outside root(s). ` +
+        `Re-run with --origin-user-home <the user's home on the source machine>, ` +
+        `e.g. --origin-user-home /home/alice.`,
+      { reason: "bad_request" },
+    );
+  }
   const foreign =
     origin !== undefined &&
     (origin.userHome !== target.userHome || origin.home !== target.home);
@@ -549,7 +601,7 @@ export async function restoreSnapshot(
   const realHome = options.home === undefined;
   const cloneTarget: CloneTarget = {
     home,
-    userHome: options.userHome ?? homedir(),
+    userHome: options.userHome ?? userHome(),
     env: options.env ?? (realHome ? process.env : {}),
   };
   const missing = await missingParts(manifest, home);
@@ -559,10 +611,19 @@ export async function restoreSnapshot(
   });
   // Decided before anything is fetched or replaced: a refused clone must
   // leave this machine exactly as it was.
+  const origin: SnapshotOrigin | undefined =
+    manifest.origin ??
+    (options.clone && options.originUserHome
+      ? {
+          userHome: options.originUserHome,
+          home: join(options.originUserHome, ".talon"),
+        }
+      : undefined);
   const external = externalDestinations(
     manifest,
     options.clone ?? false,
     cloneTarget,
+    origin,
   );
   const parts = await ensureParts(manifest, home, missing, options.target);
   await verifyParts(manifest, home, options.settings, parts);
@@ -575,7 +636,7 @@ export async function restoreSnapshot(
       pinned: true,
       settings: options.settings,
       home,
-      userHome: options.userHome ?? (realHome ? homedir() : null),
+      userHome: options.userHome ?? (realHome ? userHome() : null),
       env: cloneTarget.env,
     });
     checkpointId = checkpoint.id;
@@ -585,13 +646,16 @@ export async function restoreSnapshot(
   const staging = join(snapshotDir(manifest.id, home), "restore-staging");
   await extractParts(manifest, home, staging, options.settings, parts);
   await options.beforeApply?.();
-  const report = await applyStaged(manifest, staging, home, external);
+  const report = await applyStaged(
+    manifest,
+    staging,
+    home,
+    external,
+    passphraseFilePath(options.settings),
+  );
   report.checkpointId = checkpointId;
-  if (options.clone && manifest.origin) {
-    report.configRewritten = await rewriteConfigForClone(
-      manifest.origin,
-      cloneTarget,
-    );
+  if (options.clone && origin) {
+    report.configRewritten = await rewriteConfigForClone(origin, cloneTarget);
   }
   await rm(staging, { recursive: true, force: true });
   log(
@@ -613,7 +677,9 @@ export async function applyPendingRestore(options: {
   settings: BackupSettings;
   home?: string;
   beforeApply?: () => void | Promise<void>;
-}): Promise<(RestoreReport & { requestedBy?: string }) | null> {
+}): Promise<
+  (RestoreReport & { requestedBy?: string; frontend?: string }) | null
+> {
   const home = options.home ?? dirs.root;
   const pending = await readRestorePending(home);
   if (!pending) return null;
@@ -626,7 +692,11 @@ export async function applyPendingRestore(options: {
       beforeApply: options.beforeApply,
     });
     await clearRestorePending(home);
-    return { ...report, requestedBy: pending.requestedBy };
+    return {
+      ...report,
+      requestedBy: pending.requestedBy,
+      frontend: pending.frontend,
+    };
   } catch (err) {
     logWarn("backup", `Staged restore of ${pending.id} failed: ${String(err)}`);
     await clearRestorePending(home);

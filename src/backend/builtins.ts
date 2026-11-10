@@ -10,15 +10,24 @@
  * One list, used by the daemon's bootstrap, by `talon doctor` (which
  * runs standalone and needs the factories' doctor checks), and by tests
  * that exercise the registry. Adding a backend is adding a line here.
+ *
+ * `config` adds the configured extra Claude accounts (`claudeAccounts`),
+ * one backend each, on the Claude SDK driver.
  */
 
 import {
   hasBackend,
   registerBackend,
 } from "../core/agent-runtime/backend-registry.js";
+import type { ClaudeAccountConfig } from "../core/config/claude-accounts.js";
 
-export async function loadBuiltinBackends(): Promise<void> {
+export async function loadBuiltinBackends(config?: {
+  claudeAccounts?: readonly ClaudeAccountConfig[];
+}): Promise<void> {
   await import("./claude-sdk/factory.js");
+  const { registerClaudeAccountBackends } =
+    await import("./claude-sdk/accounts/register.js");
+  registerClaudeAccountBackends(config);
   const { createRemoteBackendFactory } =
     await import("./remote-server/factory.js");
   const { opencodeProfile, kiloProfile } =

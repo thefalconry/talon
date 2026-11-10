@@ -97,5 +97,6 @@ Other honest dead ends: an app not running from an `.app` bundle on macOS
 | Tests | `apps/companion/test/updater_test.dart`, `test/updates_card_test.dart` |
 
 The asset names are fixed by the packaging step in
-`.github/workflows/companion.yml` — if that changes, `assetNameFor` changes
-with it, or the app will decide there is nothing to install.
+`.github/workflows/companion.yml` (`talon-companion-<platform>-<version>.<ext>`) —
+`assetNameFor` matches both versioned and legacy unversioned names so in-app
+updates stay functional across releases.

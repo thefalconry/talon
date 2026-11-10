@@ -225,6 +225,34 @@ void main() {
     expect(find.byKey(const Key('user-message-time')), findsOneWidget);
   });
 
+  testWidgets('an assistant run carries one footer, on its last row',
+      (tester) async {
+    ClientMessage msg(String id, String text) => ClientMessage(
+          id: id,
+          chatId: 'c1',
+          role: Role.assistant,
+          text: text,
+          ts: DateTime(2026, 7, 16, 9, 30).millisecondsSinceEpoch,
+        );
+    await tester.pumpWidget(_host(Column(children: [
+      MessageBubble(
+          message: msg('a1', 'On it.'),
+          botName: 'Talon',
+          showFooter: false,
+          continues: true),
+      MessageBubble(
+          message: msg('a2', 'Done.'),
+          botName: 'Talon',
+          showHeader: false,
+          copyText: 'On it.\n\nDone.'),
+    ])));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Talon'), findsOneWidget);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('09:30'), findsOneWidget);
+  });
+
   testWidgets('EntranceFx plays through even when enabled flips to false',
       (tester) async {
     // Reproduces the streaming-rebuild bug: a parent rebuild flips the "fresh"

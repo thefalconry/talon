@@ -46,6 +46,10 @@ import {
 import { resolveBackupSettings } from "../../core/backup/plan.js";
 import { buildSnapshot } from "../../core/backup/snapshot.js";
 import { pruneLocal, reconcileIndex } from "../../core/backup/store.js";
+import {
+  describeRetention,
+  localRetention,
+} from "../../core/backup/retention/policy.js";
 import { generatePassphraseFile } from "../../core/backup/passphrase.js";
 import { dirs } from "../../util/paths.js";
 import { fetchGateway } from "../daemon-api.js";
@@ -60,6 +64,7 @@ const USAGE = `
     ${pc.cyan("restore")} <id> [--from <target>] [--yes] [--allow-unauthenticated]
                                        restore (daemon must be stopped)
           [--clone]                            …onto a new machine: relocate sessions + plugin paths
+          [--origin-user-home <path>]          …for a --clone of a snapshot with no recorded origin
     ${pc.cyan("prune")}                                apply the local retention policy
     ${pc.cyan("targets")}                              remote targets and their readiness
     ${pc.cyan("status")}                               schedule, sizes, targets
@@ -170,7 +175,7 @@ async function backupNow(flags: Flags): Promise<void> {
     pinned: pin,
     settings,
   });
-  await pruneLocal(settings.keepLocal);
+  await pruneLocal(localRetention(settings));
   console.log(
     `  ${pc.green("●")} ${manifest.id} — ${manifest.parts.length} part(s), ` +
       `${formatBytes(manifest.sizeBytes)}\n`,
@@ -246,10 +251,10 @@ async function backupPin(id: string, pinned: boolean): Promise<void> {
 
 async function backupPrune(): Promise<void> {
   const settings = resolveBackupSettings(loadConfig().backup);
-  const removed = await pruneLocal(settings.keepLocal);
+  const removed = await pruneLocal(localRetention(settings));
   console.log(
     removed.length === 0
-      ? `  ${pc.dim(`Nothing to prune (keepLocal=${settings.keepLocal}).`)}\n`
+      ? `  ${pc.dim(`Nothing to prune (${describeRetention(localRetention(settings))}).`)}\n`
       : `  ${pc.green("●")} Pruned ${removed.length}: ${removed.join(", ")}\n`,
   );
 }
@@ -271,7 +276,10 @@ async function backupStatus(): Promise<void> {
     renderResult(result);
     return;
   }
-  const status = await collectBackupStatus({ withTargets: false });
+  const status = await collectBackupStatus({
+    withTargets: false,
+    settings: resolveBackupSettings(loadConfig().backup),
+  });
   console.log(
     `\n${formatBackupStatus(status)
       .split("\n")
@@ -335,12 +343,14 @@ async function backupRestore(id: string, flags: Flags): Promise<void> {
     return;
   }
   const clone = flags.flags.get("clone") === true;
+  const originUserHome = flags.flags.get("origin-user-home");
   const report = await restoreSnapshot({
     id,
     settings,
     target,
     allowUnauthenticated: flags.flags.get("allow-unauthenticated") === true,
     clone,
+    ...(typeof originUserHome === "string" ? { originUserHome } : {}),
   });
   const written = Object.entries(report.written)
     .map(([root, count]) => `${root} (${count})`)

@@ -14,12 +14,14 @@ import type { ModelInfo } from "../../../core/models/catalog.js";
 import { log, logError } from "../../../util/log.js";
 import { describeSdkModel, type SdkModelInfo } from "./parsing.js";
 import { convertSdkModels } from "./convert.js";
+import { CLAUDE_RETENTION_SETTINGS } from "../constants.js";
 
 type ProbeOptions = {
   cwd?: string;
   permissionMode?: string;
   allowDangerouslySkipPermissions?: boolean;
   pathToClaudeCodeExecutable?: string;
+  env?: Record<string, string | undefined>;
 };
 
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -62,6 +64,8 @@ async function probeSupportedModels(
       prompt: neverYield(),
       options: {
         ...probeOptions,
+        // Any spawned CLI may run the daily retention sweep.
+        settings: { ...CLAUDE_RETENTION_SETTINGS },
         model: seedModel,
         abortController: abort,
       } as Parameters<typeof query>[0]["options"],
@@ -144,6 +148,8 @@ export async function registerClaudeModels(sdkOptions: {
   permissionMode?: string;
   allowDangerouslySkipPermissions?: boolean;
   pathToClaudeCodeExecutable?: string;
+  /** The account's spawn environment (extra Claude accounts only). */
+  env?: Record<string, string | undefined>;
 }): Promise<void> {
   const { model: configuredModel, ...probeOptions } = sdkOptions;
 

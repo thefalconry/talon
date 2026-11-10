@@ -40,6 +40,9 @@ class AppLockScope extends InheritedNotifier<AppLockController> {
 ///   * while the lock is on, leaving the foreground covers the UI so the
 ///     app-switcher snapshot shows no content, and Android additionally gets
 ///     FLAG_SECURE while locked and no recents screenshot at all (API 33+);
+///   * the "Block screenshots and screen recording" setting is applied
+///     app-wide, live (Android FLAG_SECURE) — the locked state blocks
+///     regardless of it;
 ///   * user input is recorded for the idle timeout (one integer store per
 ///     event — no per-frame work).
 ///
@@ -102,6 +105,7 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
     HardwareKeyboard.instance.removeHandler(_onKey);
     WidgetsBinding.instance.removeObserver(this);
     if (_secureHeld) SecureWindow.release();
+    SecureWindow.setBlockScreenshots(false);
     super.dispose();
   }
 
@@ -137,6 +141,7 @@ class _AppLockGateState extends State<AppLockGate> with WidgetsBindingObserver {
       SecureWindow.release();
       _secureHeld = false;
     }
+    SecureWindow.setBlockScreenshots(_c.blockScreenshots);
     final hideRecents = _c.enabled;
     if (_recentsHidden != hideRecents) {
       _recentsHidden = hideRecents;

@@ -12,11 +12,15 @@ import 'prefs.dart';
 import 'sandbox.dart';
 import 'update_installer.dart';
 
-/// Where releases come from: Talon's own GitHub releases. `/releases/latest`
-/// deliberately skips drafts and pre-releases, so a tagged release-please
-/// build is the only thing the app will ever offer to install.
+/// Where releases come from: Talon's own GitHub releases. The feed is the
+/// recent-releases list rather than `/releases/latest`: the newest release
+/// is published before its companion builds finish (and a build can fail),
+/// so `latest` alone would read "up to date" while an older release still
+/// carries a newer artifact for this platform. Drafts and pre-releases are
+/// skipped, so a tagged release-please build is the only thing the app will
+/// ever offer to install.
 const String kUpdateFeedUrl =
-    'https://api.github.com/repos/thefalconry/talon/releases/latest';
+    'https://api.github.com/repos/thefalconry/talon/releases?per_page=15';
 
 /// Human-facing releases page, for the "download it yourself" escape hatch
 /// (a managed install the app can't overwrite, or an unsupported platform).
@@ -155,13 +159,38 @@ class UpdateRelease {
 
   /// The release asset this platform installs. The names are fixed by the
   /// companion workflow's packaging step — keep the two in step.
-  static String? assetNameFor(String platform) => switch (platform) {
-        'android' => 'talon-companion-android.apk',
-        'windows' => 'talon-companion-windows.zip',
-        'macos' => 'talon-companion-macos.dmg',
-        'linux' => 'talon-companion-linux.tar.gz',
-        _ => null,
-      };
+  static String? assetNameFor(String platform, [String? version]) {
+    final v = (version != null && version.isNotEmpty) ? '-$version' : '';
+    return switch (platform) {
+      'android' => 'talon-companion-android$v.apk',
+      'windows' => 'talon-companion-windows$v.zip',
+      'macos' => 'talon-companion-macos$v.dmg',
+      'linux' => 'talon-companion-linux$v.tar.gz',
+      _ => null,
+    };
+  }
+
+  /// The newest installable release in a feed payload: either a single
+  /// release object (`/releases/latest`) or a list of them (`/releases`).
+  /// Drafts, pre-releases and releases with no artifact for [platform] are
+  /// skipped, so a release whose companion build is still running (or
+  /// failed) falls back to the newest one that has something to install.
+  static UpdateRelease? newestFromFeed(
+    Object? decoded, {
+    required String platform,
+  }) {
+    final items = decoded is List ? decoded : [decoded];
+    UpdateRelease? best;
+    for (final raw in items) {
+      if (raw is! Map) continue;
+      final json = raw.cast<String, dynamic>();
+      if (json['draft'] == true || json['prerelease'] == true) continue;
+      final release = fromFeedJson(json, platform: platform);
+      if (release == null) continue;
+      if (best == null || release.version > best.version) best = release;
+    }
+    return best;
+  }
 
   /// Parse a GitHub `releases/latest` payload. Returns null when the payload
   /// is unusable (no parseable tag, or no asset for this platform — e.g. a
@@ -174,14 +203,23 @@ class UpdateRelease {
     final tag = '${json['tag_name'] ?? ''}';
     final version = AppVersion.tryParse(tag);
     if (version == null) return null;
-    final wanted = assetNameFor(platform);
-    if (wanted == null) return null;
+    if (assetNameFor(platform) == null) return null;
     final assets = json['assets'];
     if (assets is! List) return null;
+
+    final bareVersion =
+        (tag.startsWith('v') || tag.startsWith('V')) ? tag.substring(1) : tag;
+    final candidates = {
+      if (bareVersion.isNotEmpty) assetNameFor(platform, bareVersion),
+      assetNameFor(platform, tag),
+      assetNameFor(platform),
+    }.whereType<String>().toSet();
+
     for (final raw in assets) {
       if (raw is! Map) continue;
       final asset = raw.cast<String, dynamic>();
-      if ('${asset['name'] ?? ''}' != wanted) continue;
+      final name = '${asset['name'] ?? ''}';
+      if (!candidates.contains(name)) continue;
       final url = '${asset['browser_download_url'] ?? ''}';
       if (url.isEmpty) continue;
       final digest = '${asset['digest'] ?? ''}'.toLowerCase();
@@ -191,7 +229,7 @@ class UpdateRelease {
         tag: tag,
         notes: '${json['body'] ?? ''}',
         pageUrl: '${json['html_url'] ?? kReleasesPageUrl}',
-        assetName: wanted,
+        assetName: name,
         assetUrl: url,
         assetSize: (asset['size'] is num) ? (asset['size'] as num).toInt() : 0,
         sha256: _sha256Hex.hasMatch(hex) ? hex : null,
@@ -284,6 +322,18 @@ class UpdateService extends ChangeNotifier {
   UpdatePhase get phase => _phase;
 
   UpdateRelease? _release;
+
+  /// An already downloaded and verified artifact, staged and ready to install
+  /// without re-downloading.
+  File? _stagedArtifact;
+
+  /// Whether an already downloaded and checksum-verified artifact is staged
+  /// and ready to install directly without re-downloading.
+  bool get canInstallStaged =>
+      _stagedArtifact != null &&
+      _stagedArtifact!.existsSync() &&
+      _release != null &&
+      !busy;
 
   /// The release on offer — null unless [phase] is available/downloading/
   /// verifying/installing/restartPending/handedOff.
@@ -397,12 +447,11 @@ class UpdateService extends ChangeNotifier {
         throw HttpException('release feed returned ${resp.statusCode}');
       }
       final decoded = jsonDecode(resp.body);
-      if (decoded is! Map) throw const FormatException('unexpected feed shape');
+      if (decoded is! Map && decoded is! List) {
+        throw const FormatException('unexpected feed shape');
+      }
       await prefs.setUpdateLastCheckedAt(_now());
-      final latest = UpdateRelease.fromFeedJson(
-        decoded.cast<String, dynamic>(),
-        platform: platform,
-      );
+      final latest = UpdateRelease.newestFromFeed(decoded, platform: platform);
       final current = _current;
       if (latest == null || current == null || latest.version <= current) {
         _release = null;
@@ -444,14 +493,32 @@ class UpdateService extends ChangeNotifier {
       _setPhase(UpdatePhase.error);
       return;
     }
+
+    final dir = await _installer.stagingDir();
+    await dir.create(recursive: true);
+    final potential =
+        File('${dir.path}${Platform.pathSeparator}${rel.assetName}');
+    if (await potential.exists()) {
+      try {
+        final size = await potential.length();
+        if (rel.assetSize <= 0 || size == rel.assetSize) {
+          final digest = await sha256.bind(potential.openRead()).first;
+          if (digest.toString().toLowerCase() == expected) {
+            _stagedArtifact = potential;
+            await installStaged();
+            return;
+          }
+        }
+      } catch (_) {}
+    }
+
     _received = 0;
     _total = rel.assetSize;
     _setPhase(UpdatePhase.downloading);
     File? artifact;
     try {
-      final dir = await _installer.stagingDir();
-      await dir.create(recursive: true);
-      artifact = File('${dir.path}${Platform.pathSeparator}${rel.assetName}');
+      artifact = potential;
+      _stagedArtifact = null;
       if (await artifact.exists()) await artifact.delete();
 
       final request = http.Request('GET', Uri.parse(rel.assetUrl))
@@ -477,6 +544,7 @@ class UpdateService extends ChangeNotifier {
       }
       if (_cancelRequested) {
         await _safeDelete(artifact);
+        _stagedArtifact = null;
         _setPhase(UpdatePhase.available);
         return;
       }
@@ -495,6 +563,7 @@ class UpdateService extends ChangeNotifier {
         );
       }
 
+      _stagedArtifact = artifact;
       _setPhase(UpdatePhase.installing);
       final outcome = await _installer.install(artifact, rel);
       _message = outcome.message;
@@ -505,16 +574,62 @@ class UpdateService extends ChangeNotifier {
           _setPhase(UpdatePhase.handedOff);
         case InstallKind.manual:
           await _safeDelete(artifact);
+          _stagedArtifact = null;
           _error = outcome.message;
           _setPhase(UpdatePhase.handedOff);
         case InstallKind.failed:
-          await _safeDelete(artifact);
+          // Keep staged artifact on installer failure (e.g. Samsung Auto
+          // Blocker or missing permissions) so user can retry directly.
           _error = outcome.message;
           _setPhase(UpdatePhase.error);
       }
     } catch (e) {
       AppLog.error('update', 'install failed', e);
-      if (artifact != null) await _safeDelete(artifact);
+      // A download that never verified (cut short, bad checksum) is deleted,
+      // never left to be retried; only a verified artifact stays staged.
+      if (artifact != null && _stagedArtifact == null) {
+        await _safeDelete(artifact);
+      }
+      _error = _friendly(e);
+      _setPhase(UpdatePhase.error);
+    }
+  }
+
+  /// Retry installing the already-downloaded and verified artifact without
+  /// downloading it again.
+  Future<void> installStaged() async {
+    final rel = _release;
+    final artifact = _stagedArtifact;
+    if (rel == null ||
+        artifact == null ||
+        !artifact.existsSync() ||
+        busy ||
+        !supported) {
+      return;
+    }
+    _cancelRequested = false;
+    _error = null;
+    _message = null;
+    try {
+      _setPhase(UpdatePhase.installing);
+      final outcome = await _installer.install(artifact, rel);
+      _message = outcome.message;
+      switch (outcome.kind) {
+        case InstallKind.restartPending:
+          _setPhase(UpdatePhase.restartPending);
+        case InstallKind.handedOff:
+          _setPhase(UpdatePhase.handedOff);
+        case InstallKind.manual:
+          await _safeDelete(artifact);
+          _stagedArtifact = null;
+          _error = outcome.message;
+          _setPhase(UpdatePhase.handedOff);
+        case InstallKind.failed:
+          _error = outcome.message;
+          _setPhase(UpdatePhase.error);
+      }
+    } catch (e) {
+      AppLog.error('update', 'staged install failed', e);
       _error = _friendly(e);
       _setPhase(UpdatePhase.error);
     }
@@ -536,6 +651,10 @@ class UpdateService extends ChangeNotifier {
   Future<void> skipCurrentRelease() async {
     final rel = _release;
     if (rel == null) return;
+    if (_stagedArtifact != null) {
+      await _safeDelete(_stagedArtifact!);
+      _stagedArtifact = null;
+    }
     await prefs.setSkippedUpdateVersion(rel.version.toString());
     _release = null;
     _setPhase(UpdatePhase.upToDate);

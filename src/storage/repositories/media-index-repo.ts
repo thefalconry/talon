@@ -33,7 +33,7 @@ export type MediaEntry = {
   timestamp: number;
   /**
    * BLAKE3 hex digest of the file contents (native/blake3-wasm).
-   * Filled in asynchronously after addMedia; undefined until hashed.
+   * Filled in by addMedia before it resolves; undefined until hashed.
    */
   contentHash?: string;
 };
@@ -109,6 +109,17 @@ export function firstByContentHash(
   const row = getDatabase()
     .prepare(mediaIndexSql.firstByContentHash)
     .get(hash, excludeChatId, excludeMsgId) as Row | undefined;
+  return row ? rowToEntry(row) : undefined;
+}
+
+/** The entry for one message, if indexed. */
+export function byMessage(
+  chatId: string,
+  msgId: number,
+): MediaEntry | undefined {
+  const row = getDatabase()
+    .prepare(mediaIndexSql.byMessage)
+    .get(chatId, msgId) as Row | undefined;
   return row ? rowToEntry(row) : undefined;
 }
 

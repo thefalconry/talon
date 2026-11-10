@@ -7,15 +7,16 @@
  * credentials), the loopback gateway, a router admin page on the LAN.
  * So before every request — the first one and each redirect hop — the
  * host is resolved and EVERY address it resolves to must be public.
- * Redirects are followed by hand (never by fetch) so a public page
- * cannot bounce the request into a private one.
+ * Redirects are followed by hand (never by the transport) in the fetch
+ * ladder (core/fetch/ladder.ts), which calls `assertPublicUrl` on every
+ * hop, so a public page cannot bounce the request into a private one.
  *
- * Residual risk, stated plainly: fetch resolves the name again after we
- * checked it, so a DNS-rebinding server with a zero TTL can still race
- * us. Pinning the checked address would need a custom connector, which
- * Bun (one of the two runtimes) does not honour. The guard closes the
- * direct, redirect and static-DNS paths; rebinding needs a hostile DNS
- * server and a lucky race.
+ * Residual risk, stated plainly: the runtime's fetch (the "plain" rung)
+ * resolves the name again after we checked it, so a DNS-rebinding server
+ * with a zero TTL can still race it. Pinning the checked address would
+ * need a custom connector, which Bun does not honour. The curl rungs do
+ * pin (`--resolve` to the checked addresses); requests through a SOCKS
+ * exit are resolved by the exit, outside this host's network.
  *
  * The guard is opt-in: `fetch_url` applies it only when the operator sets
  * `fetchUrl.allowPrivateNetworks: false`. By default the agent can read
@@ -32,9 +33,6 @@ const defaultResolver: Resolver = async (host) =>
   (await lookup(host, { all: true, verbatim: true })).map((r) => r.address);
 
 export class BlockedUrlError extends Error {}
-
-const MAX_REDIRECTS = 5;
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
 // ── Address classification ──────────────────────────────────────────────────
 
@@ -135,11 +133,13 @@ export function isBlockedAddress(ip: string): boolean {
 /**
  * Throw unless `url` is http(s) and its host resolves only to public
  * addresses. A literal IP is judged directly; a name is resolved.
+ * Returns the checked addresses so a caller that can pin the connection
+ * to them (curl `--resolve`) closes the rebinding race.
  */
 export async function assertPublicUrl(
   url: URL,
   resolve: Resolver = defaultResolver,
-): Promise<void> {
+): Promise<string[]> {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new BlockedUrlError("URL must use http or https protocol");
   }
@@ -166,36 +166,5 @@ export async function assertPublicUrl(
         `Remove fetchUrl.allowPrivateNetworks: false from config.json (or set it to true) to allow local addresses.`,
     );
   }
-}
-
-export type GuardedFetchOptions = {
-  allowPrivateNetworks?: boolean;
-  resolve?: Resolver;
-  maxRedirects?: number;
-};
-
-/**
- * `fetch` with the guard applied to the first request and to every
- * redirect hop. Returns the final (non-redirect) response.
- */
-export async function guardedFetch(
-  input: string,
-  init: RequestInit,
-  options: GuardedFetchOptions = {},
-): Promise<Response> {
-  const maxRedirects = options.maxRedirects ?? MAX_REDIRECTS;
-  let url = new URL(input);
-  for (let hop = 0; ; hop++) {
-    if (!options.allowPrivateNetworks) {
-      await assertPublicUrl(url, options.resolve);
-    }
-    const resp = await fetch(url, { ...init, redirect: "manual" });
-    const location = resp.headers.get("location");
-    if (!REDIRECT_STATUSES.has(resp.status) || !location) return resp;
-    if (hop >= maxRedirects) {
-      throw new BlockedUrlError(`Too many redirects (max ${maxRedirects})`);
-    }
-    await resp.body?.cancel().catch(() => {});
-    url = new URL(location, url);
-  }
+  return addresses;
 }

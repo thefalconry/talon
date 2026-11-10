@@ -72,16 +72,18 @@ async function handleMediaMessage(
       return;
     }
 
-    const savedPath = await downloadTelegramFile(
+    const downloadedPath = await downloadTelegramFile(
       bot,
       config,
       media.fileId,
       media.fileName,
     );
 
-    // Store file path in history + media index
-    setMessageFilePath(chatId, ctx.message.message_id, savedPath);
-    addMedia({
+    // Store file path in history + media index. addMedia may dedupe the
+    // download onto an identical file already on disk (and delete the
+    // fresh one), so the prompt must use the path it resolves to.
+    setMessageFilePath(chatId, ctx.message.message_id, downloadedPath);
+    const savedPath = await addMedia({
       chatId,
       msgId: ctx.message.message_id,
       senderName: sender,
@@ -93,7 +95,7 @@ async function handleMediaMessage(
         | "animation"
         | "audio"
         | "sticker",
-      filePath: savedPath,
+      filePath: downloadedPath,
       caption: media.caption,
       timestamp: Date.now(),
     });

@@ -9,9 +9,17 @@ name: Dependabot Auto-Merge
 # of the next release — needs a review, however small the semver bump.
 # fetch-metadata reports the *highest* dependency type in a grouped PR, so
 # one production package in a group is enough to require review.
+#
+# No approve step: GitHub Actions is not allowed to approve PRs in this
+# repo (the step always failed), and the main ruleset requires no review —
+# only `CI Status` — so `--auto` merges the PR as soon as CI is green.
 
 on:
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -43,13 +51,6 @@ jobs:
           fi
           echo "auto=$auto" >> "$GITHUB_OUTPUT"
           echo "ecosystem=$ECOSYSTEM dependency-type=$DEP_TYPE update-type=$UPDATE_TYPE → auto-merge=$auto"
-
-      - name: Auto-approve
-        if: steps.policy.outputs.auto == 'true'
-        run: gh pr review --approve "$PR_URL"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Auto-merge
         if: steps.policy.outputs.auto == 'true'

@@ -2,7 +2,7 @@
   {
     "file": "src/backend/claude-sdk/handler.ts",
     "name": "runChatTurn",
-    "lines": 163,
+    "lines": 156,
     "cx": 12
   },
   {
@@ -50,7 +50,7 @@
   {
     "file": "src/bootstrap.ts",
     "name": "initBackendAndDispatcher",
-    "lines": 283,
+    "lines": 282,
     "cx": 13
   },
   {
@@ -78,33 +78,15 @@
     "cx": 29
   },
   {
-    "file": "src/core/mcp-hub/launcher.ts",
-    "name": "runSupervisor",
-    "lines": 167,
-    "cx": 22
-  },
-  {
     "file": "src/core/tools/chat/messaging.ts",
     "name": ".execute#2",
     "lines": 189,
     "cx": 20
   },
   {
-    "file": "src/core/update/self-update.ts",
-    "name": "runSelfUpdate",
-    "lines": 162,
-    "cx": 19
-  },
-  {
     "file": "src/frontend/discord/admin.ts",
     "name": "handleAdminSubcommand",
     "lines": 156,
-    "cx": 28
-  },
-  {
-    "file": "src/frontend/native/bridge/routes/chats.ts",
-    "name": "chatRoutes",
-    "lines": 136,
     "cx": 28
   },
   {
@@ -116,8 +98,8 @@
   {
     "file": "src/frontend/telegram/commands/info.ts",
     "name": "registerInfoCommands",
-    "lines": 182,
-    "cx": 16
+    "lines": 161,
+    "cx": 13
   },
   {
     "file": "src/frontend/telegram/middleware.ts",

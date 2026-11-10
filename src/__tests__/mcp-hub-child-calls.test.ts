@@ -132,9 +132,10 @@ describe("hub proxy cancellation", () => {
     const key = "cancel-forward chat";
     // Spawned up front, so the abort lands after the call reached the child.
     const child = await acquireChild(key, () => FAKE_SERVER);
-    const server = buildProxyServer("fake", () =>
-      acquireChild(key, () => FAKE_SERVER),
-    );
+    const server = buildProxyServer("fake", {
+      listTools: async () => await child.listTools(),
+      getChild: () => acquireChild(key, () => FAKE_SERVER),
+    });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.connect(serverSide);
     const client = new Client({ name: "upstream", version: "0" });

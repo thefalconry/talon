@@ -37,6 +37,12 @@ class AssistantSurface extends StatelessWidget {
   /// content stays aligned by an avatar-width gutter.
   final bool showHeader;
 
+  /// True when another row of the same run follows (a further message the
+  /// model delivered mid-turn, or the live turn still working): the gap below
+  /// shrinks so the run reads as one reply, and on desktop the bubble's
+  /// lower-left corner tightens to join the next one.
+  final bool continues;
+
   const AssistantSurface({
     super.key,
     required this.botName,
@@ -46,6 +52,7 @@ class AssistantSurface extends StatelessWidget {
     this.belowBubble,
     this.surfaceKey,
     this.showHeader = true,
+    this.continues = false,
   });
 
   @override
@@ -66,7 +73,8 @@ class AssistantSurface extends StatelessWidget {
   /// gets every pixel of reading width.
   Widget _phone(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.only(top: showHeader ? 14 : 2, bottom: 12),
+      padding: EdgeInsets.only(
+          top: showHeader ? 14 : 0, bottom: continues ? 10 : 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -110,7 +118,8 @@ class AssistantSurface extends StatelessWidget {
   Widget _pointer(BuildContext context) {
     final dark = TalonTheme.isDark;
     return Padding(
-      padding: EdgeInsets.only(top: showHeader ? 10 : 2, bottom: 10),
+      padding:
+          EdgeInsets.only(top: showHeader ? 10 : 0, bottom: continues ? 4 : 10),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -162,11 +171,15 @@ class AssistantSurface extends StatelessWidget {
                       color: dark
                           ? TalonColors.surface.withValues(alpha: 0.54)
                           : TalonColors.surface.withValues(alpha: 0.96),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(7),
-                        topRight: Radius.circular(20),
-                        bottomRight: Radius.circular(20),
-                        bottomLeft: Radius.circular(20),
+                      // Runs read as one stack: every bubble after the first
+                      // keeps a tight top-left, every bubble before the last
+                      // a tight bottom-left, so they join along the avatar
+                      // side like a chat app's grouped messages.
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(7),
+                        topRight: const Radius.circular(20),
+                        bottomRight: const Radius.circular(20),
+                        bottomLeft: Radius.circular(continues ? 7 : 20),
                       ),
                       border: Border.all(color: TalonColors.glassStroke),
                       boxShadow: dark

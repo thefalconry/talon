@@ -89,6 +89,20 @@ void main() {
       expect(SecureWindow.holders, 0);
     });
 
+    test('the screenshot setting blocks app-wide; the lock holds regardless',
+        () async {
+      SecureWindow.setBlockScreenshots(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, [true]);
+      SecureWindow.acquire(); // locked
+      SecureWindow.setBlockScreenshots(false); // setting off while locked
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, [true], reason: 'still locked, still secure');
+      SecureWindow.release(); // unlocked
+      await Future<void>.delayed(Duration.zero);
+      expect(calls, [true, false]);
+    });
+
     test('an extra release is harmless', () async {
       SecureWindow.release();
       await Future<void>.delayed(Duration.zero);

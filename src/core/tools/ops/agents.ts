@@ -15,6 +15,18 @@
 
 import { z } from "zod";
 import type { ToolDefinition } from "../types.js";
+import { chatIdSchema } from "../schemas.js";
+
+/**
+ * Background runs (cron query jobs, heartbeat) have no ambient chat, so the
+ * gateway rejects spawn with "No active chat context" unless an explicit
+ * chat_id is supplied. That chat becomes the agent's parent / wake-up target.
+ */
+const agentChatId = chatIdSchema
+  .optional()
+  .describe(
+    "Parent chat for the agent (receives its report). Omit in chat mode. Required from cron/heartbeat runs, where there is no ambient chat.",
+  );
 
 const SPAWN_DESCRIPTION = `Delegate a self-contained piece of work to a sub-agent and keep working.
 
@@ -35,9 +47,26 @@ Bad uses: anything needing a back-and-forth with the user, trivial work you
 could do in one tool call, or work whose result you need in the next second
 (spawning costs a model cold-start).
 
-Backend and model default to this chat's; pass them to put the agent
-somewhere else (e.g. a cheap model for a mechanical sweep, or a backend with
-a bigger context window). Returns the agent id immediately.`;
+Backend and model default to the caller's (a sub-agent's own children
+inherit its backend and model); pass them to put the agent somewhere else (e.g. a cheap model for a mechanical sweep, or a backend with
+a bigger context window). Returns the agent id immediately.
+
+There is no hard timeout unless you pass timeout_s (or the deployment sets
+one): an agent runs until it reports, is killed, or goes quiet. A no-progress
+watchdog pings an agent that has made no tool call or output for a while,
+then tells you, then kills it. A killed, timed-out or stalled agent's report
+still carries its last interim messages, progress notes and the files it
+changed, so its work is not lost.
+
+The spawn is refused when the backend it would run on has less plan headroom
+left than the deployment's floor (agents.minHeadroomPct, default 25%) — an
+agent started then is likely to hit the limit and return nothing. The error
+gives the headroom and reset time; do the work yourself, wait, pick another
+backend, or pass force: true if it really must run now. This applies to an
+explicit backend or model too.
+
+This is the ONLY way to delegate that survives your turn. Don't use any
+in-turn subagent tool your harness may provide for work like this.`;
 
 export const agentTools: ToolDefinition[] = [
   {
@@ -61,13 +90,13 @@ export const agentTools: ToolDefinition[] = [
         .string()
         .optional()
         .describe(
-          "Backend id to run on. Unset = this chat's backend (agents inherit their parent's). Must have a background capability.",
+          "Backend id to run on. Unset = inherit: an agent's children run on its own backend and model; a chat's spawns start from the chat's backend (and may be routed to one with more headroom). Must have a background capability and, when the deployment sets agents.allowedBackends, be on that list.",
         ),
       model: z
         .string()
         .optional()
         .describe(
-          "Model id on the chosen backend. Unset = that backend's default model. Call list_models for valid ids.",
+          "Model id on the chosen backend. Unset = the parent agent's model when the backend is inherited from one, else that backend's default model. Call list_models for valid ids.",
         ),
       effort: z
         .enum(["minimal", "low", "medium", "high", "xhigh"])
@@ -81,8 +110,21 @@ export const agentTools: ToolDefinition[] = [
         .positive()
         .optional()
         .describe(
-          "Hard wall-clock cap in seconds (default 900, min 30, max 3600). On timeout the agent is aborted and you are told.",
+          "Optional hard wall-clock cap in seconds (min 30). Unset = no cap unless the deployment sets agents.defaultTimeoutMs; agents.maxTimeoutMs, when set, caps every run. Stalled agents are ended by the no-progress watchdog regardless. On timeout the agent is aborted and you are told, with what it had done so far.",
         ),
+      preflight: z
+        .boolean()
+        .optional()
+        .describe(
+          "Tell the agent to run the pre-flight lane (`npm run preflight` / run_preflight) before every git push and push only on green. Default: on when the brief mentions a PR, off otherwise.",
+        ),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Spawn even when the target backend's plan headroom is below the deployment's floor (agents.minHeadroomPct). Default false. Only when the work cannot wait for the reset.",
+        ),
+      chat_id: agentChatId,
     },
     execute: (params, bridge) => bridge("spawn_agent", params),
     tag: "agents",
@@ -187,8 +229,15 @@ export const agentTools: ToolDefinition[] = [
   {
     name: "list_peers",
     description:
-      "Sub-agents only. List the other agents your parent spawned alongside you — id, label and what each is working on. These are the only agents you may message directly with message_peer. Call it before assuming you are working alone.",
-    schema: {},
+      'Sub-agents only. List the other live agents you can message with message_peer — id, label, how they relate to you and what each is working on. Default scope "siblings": the agents your parent spawned alongside you. Scope "tree": every live agent working for the same chat — your parent, children, siblings and cousins. Call it before assuming you are working alone.',
+    schema: {
+      scope: z
+        .enum(["siblings", "tree"])
+        .optional()
+        .describe(
+          'Which agents to list: "siblings" (default) or the whole "tree" under your chat.',
+        ),
+    },
     execute: (params, bridge) => bridge("list_peers", params),
     tag: "agents",
   },
@@ -196,10 +245,14 @@ export const agentTools: ToolDefinition[] = [
   {
     name: "message_peer",
     description:
-      "Sub-agents only. Send a note straight to a peer — an agent spawned by the same parent as you — without routing it through your parent. Use it when you find something that changes another agent's work: a shared fact, a dead end worth not repeating, a correction to something you sent earlier. The peer sees it at its next check_inbox, so it is not an interrupt. You can only address peers (see list_peers); any other id is refused. This does not end your run and does not replace report_result.",
+      "Sub-agents only. Send a note straight to any live agent in your tree — a sibling, your parent agent, a child, or a cousin working for the same chat — by id or label, without routing it through anyone. Use it when you find something that changes another agent's work: a shared fact, a dead end worth not repeating, a correction to something you sent earlier. It sees the note at its next check_inbox, so it is not an interrupt. Agents working for another chat are never reachable. This does not end your run and does not replace report_result.",
     schema: {
-      agent_id: z.string().describe("Peer agent id, from list_peers"),
-      text: z.string().min(1).describe("What the peer needs to know"),
+      agent_id: z
+        .string()
+        .describe(
+          "Target agent id (or its exact label, when no other live agent in your tree shares it), from list_peers",
+        ),
+      text: z.string().min(1).describe("What the agent needs to know"),
     },
     execute: (params, bridge) => bridge("message_peer", params),
     tag: "agents",
@@ -211,6 +264,28 @@ export const agentTools: ToolDefinition[] = [
       "Sub-agents only. Drain anything sent to you — instructions from your parent, and notes from peer agents working alongside you. Each message names its sender. Messages are delivered no other way, so check at milestones: after a phase of work, before a long operation, and before you report.",
     schema: {},
     execute: (_params, bridge) => bridge("check_inbox", {}),
+    tag: "agents",
+  },
+];
+
+/**
+ * The pre-flight lane tool. Its own list so it can be appended at the END of
+ * ALL_TOOLS (the prompt-cache prefix) rather than beside the agent family.
+ */
+export const preflightTools: ToolDefinition[] = [
+  {
+    name: "run_preflight",
+    description:
+      "Run the pre-flight lane (`npm run preflight`: typecheck, lint, format, architecture/knip/ratchet gates, the unit tests touched by your diff, gitleaks) in a talon checkout on the daemon host and get its verdict. Run it before every `git push` on a PR branch and push only when it is GREEN; a RED result lists each failing step with the tail of its log. Takes a few minutes (hard cap 10). Needs node_modules in the checkout: make worktrees with `node scripts/worktree.mjs add <path> <branch>` (hardlinked shared install, ~0 extra disk) rather than `npm ci`.",
+    schema: {
+      cwd: z
+        .string()
+        .optional()
+        .describe(
+          "Path inside the checkout to check (its git root is used), e.g. /tmp/fix-foo. Defaults to the workspace.",
+        ),
+    },
+    execute: (params, bridge) => bridge("run_preflight", params),
     tag: "agents",
   },
 ];

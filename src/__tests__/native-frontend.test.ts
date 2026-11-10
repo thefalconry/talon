@@ -43,6 +43,7 @@ import {
 } from "../frontend/native/bridge/discovery.js";
 import { summarizeToolResult } from "../frontend/native/index.js";
 import { files } from "../util/paths.js";
+import { deriveNumericChatId } from "../core/frontend-runtime/chat-id.js";
 import type { Gateway } from "../core/engine/gateway.js";
 import type { TalonConfig } from "../core/config/index.js";
 
@@ -53,6 +54,18 @@ describe("native protocol mappers", () => {
     const out = previewOf(long, 50);
     expect(out.length).toBe(50);
     expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("previewOf decodes each entity once, never twice", () => {
+    expect(previewOf("&amp;lt;b&amp;gt; and &#38;amp;")).toBe(
+      "&lt;b&gt; and &amp;",
+    );
+  });
+
+  it("previewOf decodes HTML entities like &quot; and &#34;", () => {
+    expect(
+      previewOf("Say &quot;hello&quot; and &#39;world&#39; &amp; &lt;tag&gt;"),
+    ).toBe("Say \"hello\" and 'world' & <tag>");
   });
 
   it("historyToClientMessage maps sender ids to roles", () => {
@@ -236,6 +249,7 @@ describe("native action handler", () => {
       broadcast,
     });
     return {
+      chats,
       entry,
       handler,
       incrementMessages,
@@ -324,6 +338,44 @@ describe("native action handler", () => {
     const { handler } = setup();
     const res = await handler({ action: "send_message", text: "x" }, 999999);
     expect(res).toMatchObject({ ok: false });
+  });
+
+  it("adopts an unlisted chat a send_message names by key", async () => {
+    const { chats, handler, emitAssistant } = setup();
+    const key = "d_1700000000000_restor";
+    expect(chats.get(key)).toBeUndefined();
+    const res = await handler(
+      { action: "send_message", text: "♻️ Restored", target: key },
+      deriveNumericChatId(key),
+    );
+    expect(res).toMatchObject({ ok: true });
+    const adopted = chats.get(key);
+    expect(adopted).toBeDefined();
+    expect(emitAssistant).toHaveBeenCalledWith(adopted, "♻️ Restored");
+  });
+
+  it("adopts nothing when the key doesn't match the id, or isn't a send", async () => {
+    const { chats, handler } = setup();
+    const key = "d_1700000000000_other";
+    // The key names a different chat than the numeric id.
+    expect(
+      await handler({ action: "send_message", text: "x", target: key }, 12345),
+    ).toMatchObject({ ok: false });
+    // Not a native key at all.
+    expect(
+      await handler(
+        { action: "send_message", text: "x", target: "12345" },
+        deriveNumericChatId("12345"),
+      ),
+    ).toMatchObject({ ok: false });
+    // Only plain sends adopt.
+    expect(
+      await handler(
+        { action: "react", message_id: "1", target: key },
+        deriveNumericChatId(key),
+      ),
+    ).toMatchObject({ ok: false });
+    expect(chats.get(key)).toBeUndefined();
   });
 });
 
@@ -493,6 +545,7 @@ describe("native mesh bridge routes", () => {
       control: async () => ({ ok: true, message: "" }),
       logs: () => [],
       liveTurnEvents: () => [],
+      listCommands: () => [],
       mediaPath: () => null,
       registerDevice: (body) => registry.register(body),
       storeLocation: (body) => registry.storeLocation(body),
@@ -504,6 +557,9 @@ describe("native mesh bridge routes", () => {
       openNodeInstall: () => null,
       openCompanionPair: () => null,
       openNodeBinary: () => null,
+      openSecretDrop: () => null,
+      isLiveSecretDrop: () => false,
+      submitSecretDrop: async () => ({ status: 404, html: "" }),
     };
     const server = new BridgeServer(
       { host: "127.0.0.1", port: 0, token, startedAt: "now" },

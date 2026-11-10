@@ -33,6 +33,15 @@ that speaks the protocol works.
   one itself (silently on a rooted/Shizuku phone, swap-and-relaunch on
   desktop). See [Updates](#updates).
 
+- **Voice mode** (Android) — hands-free conversation with on-device speech,
+  plus an optional on-device neural voice (Kokoro). See
+  [docs/companion-voice.md](../../docs/companion-voice.md).
+
+> **Licence note (Android APK):** the neural voice links espeak-ng (GPL-3.0)
+> through sherpa-onnx, so the Android companion APK is distributed under the
+> GPL-3.0; its corresponding source is this repository. The source files stay
+> Apache-2.0, and the desktop builds are unaffected. See [NOTICE](../../NOTICE).
+
 See [docs/companion-ui.md](../../docs/companion-ui.md) for a visual tour of the
 main surfaces and the reasoning behind their layout.
 
@@ -61,6 +70,25 @@ and run `talon_companion.exe`.
 The installer is unsigned, so SmartScreen may warn on first run — choose **More
 info → Run anyway**. Its Inno Setup script lives at
 `installer/windows/talon-companion.iss` and is compiled in
+`.github/workflows/companion.yml`.
+
+## Installing (Linux)
+
+Four options are published for each release:
+
+- **AppImage** (`talon-companion-linux-<version>.AppImage`): standalone portable
+  executable. Make it executable (`chmod +x talon-companion-linux-*.AppImage`)
+  and run it directly on any modern distribution.
+- **Debian / Ubuntu package** (`talon-companion_<version>_amd64.deb`): standard
+  `.deb` package. Install with `sudo dpkg -i talon-companion_*.deb` or
+  `sudo apt install ./talon-companion_*.deb`.
+- **Fedora / RHEL / openSUSE package** (`talon-companion-<version>-1.x86_64.rpm`):
+  standard `.rpm` package. Install with `sudo dnf install ./talon-companion-*.rpm`
+  or `sudo rpm -i talon-companion-*.rpm`.
+- **Portable archive** (`talon-companion-linux-<version>.tar.gz`): unpack anywhere
+  and run `talon_companion`.
+
+Packaging manifests and scripts live under `installer/linux/` and run in
 `.github/workflows/companion.yml`.
 
 ## Updates
@@ -190,4 +218,5 @@ and is mirrored in Dart under [`lib/src/models/`](lib/src/models). Endpoints:
 | POST | `/control` | Daemon-level actions (`restart`, `dream`) |
 
 All non-`/health` routes accept a bearer token (`Authorization: Bearer …`, or
-`?token=` for the SSE stream) when the daemon is configured with one.
+`?token=` on `GET /events` and `GET /media` only, where a client can't set a
+header) when the daemon is configured with one.

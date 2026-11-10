@@ -111,13 +111,18 @@ vi.mock("../core/plugin/index.js", () => ({
   getPluginPromptAdditions: vi.fn(() => []),
 }));
 vi.mock("../util/trace.js", () => ({ traceMessage: vi.fn() }));
+/** The catalog the mocked models module serves; empty = cold/failed probe. */
+const catalogStub = vi.hoisted(() => ({
+  models: [] as import("../backend/agy/models.js").AgyModelInfo[],
+}));
 vi.mock("../backend/agy/models.js", async (orig) => {
   const actual = await orig<typeof import("../backend/agy/models.js")>();
   return {
     ...actual,
     // Never spawn `agy models` from the handler path.
-    refreshModels: vi.fn(async () => []),
-    getCachedModels: vi.fn(() => []),
+    refreshModels: vi.fn(async () => catalogStub.models),
+    getCachedModels: vi.fn(() => catalogStub.models),
+    catalogForSelection: vi.fn(async () => catalogStub.models),
     getModelInfo: vi.fn(async (id: string) =>
       actual.synthesizeUnknownModel(id),
     ),
@@ -308,14 +313,41 @@ describe("agy handler — spawn shape", () => {
     expect(children[0].turns).toBe(2);
   });
 
-  it("passes --effort when the chat asks for a level the model supports", async () => {
+  it("expresses a requested level through the sibling slug, never a conflicting --effort", async () => {
+    // agy >= 1.4: `--model gemini-3.8-flash-high --effort low` exits 1.
+    const { parseAgyModels } = await import("../backend/agy/models.js");
+    catalogStub.models = parseAgyModels(
+      "gemini-3.8-flash-high\tH\ngemini-3.8-flash-medium\tM\ngemini-3.8-flash-low\tL\n",
+    );
+    try {
+      chatSettings.setChatEffort(CHAT, "low");
+      turnScript = [[text("hi", "DONE"), result()]];
+      await run();
+      const args = spawned[0].args;
+      expect(args[args.indexOf("--model") + 1]).toBe("gemini-3.8-flash-low");
+      expect(args).not.toContain("--effort");
+    } finally {
+      catalogStub.models = [];
+    }
+  });
+
+  it("drops the level rather than send a conflicting pair when the catalog is cold", async () => {
     chatSettings.setChatEffort(CHAT, "low");
     turnScript = [[text("hi", "DONE"), result()]];
     await run();
-    expect(spawned[0].args).toContain("--effort");
-    expect(spawned[0].args[spawned[0].args.indexOf("--effort") + 1]).toBe(
-      "low",
-    );
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("gemini-3.8-flash-high");
+    expect(args).not.toContain("--effort");
+  });
+
+  it("passes --effort for a suffix-less model id", async () => {
+    chatSettings.setChatModel(CHAT, "claude-sonnet-5-5");
+    chatSettings.setChatEffort(CHAT, "high");
+    turnScript = [[text("hi", "DONE"), result()]];
+    await run();
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
+    expect(args[args.indexOf("--effort") + 1]).toBe("high");
   });
 });
 

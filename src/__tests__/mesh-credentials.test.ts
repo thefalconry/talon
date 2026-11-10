@@ -43,9 +43,6 @@ async function tempStore(now?: () => number): Promise<{
   return { store: new DeviceCredentialStore(file, now), file };
 }
 
-/** Let fire-and-forget persistence settle. */
-const settle = () => new Promise((r) => setTimeout(r, 30));
-
 describe("DeviceCredentialStore", () => {
   it("mints a tdc1 token, stores only its hash, and authenticates it", async () => {
     const { store, file } = await tempStore();
@@ -126,11 +123,11 @@ describe("DeviceCredentialStore", () => {
     expect(reloaded.authenticate(token)?.deviceId).toBe("node-1");
   });
 
-  it("binds an unbound credential once, and never to an id another credential holds", async () => {
+  it("binds an unbound credential once, and never over a device holding wider scopes", async () => {
     const { store } = await tempStore();
     await store.mint({
       deviceId: "taken",
-      scopes: ["device"],
+      scopes: ["device", "client", "operator"],
       origin: "upgrade",
     });
     const pair = store.mintNow({
@@ -144,6 +141,94 @@ describe("DeviceCredentialStore", () => {
     expect(store.bind(id, "phone")).toMatchObject({ ok: true });
     expect(store.bind(id, "other")).toMatchObject({ ok: false });
     expect(store.authenticate(pair.token)?.deviceId).toBe("phone");
+  });
+
+  it("lets a pairing link re-pair a device that already holds a credential", async () => {
+    const { store, file } = await tempStore();
+    const old = await store.mint({
+      deviceId: "mac",
+      scopes: ["device", "client", "operator"],
+      origin: "upgrade",
+    });
+    expect(store.authenticate(old.token)?.deviceId).toBe("mac");
+    const revoked: string[] = [];
+    store.onRevoked((ids) => revoked.push(...ids));
+
+    const pair = store.mintNow({
+      deviceId: null,
+      scopes: ["device", "client", "operator"],
+      origin: "pair",
+    });
+    expect(store.authenticate(pair.token)).not.toBeNull();
+    expect(store.bind(pair.credential.id, "mac")).toMatchObject({ ok: true });
+
+    // The old credential is dead at once, and its live sessions were told to drop.
+    expect(store.authenticate(old.token)).toBeNull();
+    expect(revoked).toEqual([old.credential.id]);
+    expect(store.activeFor("mac").map((c) => c.id)).toEqual([
+      pair.credential.id,
+    ]);
+    expect(store.authenticate(pair.token)?.deviceId).toBe("mac");
+
+    // ...and stays dead across a reload, once the background writes land.
+    await store.flush();
+    const reloaded = new DeviceCredentialStore(file);
+    await reloaded.load();
+    expect(reloaded.authenticate(old.token)).toBeNull();
+    expect(reloaded.authenticate(pair.token)?.deviceId).toBe("mac");
+
+    // A used link cannot re-pair anything else (single use).
+    expect(store.bind(pair.credential.id, "phone")).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it("lets an installer link re-provision a node but not take over a companion", async () => {
+    const { store } = await tempStore();
+    const node = await store.mint({
+      deviceId: "node-1",
+      scopes: ["device"],
+      origin: "upgrade",
+    });
+    const phone = await store.mint({
+      deviceId: "phone",
+      scopes: ["device", "client"],
+      origin: "upgrade",
+    });
+    const install = store.mintNow({
+      deviceId: null,
+      scopes: ["device"],
+      origin: "install",
+    });
+    const refused = store.bind(install.credential.id, "phone");
+    expect(refused).toMatchObject({ ok: false });
+    expect(refused.ok ? "" : refused.error).toContain("client");
+    expect(store.authenticate(phone.token)?.deviceId).toBe("phone");
+
+    expect(store.bind(install.credential.id, "node-1")).toMatchObject({
+      ok: true,
+    });
+    expect(store.authenticate(node.token)).toBeNull();
+  });
+
+  it("never lets a non-pairing unbound credential take over a device", async () => {
+    const { store } = await tempStore();
+    const held = await store.mint({
+      deviceId: "mac",
+      scopes: ["device"],
+      origin: "upgrade",
+    });
+    // Only pairing/installer links are minted unbound today; guard the rule
+    // anyway by forging one of another origin.
+    const odd = store.mintNow({
+      deviceId: null,
+      scopes: ["device", "client", "operator"],
+      origin: "upgrade",
+    });
+    const result = store.bind(odd.credential.id, "mac");
+    expect(result).toMatchObject({ ok: false });
+    expect(result.ok ? "" : result.error).toContain("revoke it first");
+    expect(store.authenticate(held.token)?.deviceId).toBe("mac");
   });
 
   it("expires an unbound credential that is never used", async () => {
@@ -177,7 +262,7 @@ describe("DeviceCredentialStore", () => {
     const revoked: string[] = [];
     store.onRevoked((ids) => revoked.push(...ids));
     expect(store.authenticate(next.token)).not.toBeNull();
-    await settle();
+    await store.flush();
     expect(revoked).toEqual([old.credential.id]);
     expect(store.authenticate(old.token)).toBeNull();
   });
@@ -469,6 +554,33 @@ describe("mesh service with credentials", () => {
       scopes: [...DEFAULT_COMPANION_SCOPES],
     });
     expect(DEFAULT_COMPANION_SCOPES).toEqual(["device", "client", "operator"]);
+  });
+
+  it("make_companion_pair_link returns the link plus URL, token and fingerprint", async () => {
+    const svc = await service();
+    await svc.load();
+    bridge(svc);
+    const result = svc.makeCompanionPairLinkText("Phone");
+    expect(result.ok).toBe(true);
+    const text = result.text ?? "";
+    expect(text).toMatch(/https:\/\/10\.0\.0\.2:19880\/pair\?grant=/);
+    expect(text).toContain("Bridge URL: https://10.0.0.2:19880");
+    expect(text).toContain(`Certificate SHA-256: ${"f".repeat(64)}`);
+    expect(text).toContain("expires in 10 minutes");
+    const token = /Token: (\S+)/.exec(text)![1]!;
+    expect(isDeviceCredentialToken(token)).toBe(true);
+    expect(text).not.toContain("shared-secret");
+    // The typed-in token is the same live credential the link carries.
+    expect(svc.credentials!.authenticate(token)).toMatchObject({
+      deviceId: null,
+    });
+  });
+
+  it("make_companion_pair_link fails cleanly without a bridge", async () => {
+    const svc = await service();
+    await svc.load();
+    const result = svc.makeCompanionPairLinkText();
+    expect(result.ok).toBe(false);
   });
 
   it("pairing links honour a narrowed native.companionScopes", async () => {

@@ -13,6 +13,7 @@ import {
   type AgentCaps,
   type AgentParent,
 } from "../core/agents/index.js";
+import { abortKind } from "../core/agents/abort-reason.js";
 
 const CHAT: AgentParent = { kind: "chat", chatId: "42", numericChatId: 42 };
 const CAPS: AgentCaps = { ...DEFAULT_AGENT_CAPS };
@@ -275,6 +276,9 @@ describe("AgentRegistry reads", () => {
     expect(registry.requestKill("agt_1")).toBe(true);
     expect(spy).toHaveBeenCalledOnce();
     expect(registry.killRequested("agt_1")).toBe(true);
+    // The reason marks it a deliberate kill, so backends log "killed" and
+    // not "aborted by timeout".
+    expect(abortKind(abort.signal)).toBe("killed");
   });
 
   it("honours a kill requested while still queued when the abort handle binds at start", () => {
@@ -289,6 +293,7 @@ describe("AgentRegistry reads", () => {
     const abort = new AbortController();
     registry.start("agt_1", { model: "sonnet", abort });
     expect(abort.signal.aborted).toBe(true);
+    expect(abortKind(abort.signal)).toBe("killed");
   });
 
   it("killAll signals every live agent", () => {

@@ -14,7 +14,6 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { DoctorCheck } from "../../core/doctor/index.js";
 import {
@@ -34,6 +33,7 @@ import {
   bundledPlaywrightVersion,
   couplingError,
 } from "./version-coupling.js";
+import { userHome } from "../../util/fs-path.js";
 
 /** Engines whose builds Playwright manages (vs system channels). */
 const MANAGED_ENGINES = new Set(["chromium", "firefox", "webkit"]);
@@ -173,7 +173,7 @@ function browserPresent(
 ): boolean {
   const root = browsersRoot(
     deps.platform ?? process.platform,
-    deps.home ?? homedir(),
+    deps.home ?? userHome(),
     deps.env ?? process.env,
   );
   const present = new Set((deps.listDir ?? safeListDir)(root));

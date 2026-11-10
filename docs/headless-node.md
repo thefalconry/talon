@@ -53,7 +53,12 @@ The node's `appVersion` tracks the Talon release it was built against
 matches, and `update_node` streams a new binary + verifies + swaps + restarts
 in place — see `apps/node/README.md`.
 
-No daemon-side changes were needed — headless nodes registered against an
+A node on macOS additionally advertises `computer` (screenshot,
+accessibility snapshot, pointer and keyboard), which the daemon exposes as
+the `device_computer` tool — see "Desktop control" in `apps/node/README.md`.
+Other platforms recognise the command and answer that it is unavailable.
+
+Apart from that one tool, no daemon-side changes were needed — headless nodes registered against an
 unmodified bridge.
 
 ## Deploying a node
@@ -99,6 +104,52 @@ Remote nodes are best pointed at the daemon over a tailnet/VPN address —
 the bridge token grants the full bridge API, so avoid exposing the port
 publicly. Scoping per-device tokens is a known follow-up.
 
+## Fallback endpoints
+
+A node dials one URL, its configured `bridge`. If the daemon sets
+`native.endpoints`, every node also learns other ways to reach the same
+bridge from its register reply (the 60 s heartbeat), saves them in its
+config (`endpoints`), and fails over to them when the configured URL stops
+working. No re-pairing is needed: nodes pick the list up on their next
+heartbeat. Nodes and daemons that predate this ignore it.
+
+```json
+"native": {
+  "publicUrl": "https://mesh.example.org",
+  "endpoints": [
+    { "url": "https://mesh.example.org", "dial": "203.0.113.7:443", "label": "direct IPv4, no DNS" }
+  ]
+}
+```
+
+- `url` must be https. Its host goes in TLS SNI and the `Host` header, so a
+  reverse proxy in front of the bridge routes it as usual.
+- `dial` (optional) is an IP literal and port, e.g. `203.0.113.7:443` or
+  `[2001:db8::1]:443`. The node connects there instead of resolving the
+  URL's host, so a DNS outage doesn't take the mesh down. It works like
+  `curl --resolve`.
+- `publicUrl` is always advertised first. On each node, its own configured
+  `bridge` is always tried first and can't be removed by a list. Up to 8
+  entries.
+- Every entry must present the bridge's own certificate. Nodes keep the
+  fingerprint they already pin and refuse an entry that presents any other.
+  Trust-on-first-use only ever happens on the configured `bridge`, so an
+  unpinned node never uses a learned entry.
+- A node moves to the next entry only on a transport failure: DNS, connect,
+  TLS or pin, a timeout, or a proxy's 502/503/504. An auth error (401/403),
+  404 or 429 would be the same on every entry, so it stays put. While on a
+  fallback, it probes the configured bridge's `/health` every 5 minutes and
+  goes back once it answers. `talon-node status` lists the entries.
+- A daemon restart is not an endpoint failure. After the daemon's restart
+  notice (`bye`), the node stays on the entry it was using through its 1 s
+  retries (up to the advertised delay plus 2 minutes, or until a stream
+  connects), so a `/restart` doesn't walk the list or strand the node on a
+  DNS-bypass entry. A restart without the notice (a crash) still fails over.
+- Leaving `endpoints` unset advertises nothing. Setting it to `[]` tells
+  nodes to forget a list they learned earlier.
+
+The companion app does not use the list yet.
+
 ## Where node binaries come from
 
 `src/core/mesh/links/node-binaries.ts` materializes a binary for any supported
@@ -128,3 +179,14 @@ attaches the binaries plus `talon-node-SHA256SUMS` to published releases.
 The version.txt drift guard runs on PRs only — release builds stamp from
 the tag, so a stale release PR can no longer ship a release with no node
 binaries.
+
+A second job on a macOS runner re-signs `talon-node-darwin-amd64` and
+`talon-node-darwin-arm64` with the persistent self-signed `Talon Companion`
+identity (same secrets as the companion, see
+[companion-macos-signing.md](companion-macos-signing.md)) and the fixed
+identifier `dev.talon.node`, then recomputes `talon-node-SHA256SUMS` and does
+the attestation and release upload. macOS ties Screen Recording and
+Accessibility grants to the signature, so with a stable identity they survive
+`update_node`. The source-build tier above compiles on the daemon host and
+cannot sign with that identity: a darwin binary built that way is ad-hoc
+signed, and macOS asks for both grants again after the update.

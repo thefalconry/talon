@@ -71,18 +71,67 @@ function isSelectedModel(currentModel: string, candidateId: string): boolean {
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
+const ONE_MILLION_SUFFIX = "[1m]";
+
+/**
+ * Split a `[1m]` context-variant suffix off a query ("opus[1m]" →
+ * { stem: "opus", oneMillion: true }). Claude Code accepts the suffix on
+ * any alias or id; the SDK's `supportedModels()` list does not enumerate
+ * the suffixed forms, so the catalog can't match them directly.
+ */
+function splitOneMillion(query: string): { stem: string; oneMillion: boolean } {
+  const trimmed = query.trim();
+  if (trimmed.toLowerCase().endsWith(ONE_MILLION_SUFFIX)) {
+    return {
+      stem: trimmed.slice(0, -ONE_MILLION_SUFFIX.length).trim(),
+      oneMillion: true,
+    };
+  }
+  return { stem: trimmed, oneMillion: false };
+}
+
+/**
+ * Exact-match a query against the registry: its id/alias directly, or —
+ * for a `[1m]` query the registry doesn't list — the base model, returned
+ * as a 1M variant whose id keeps the suffix so the SDK actually selects
+ * the 1M context window.
+ *
+ * The SDK reports no context-window metadata per model, so there's no
+ * evidence to reject a `[1m]` request on; the binary is the authority.
+ * The one form refused is `default[1m]`: "default" is a moving target,
+ * not an alias Claude Code suffixes.
+ */
+function resolveExactUnified(query: string): UnifiedModelInfo | undefined {
+  const direct = getModel(resolveModelId(query));
+  if (direct) return toUnified(direct);
+
+  const { stem, oneMillion } = splitOneMillion(query);
+  if (!oneMillion || !stem) return undefined;
+  const baseId = resolveModelId(stem);
+  const base = getModel(baseId);
+  if (!base || stem.toLowerCase() === "default") return undefined;
+
+  // Pass the SDK a form it knows: the canonical id when it's concrete, the
+  // user's own stem when the canonical is the "default" alias (e.g. "opus"
+  // folds into "default" when default currently serves Opus).
+  const sdkStem = baseId === "default" ? stem : baseId;
+  const displayName = /\(1m context\)/i.test(base.displayName)
+    ? base.displayName
+    : `${base.displayName} (1M context)`;
+  return {
+    ...toUnified(base),
+    id: `${sdkStem}${ONE_MILLION_SUFFIX}`,
+    displayName,
+    contextWindow: 1_000_000,
+  };
+}
+
 export async function resolveModel(
   query: string,
 ): Promise<UnifiedModelResolution> {
-  const canonicalId = resolveModelId(query);
-  const model = getModel(canonicalId);
-
-  if (model) {
-    return {
-      kind: "exact",
-      model: toUnified(model),
-      storedValue: model.id,
-    };
+  const exact = resolveExactUnified(query);
+  if (exact) {
+    return { kind: "exact", model: exact, storedValue: exact.id };
   }
 
   // No exact match -- try a substring search across display names and aliases
@@ -112,9 +161,7 @@ export async function resolveModel(
 export async function getModelInfo(
   id: string,
 ): Promise<UnifiedModelInfo | undefined> {
-  const canonicalId = resolveModelId(id);
-  const model = getModel(canonicalId);
-  return model ? toUnified(model) : undefined;
+  return resolveExactUnified(id);
 }
 
 export async function getSettingsPresentation(

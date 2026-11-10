@@ -1,7 +1,8 @@
 /**
  * One inbound message, from `messages.upsert` to the model's turn:
  * access gates → media saved to the workspace → history recorded →
- * slash commands (../commands.ts) → catch-up policy → `execute()`.
+ * slash commands (../commands.ts; skipped in the catch-up backlog) →
+ * catch-up policy → `execute()`.
  */
 
 import { isJidGroup, type WAMessage } from "baileys";
@@ -17,8 +18,9 @@ import {
   recordMessageReceived,
 } from "../../../util/watchdog.js";
 import { isAddressedToSelf, isGroupAllowed } from "../access.js";
-import { handleWhatsAppCommand } from "../commands.js";
+import { handleWhatsAppCommand, parseWhatsAppCommand } from "../commands.js";
 import { sendText } from "../actions/send.js";
+import { applyInboundRedaction } from "../../../core/secrets/redact.js";
 import {
   bareId,
   canonicalId,
@@ -27,6 +29,7 @@ import {
   type Identity,
 } from "../connection/identity.js";
 import { saveInboundMedia, type SavedMedia } from "./media-store.js";
+import { attachmentNote, pastedLengthNote } from "./attachment-note.js";
 import { lookupByWaId, rememberMessage } from "./message-store.js";
 import { registerWhatsAppChat, type WhatsAppChatInfo } from "../registry.js";
 import type { WhatsAppRuntime } from "../runtime.js";
@@ -64,6 +67,65 @@ function extractText(msg: WAMessage): string {
     m.documentWithCaptionMessage?.message?.documentMessage?.caption ??
     ""
   );
+}
+
+/** The text-bearing fields of an inbound message, as [holder, key] pairs. */
+function textFields(msg: WAMessage): Array<[Record<string, unknown>, string]> {
+  const m = msg.message as Record<string, unknown> | null | undefined;
+  if (!m) return [];
+  const fields: Array<[Record<string, unknown>, string]> = [];
+  const add = (holder: unknown, key: string): void => {
+    if (
+      holder &&
+      typeof (holder as Record<string, unknown>)[key] === "string"
+    ) {
+      fields.push([holder as Record<string, unknown>, key]);
+    }
+  };
+  add(m, "conversation");
+  add(m.extendedTextMessage, "text");
+  add(m.imageMessage, "caption");
+  add(m.videoMessage, "caption");
+  add(m.documentMessage, "caption");
+  const wrapped = (
+    m.documentWithCaptionMessage as
+      { message?: Record<string, unknown> } | undefined
+  )?.message;
+  add(wrapped?.documentMessage, "caption");
+  return fields;
+}
+
+/**
+ * Rewrite credentials out of the raw message in place (core/secrets/redact.ts),
+ * so the message store, history and the prompt only ever hold the redacted
+ * form; nudge toward /secret once. WhatsApp offers a bot no way to delete a
+ * user's message for both sides, so `deleteOriginal` doesn't apply here.
+ */
+function redactCredentials(
+  runtime: WhatsAppRuntime,
+  msg: WAMessage,
+  chat: WhatsAppChatInfo,
+  isGroup: boolean,
+): void {
+  let notice: string | undefined;
+  for (const [holder, key] of textFields(msg)) {
+    const r = applyInboundRedaction(holder[key] as string, {
+      chatKey: chat.chatId,
+      isDm: !isGroup,
+      config: { ...runtime.config.redaction, deleteOriginal: "never" },
+    });
+    if (!r.redacted) continue;
+    holder[key] = r.text;
+    notice ??= r.notice;
+    log(
+      "whatsapp",
+      `[${chat.chatId}] Redacted a credential from an inbound message`,
+    );
+  }
+  const sock = runtime.sock;
+  if (notice && sock) {
+    sendText({ sock, gateway: runtime.gateway }, chat, notice).catch(() => {});
+  }
 }
 
 async function admitInbound(
@@ -130,7 +192,6 @@ async function recordInbound(
   admitted: AdmittedMessage,
 ): Promise<RecordedMessage | null> {
   const { jid, isGroup, identity } = admitted;
-  const text = extractText(msg).trim();
   // Group chats key on the group JID; DMs key on the person, so the
   // thread survives WhatsApp switching addressing form.
   const chat = registerWhatsAppChat(
@@ -138,6 +199,9 @@ async function recordInbound(
     undefined,
     isGroup ? undefined : canonicalId(identity),
   );
+  // Before the raw message is stored or its text read anywhere else.
+  redactCredentials(runtime, msg, chat, isGroup);
+  const text = extractText(msg).trim();
   const senderName = msg.pushName || canonicalId(identity) || "user";
   const msgId = rememberMessage({
     key: msg.key,
@@ -207,6 +271,32 @@ function catchUpDeservesReply(inbound: RecordedMessage): boolean {
   return true;
 }
 
+/**
+ * A slash command in the catch-up backlog was issued against an earlier
+ * state of the chat — replaying `/reset` or `/model x` after a restart
+ * would silently undo whatever happened since. It stays recorded but does
+ * not run; while fresh, the sender is told so they can resend it.
+ */
+async function skipCatchUpCommand(
+  runtime: WhatsAppRuntime,
+  inbound: RecordedMessage,
+  name: string,
+): Promise<void> {
+  const { chat, senderName } = inbound;
+  log(
+    "whatsapp",
+    `[${chat.chatId}] Skipped /${name} from ${senderName} (sent while offline)`,
+  );
+  recordMessageProcessed();
+  const sock = runtime.sock;
+  if (!sock || !shouldReplyToCatchUp(inbound.platformTs)) return;
+  await sendText(
+    { sock, gateway: runtime.gateway },
+    chat,
+    `Not run: /${name} was sent while offline. Send it again to run it.`,
+  ).catch(() => {});
+}
+
 async function onTurnEvent(
   runtime: WhatsAppRuntime,
   chat: WhatsAppChatInfo,
@@ -262,10 +352,10 @@ async function runInboundTurn(
 
   // The model addresses messages by numeric id (react/reply/edit), so the
   // id travels with the text the same way the other frontends do it.
-  const mediaNote = media
-    ? `\n[attached ${media.type}: ${media.filePath}]`
-    : "";
-  const prompt = `[${senderName}] msg_id:${msgId}: ${text}${mediaNote}`;
+  // Documents travel with their extracted text (attachment-note.ts), and
+  // long pastes with an exact word count.
+  const notes = (await attachmentNote(media)) + pastedLengthNote(text);
+  const prompt = `[${senderName}] msg_id:${msgId}: ${text}${notes}`;
 
   const runTurn = () =>
     execute({
@@ -307,6 +397,10 @@ export async function handleInbound(
   if (!admitted) return;
   const inbound = await recordInbound(runtime, msg, admitted);
   if (!inbound) return;
+  if (options.catchUp) {
+    const cmd = parseWhatsAppCommand(inbound.text);
+    if (cmd) return skipCatchUpCommand(runtime, inbound, cmd.name);
+  }
   if (await handleWhatsAppCommand(runtime, inbound)) return;
   if (options.catchUp && !catchUpDeservesReply(inbound)) return;
   await runInboundTurn(runtime, inbound);

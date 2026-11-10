@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,7 @@ type fixtureCommandEntry struct {
 type meshFixture struct {
 	Protocol         int                   `json:"protocol"`
 	NodeCapabilities []string              `json:"nodeCapabilities"`
+	NodeDesktop      []string              `json:"nodeDesktopCapabilities"`
 	Registration     map[string]any        `json:"registration"`
 	ResultOk         map[string]any        `json:"resultOk"`
 	ResultError      map[string]any        `json:"resultError"`
@@ -81,6 +83,26 @@ func TestNodeCapabilitiesMatchFixture(t *testing.T) {
 	}
 }
 
+// A platform may add commands on top of the common surface, but only ones
+// the shared fixture names — otherwise the daemon would meet a capability
+// no conformance sample describes.
+func TestPlatformCapabilitiesAreInFixture(t *testing.T) {
+	fx := loadMeshFixture(t)
+	for _, name := range platformCapabilities {
+		if !slices.Contains(fx.NodeDesktop, name) {
+			t.Errorf("platform capability %q is not in the fixture's nodeDesktopCapabilities %v", name, fx.NodeDesktop)
+		}
+	}
+	// Every build must at least recognise them, so a platform that does not
+	// implement one answers "unavailable here" and never "unknown command".
+	for _, name := range fx.NodeDesktop {
+		result := dispatch(context.Background(), nil, name, map[string]any{})
+		if strings.Contains(result.Message, "does not support") {
+			t.Errorf("fixture desktop capability %q has no dispatch case: %s", name, result.Message)
+		}
+	}
+}
+
 func TestRegistrationBodyMatchesFixture(t *testing.T) {
 	fx := loadMeshFixture(t)
 	n := &Node{
@@ -103,8 +125,8 @@ func TestRegistrationBodyMatchesFixture(t *testing.T) {
 	}
 
 	if body["capabilities"] == nil ||
-		!reflect.DeepEqual(body["capabilities"], nodeCapabilities) {
-		t.Errorf("registration must advertise nodeCapabilities, got %v", body["capabilities"])
+		!reflect.DeepEqual(body["capabilities"], allCapabilities()) {
+		t.Errorf("registration must advertise the full capability surface, got %v", body["capabilities"])
 	}
 	platform, _ := body["platform"].(string)
 	switch platform {

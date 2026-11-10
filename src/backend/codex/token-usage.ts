@@ -29,8 +29,8 @@
  */
 
 import { readFile, readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { userHome } from "../../util/fs-path.js";
 
 export interface CodexLastTokenUsage {
   /** Last API call's prompt size = current context fill in tokens. */
@@ -120,7 +120,7 @@ export interface CodexRolloutSnapshot {
  * Codex CLI resolves its data directory.
  */
 function codexHome(): string {
-  return process.env.CODEX_HOME ?? join(homedir(), ".codex");
+  return process.env.CODEX_HOME ?? join(userHome(), ".codex");
 }
 
 /**

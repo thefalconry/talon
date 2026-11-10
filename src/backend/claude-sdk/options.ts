@@ -37,12 +37,23 @@ import {
   gatewayToken,
 } from "../../core/engine/gateway-auth.js";
 import { getConfig, getBridgePort } from "./state.js";
-import { ALLOWED_TOOLS_CHAT, EFFORT_MAP } from "./constants.js";
+import {
+  ALLOWED_TOOLS_CHAT,
+  CLAUDE_RETENTION_SETTINGS,
+  EFFORT_MAP,
+  isNativeSubagentTool,
+  nativeSubagentDisallowedTools,
+} from "./constants.js";
 import {
   isGuestTurn,
   isGuestPluginAllowed,
 } from "../../core/mcp-hub/guest-scope.js";
 import { VALID_TOOL_FRONTENDS } from "../../core/mcp-hub/talon-server.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  sdkEnvFor,
+  type ClaudeRunAccount,
+} from "./accounts/account.js";
 
 /** `telegram-tools`, `whatsapp-tools`, ... — the hub's own frontend servers. */
 function isFrontendToolServerName(name: string): boolean {
@@ -395,8 +406,12 @@ export function buildSdkOptions(
   abortController?: AbortController,
   modelOverride?: string,
   preparedPrompt?: PreparedSystemPrompt,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
 ): BuildSdkOptionsResult {
   const config = getConfig();
+  // The account's login: CLAUDE_CONFIG_DIR for an extra account, nothing
+  // (inherit the daemon's env) for the default one.
+  const env = sdkEnvFor(account);
   const chatSettings = getChatSettings(chatId);
   const activeModel = modelOverride ?? chatSettings.model ?? config.model;
   const activeEffort = chatSettings.effort ?? "adaptive";
@@ -418,11 +433,17 @@ export function buildSdkOptions(
   // Write/Skill live outside the hub, so the hub's guest scope can't hide
   // them — and only the plugin servers the guest scope allows.
   const guest = isGuestTurn(chatId);
+  // Claude Code's own `Agent` sub-agents die with the turn and report to
+  // no one; they are withheld unless the deployment opts back in.
+  const allowNativeSubagents = config.allowNativeSubagents === true;
   const builtinTools = guest
     ? []
-    : config.nativeTools
-      ? ALLOWED_TOOLS_CHAT.filter((t) => !NATIVE_REPLACED_BUILTINS.has(t))
-      : [...ALLOWED_TOOLS_CHAT];
+    : ALLOWED_TOOLS_CHAT.filter(
+        (t) =>
+          !(config.nativeTools && NATIVE_REPLACED_BUILTINS.has(t)) &&
+          (allowNativeSubagents || !isNativeSubagentTool(t)),
+      );
+  const disallowedTools = nativeSubagentDisallowedTools(allowNativeSubagents);
 
   const allServers = {
     ...buildMcpServers(chatId),
@@ -482,6 +503,9 @@ export function buildSdkOptions(
     ...(config.claudeBinary
       ? { pathToClaudeCodeExecutable: config.claudeBinary }
       : {}),
+    ...(env ? { env } : {}),
+    // Keep session transcripts: Talon resumes chats from them.
+    settings: { ...CLAUDE_RETENTION_SETTINGS },
     // Whitelist of SDK built-in tools. Anything not listed (e.g. WebSearch,
     // WebFetch, Monitor, PushNotification, RemoteTrigger, Plan/Worktree/Todo
     // helpers, AskUserQuestion, ScheduleWakeup) is unavailable to the model.
@@ -493,6 +517,9 @@ export function buildSdkOptions(
     // removed too — the owner prefers the native surface without nested
     // agents. Flip the flag back off to restore the built-ins instantly.
     tools: builtinTools,
+    // Explicit deny on top of the whitelist for Claude Code's own sub-agent
+    // tool (`Agent`, formerly `Task`) — unless `allowNativeSubagents`.
+    ...(disallowedTools.length > 0 ? { disallowedTools } : {}),
     ...thinkingConfig,
     mcpServers,
     hooks: {

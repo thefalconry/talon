@@ -88,7 +88,9 @@ xattr -d com.apple.quarantine ./talon-darwin-arm64
 ```
 
 Verify a direct download against the release `SHA256SUMS`:
-`sha256sum -c SHA256SUMS --ignore-missing`.
+`sha256sum -c SHA256SUMS --ignore-missing`, and its build provenance with
+`gh attestation verify talon-linux-x64 --repo thefalconry/talon` (see
+[SECURITY.md](SECURITY.md#verifying-a-release)).
 
 **Server only, no Telegram?** Run the daemon with just the client bridge,
 reached by the companion app and talon-node: see
@@ -272,6 +274,7 @@ daemon (plugins) or apply on the next session (skills):
 talon plugin install @scope/my-talon-plugin        # npm → module plugin
 talon plugin install some-mcp-server --mcp         # npm → standalone MCP server (npx)
 talon plugin install owner/repo                    # git → module plugin
+talon plugin install owner/repo#<sha>              # …at that commit (or --commit <sha>)
 talon plugin list                                  # built-ins + configured entries
 talon plugin disable github                        # also toggles built-ins
 talon plugin remove my-talon-plugin
@@ -285,7 +288,10 @@ talon skill remove pdf
 ```
 
 Module plugins install under `~/.talon/plugins/`; standalone MCP servers are
-registered as `npx` entries in `config.json`. Disabling keeps the entry (or a
+registered as `npx` entries in `config.json`. A git source can be pinned to a
+commit with `#<sha>` or `--commit <sha>` (7-64 hex digits): Talon checks that
+commit out and verifies HEAD before installing. Either way the install
+folder's `.talon-install.json` records the repo and the exact commit. Disabling keeps the entry (or a
 `.disabled` marker in the skill folder) so enabling restores it unchanged.
 
 ## Built-in Plugins
@@ -462,6 +468,8 @@ talon kill      Abort a killable task by id
 talon events    Tail the event bus (-f follows, --history [N] reads the journal)
 talon plugin    Manage plugins (install / enable / disable / remove)
 talon skill     Manage skills (install / enable / disable / remove)
+talon history   Chat history kept by Talon (show / hidden / purge — docs/chat-history.md)
+talon accounts  Claude accounts (list / add / remove / login — docs/claude-accounts.md)
 talon config    View or edit configuration
 talon logs      Tail structured log file
 talon doctor    Validate environment and dependencies
@@ -481,6 +489,7 @@ Config file: `~/.talon/config.json`
 | `model`                    | `"default"`  | Default model. Interpretation depends on the active backend.                                                            |
 | `agyBinary`                | ---          | Path to the Antigravity `agy` executable. `AGY_BINARY` overrides it. |
 | `codexApiKey`              | ---          | Codex-only OpenAI API key. Prefer this over `openaiApiKey` for Codex API-key auth. `codex login` takes precedence over shared `openaiApiKey`. |
+| `codexChatGptDefaultModel` | ---          | Model a ChatGPT-login Codex session falls back to when a model is rejected or none is set. Default: the Codex CLI's own default for the account (from `~/.codex/models_cache.json`). `TALON_CODEX_CHATGPT_MODEL` overrides it. |
 | `concurrency`              | `1`          | Max concurrent AI queries (1--20)                                                                                       |
 | `pulse`                    | `true`       | Periodic group engagement                                                                                               |
 | `heartbeat`                | `false`      | Background maintenance agent                                                                                            |

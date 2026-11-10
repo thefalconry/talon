@@ -60,10 +60,11 @@ String toolPhrase(String raw) {
   final tool = raw.startsWith('mcp__')
       ? (raw.substring(5).split('__')..removeAt(0)).join('__')
       : raw;
-  final phrase = builtins[tool.toLowerCase().replaceAll('_', '')];
+  final phrase = builtins[tool.toLowerCase().replaceAll(RegExp('[_-]'), '')];
   if (phrase != null) return phrase;
   final words = tool
-      .replaceAll('_', ' ')
+      // snake_case and kebab-case (MCP servers use both) → spaced words.
+      .replaceAll(RegExp('[_-]'), ' ')
       // camelCase / PascalCase → spaced words.
       .replaceAllMapped(RegExp(r'(?<=[a-z0-9])([A-Z])'), (m) => ' ${m[1]}')
       .trim()

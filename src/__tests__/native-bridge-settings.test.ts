@@ -38,8 +38,9 @@ vi.mock("../core/background/heartbeat/index.js", () => ({
   stopHeartbeatTimer: vi.fn(),
 }));
 
-const { applyConfigUpdate, configSnapshot, persistConfigPatch, EDITABLE } =
+const { applyConfigUpdate, configSnapshot, EDITABLE } =
   await import("../frontend/native/surface/settings.js");
+const { persistConfigPatch } = await import("../core/config/persist.js");
 const { setTimezone } = await import("../util/time.js");
 const { startPulseTimer, stopPulseTimer } =
   await import("../core/background/pulse/pulse.js");

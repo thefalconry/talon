@@ -12,7 +12,9 @@
  * Install sources (see cli/install-sources.ts for the shared grammar):
  * local path and git checkouts become module entries under ~/.talon/plugins;
  * an npm spec installs there too, or registers an `npx` MCP entry with
- * `--mcp`. Windows-safe throughout — tools are spawned via cross-spawn.
+ * `--mcp`. A cloned source installs at a given commit with `#<sha>` or
+ * `--commit <sha>`. Windows-safe throughout — tools are spawned via
+ * cross-spawn.
  */
 
 import pc from "picocolors";
@@ -24,11 +26,12 @@ import { findRunningInstance } from "../core/daemon/discovery.js";
 import { fetchGateway } from "./daemon-api.js";
 import { loadConfig, saveConfig, type Config } from "./config.js";
 import {
-  cloneShallow,
+  cloneSource,
   writeInstallRecord,
   resolveSource,
+  withCommit,
   runTool,
-  type ResolvedSource,
+  type GitSource,
 } from "./install-sources.js";
 import {
   BUILTIN_PLUGINS,
@@ -50,7 +53,8 @@ const USAGE = [
   "  Commands:",
   `    ${pc.cyan("list")}                       Show built-ins and configured plugins`,
   `    ${pc.cyan("install <source>")}           Add a plugin (local path, git URL,`,
-  "                               owner/repo, or npm spec)",
+  "                               owner/repo, or npm spec); a git source",
+  "                               may end in #<commit>",
   `    ${pc.cyan("enable <name>")}              Enable a plugin`,
   `    ${pc.cyan("disable <name>")}             Disable a plugin (kept in config)`,
   `    ${pc.cyan("remove <name>")}              Remove a plugin entry (and its install)`,
@@ -60,6 +64,7 @@ const USAGE = [
   "                               MCP server (npx) instead of a module",
   `    ${pc.cyan("--name <name>")}              Override the derived plugin name`,
   `    ${pc.cyan("--force")}                    Replace an existing install/entry`,
+  `    ${pc.cyan("--commit <sha>")}             Install a git source at this commit`,
   "",
 ].join("\n");
 
@@ -184,7 +189,12 @@ function cmdList(): void {
 
 // ── install ─────────────────────────────────────────────────────────────────
 
-type InstallFlags = { mcp: boolean; force: boolean; name?: string };
+type InstallFlags = {
+  mcp: boolean;
+  force: boolean;
+  name?: string;
+  commit?: string;
+};
 
 function parseInstallArgs(
   args: string[],
@@ -196,10 +206,12 @@ function parseInstallArgs(
     if (arg === "--mcp") flags.mcp = true;
     else if (arg === "--force") flags.force = true;
     else if (arg === "--name") flags.name = args[++i];
+    else if (arg === "--commit") flags.commit = args[++i];
     else if (!arg.startsWith("-") && source === undefined) source = arg;
     else return null;
   }
   if (!source || (flags.name !== undefined && !flags.name)) return null;
+  if (flags.commit !== undefined && !flags.commit) return null;
   return { source, flags };
 }
 
@@ -229,10 +241,7 @@ function installFromLocalDir(dir: string): EntryOutcome {
  * once the staged copy is known-good, so a failed install never destroys
  * a working one.
  */
-function installFromGit(
-  source: Extract<ResolvedSource, { kind: "git" }>,
-  flags: InstallFlags,
-): EntryOutcome {
+function installFromGit(source: GitSource, flags: InstallFlags): EntryOutcome {
   const derived = source.subpath
     ? basename(source.subpath)
     : basename(source.url, ".git");
@@ -245,7 +254,7 @@ function installFromGit(
     };
   }
 
-  const clone = cloneShallow(source.url);
+  const clone = cloneSource(source);
   if (!clone.ok) return { ok: false, error: clone.error };
   try {
     const stage = source.subpath
@@ -265,6 +274,7 @@ function installFromGit(
       source: source.url,
       ...(source.subpath ? { subpath: source.subpath } : {}),
       ...(clone.commit ? { commit: clone.commit } : {}),
+      ...(source.commit ? { pinned: true } : {}),
     });
     if (clone.commit) {
       console.log(`  ${pc.dim(`Commit ${clone.commit}`)}`);
@@ -338,7 +348,13 @@ async function cmdInstall(args: string[]): Promise<void> {
   }
   const { source, flags } = parsed;
 
-  const resolved = resolveSource(source);
+  const pinned = withCommit(resolveSource(source), flags.commit);
+  if (!pinned.ok) {
+    fail(pinned.error);
+    process.exitCode = 1;
+    return;
+  }
+  const resolved = pinned.source;
   let outcome: EntryOutcome;
   switch (resolved.kind) {
     case "local":

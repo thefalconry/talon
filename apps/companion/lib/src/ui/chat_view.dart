@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 
@@ -58,6 +59,10 @@ class _ChatViewState extends State<ChatView> {
   /// drop target wrapping the whole pane can stage into the same list.
   final _attachments = ComposerAttachments();
 
+  /// The composer's field, owned here so Reply can quote a message into it.
+  final _composerText = TextEditingController();
+  final _composerFocus = FocusNode();
+
   /// True while a drag is hovering the chat, for the drop overlay.
   bool _dragging = false;
 
@@ -76,10 +81,17 @@ class _ChatViewState extends State<ChatView> {
   /// message (like any chat app), not the top of the scrollback.
   String? _anchoredChatId;
   bool _pendingJumpToBottom = false;
+  int _settleToken = 0;
 
   /// Whether the user has scrolled up into history far enough that a
   /// jump-to-latest affordance is useful.
   bool _awayFromBottom = false;
+
+  /// Whether the user has actively scrolled away from the bottom.
+  bool _userScrolledAway = false;
+  int _lastMessageCount = 0;
+  bool _lastHistoryLoading = false;
+  ConnState _lastConnState = ConnState.idle;
 
   /// The on-screen chat's live turn. Streamed tokens notify it (not
   /// AppState), so following the growing reply to the bottom hangs off it.
@@ -108,6 +120,8 @@ class _ChatViewState extends State<ChatView> {
   void dispose() {
     _followedTurn?.removeListener(_onTurnTick);
     _attachments.dispose();
+    _composerText.dispose();
+    _composerFocus.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -129,7 +143,7 @@ class _ChatViewState extends State<ChatView> {
       _followQueued = false;
       if (!mounted || !_scroll.hasClients) return;
       final pos = _scroll.position;
-      if (pos.maxScrollExtent - pos.pixels < 260) {
+      if (!_userScrolledAway && pos.maxScrollExtent - pos.pixels < 120) {
         _scroll.jumpTo(pos.maxScrollExtent);
       }
     });
@@ -159,10 +173,28 @@ class _ChatViewState extends State<ChatView> {
   void _onScrolled() {
     if (!_scroll.hasClients) return;
     final pos = _scroll.position;
-    final away = pos.maxScrollExtent - pos.pixels > 420;
+    final distanceFromBottom = pos.maxScrollExtent - pos.pixels;
+    final away = distanceFromBottom > 420;
     if (away != _awayFromBottom) setState(() => _awayFromBottom = away);
+
+    if (!_pendingJumpToBottom) {
+      if (distanceFromBottom > 60) {
+        _userScrolledAway = true;
+      } else if (distanceFromBottom <= 20) {
+        _userScrolledAway = false;
+      }
+    } else if (pos.userScrollDirection != ScrollDirection.idle) {
+      _userScrolledAway = true;
+      _pendingJumpToBottom = false;
+    }
+
     // Nearing the top of loaded scrollback → pull the previous page in.
-    if (pos.pixels < 240 && !_pendingJumpToBottom) _maybeLoadOlder();
+    if (pos.pixels < 240 &&
+        !_pendingJumpToBottom &&
+        !widget.state.isHistoryLoading(_anchoredChatId ?? '') &&
+        pos.maxScrollExtent > 300) {
+      _maybeLoadOlder();
+    }
   }
 
   /// Fetch the page above the current scrollback and keep the viewport
@@ -170,9 +202,13 @@ class _ChatViewState extends State<ChatView> {
   /// maxScrollExtent; jump by the delta so nothing visibly shifts).
   Future<void> _maybeLoadOlder() async {
     final chatId = _anchoredChatId;
-    if (chatId == null) return;
+    if (chatId == null || _pendingJumpToBottom) return;
     final state = widget.state;
-    if (state.isLoadingOlder(chatId) || !state.hasMoreHistory(chatId)) return;
+    if (state.isLoadingOlder(chatId) ||
+        state.isHistoryLoading(chatId) ||
+        !state.hasMoreHistory(chatId)) {
+      return;
+    }
     final extentBefore =
         _scroll.hasClients ? _scroll.position.maxScrollExtent : 0.0;
     final pixelsBefore = _scroll.hasClients ? _scroll.position.pixels : 0.0;
@@ -187,6 +223,7 @@ class _ChatViewState extends State<ChatView> {
   }
 
   void _jumpToLatest() {
+    _userScrolledAway = false;
     if (!_scroll.hasClients) return;
     _scroll.animateTo(
       _scroll.position.maxScrollExtent,
@@ -215,10 +252,49 @@ class _ChatViewState extends State<ChatView> {
 
   /// Whether [a] (earlier) and [b] (later) belong to the same visual run:
   /// same author, close together in time.
+  ///
+  /// Assistant runs get a wider window than user ones: a model delivering
+  /// progress messages mid-turn (send_message) can spend minutes in tools
+  /// between them, and those messages are still one reply to the reader.
   static bool _grouped(ClientMessage? a, ClientMessage? b) {
     if (a == null || b == null) return false;
-    return a.role == b.role &&
-        b.time.difference(a.time).abs() < const Duration(minutes: 3);
+    if (a.role != b.role || a.role == Role.system) return false;
+    final window = a.role == Role.assistant
+        ? const Duration(minutes: 10)
+        : const Duration(minutes: 3);
+    return b.time.difference(a.time).abs() < window;
+  }
+
+  /// The text of the assistant run ending at row [end], oldest first — what
+  /// the run's single Copy button puts on the clipboard.
+  String _runText(List<Object> rows, int end) {
+    final parts = <String>[];
+    var i = end;
+    while (i >= 0 && rows[i] is ClientMessage) {
+      final m = rows[i] as ClientMessage;
+      if (m.text.isNotEmpty) parts.add(m.text);
+      final prev = i > 0 && rows[i - 1] is ClientMessage
+          ? rows[i - 1] as ClientMessage
+          : null;
+      if (!_grouped(prev, m)) break;
+      i--;
+    }
+    return parts.reversed.join('\n\n');
+  }
+
+  /// Reply: quote [m] at the top of the composer (keeping anything already
+  /// typed below it) and put the cursor at the end.
+  void _reply(ClientMessage m) {
+    var text = m.text.trim();
+    if (text.length > 280) text = '${text.substring(0, 280).trimRight()}…';
+    final quote = text.split('\n').map((l) => '> $l').join('\n');
+    final existing = _composerText.text.trim();
+    final next = existing.isEmpty ? '$quote\n\n' : '$quote\n\n$existing';
+    _composerText.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: next.length),
+    );
+    _composerFocus.requestFocus();
   }
 
   /// A row animates in only the first time we see it AND when it's genuinely
@@ -231,31 +307,107 @@ class _ChatViewState extends State<ChatView> {
   }
 
   void _autoScroll(String chatId, int messageCount) {
-    // Opening (or switching to) a chat should land on the newest message. The
-    // history often loads a frame or two after the switch, so keep owing the
-    // jump until the chat actually has content, then snap to the bottom.
+    final historyLoading = widget.state.isHistoryLoading(chatId);
+    final currentConn = widget.state.conn;
+    final connJustConnected = currentConn == ConnState.connected &&
+        _lastConnState != ConnState.connected;
+    final historyJustFinished = !historyLoading && _lastHistoryLoading;
+    final messagesGrew = messageCount > _lastMessageCount;
+
+    // Opening (or switching to) a chat should land on the newest message.
     if (chatId != _anchoredChatId) {
       _anchoredChatId = chatId;
+      _userScrolledAway = false;
       _pendingJumpToBottom = true;
+      _settleToken++;
+    } else if (!_userScrolledAway &&
+        (connJustConnected || (historyJustFinished && messagesGrew))) {
+      // Server connected or server history finished arriving while user was at
+      // the bottom: re-anchor to the bottom so we don't roll back into older history.
+      _pendingJumpToBottom = true;
+      _settleToken++;
     }
+
+    _lastConnState = currentConn;
+    _lastHistoryLoading = historyLoading;
+    final hadPreviousCount = _lastMessageCount > 0;
+    _lastMessageCount = messageCount;
+
+    final token = _settleToken;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scroll.hasClients) return;
-      final pos = _scroll.position;
+      if (!mounted || !_scroll.hasClients) return;
       if (_pendingJumpToBottom) {
-        _scroll.jumpTo(pos.maxScrollExtent);
-        // Only consider it settled once there's something to anchor to, so an
-        // async history load right after the switch still snaps to newest.
-        if (messageCount > 0) _pendingJumpToBottom = false;
+        void settle(int retry, double lastExtent, int stableFrames) {
+          if (!mounted || !_scroll.hasClients || _settleToken != token) return;
+          final pos = _scroll.position;
+          // If the user actively touches or scrolls during settle, yield to the gesture.
+          if (_userScrolledAway || pos.userScrollDirection != ScrollDirection.idle) {
+            _userScrolledAway = true;
+            _pendingJumpToBottom = false;
+            return;
+          }
+          if (historyLoading && retry < 60) {
+            // Keep waiting until the authoritative history page arrives.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, lastExtent, 0),
+            );
+            return;
+          }
+          // Hard cap: content that keeps growing (a streaming reply) must not
+          // keep this loop alive frame after frame. Live growth is followed
+          // by the near-bottom rule below once settling gives up.
+          if (retry >= 60) {
+            if (messageCount > 0 && !historyLoading) {
+              _pendingJumpToBottom = false;
+            }
+            return;
+          }
+          if (!pos.hasContentDimensions) {
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, lastExtent, stableFrames),
+            );
+            return;
+          }
+          final currentExtent = pos.maxScrollExtent;
+          if (pos.pixels < currentExtent) {
+            _scroll.jumpTo(currentExtent);
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, 0),
+            );
+          } else if ((currentExtent - lastExtent).abs() > 0.5) {
+            // Extent changed or just jumped; wait for next frame to check stability.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, 0),
+            );
+          } else if (stableFrames < 2 && retry < 40) {
+            // Extent unchanged across 1 frame; confirm stability on a 2nd consecutive frame
+            // so multi-pass layouts (tall markdown bubbles, code highlighters) finish.
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => settle(retry + 1, currentExtent, stableFrames + 1),
+            );
+          } else {
+            // Settled: position is at maximum extent and extent has stabilized.
+            if (messageCount > 0 && !historyLoading) {
+              _pendingJumpToBottom = false;
+            }
+          }
+        }
+
+        settle(0, -1.0, 0);
         return;
       }
-      // Otherwise follow live growth only when the user is already near the
-      // bottom, so we never yank them up while they're reading scrollback.
-      if (pos.maxScrollExtent - pos.pixels < 260) {
-        _scroll.animateTo(
-          pos.maxScrollExtent,
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-        );
+
+      // Follow live growth only when new messages actually arrived while the user
+      // was already at the bottom, so reading scrollback is never interrupted.
+      if (messagesGrew && hadPreviousCount && !_userScrolledAway) {
+        final pos = _scroll.position;
+        if (pos.hasContentDimensions && pos.maxScrollExtent - pos.pixels < 160) {
+          _scroll.animateTo(
+            pos.maxScrollExtent,
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+          );
+        }
       }
     });
   }
@@ -294,9 +446,17 @@ class _ChatViewState extends State<ChatView> {
                     children: [
                       _QueuedBar(state: widget.state, chatId: chat.id),
                       Composer(
-                        onSend: widget.state.sendMessage,
+                        onSend: (text, {attachments = const []}) {
+                          _userScrolledAway = false;
+                          _pendingJumpToBottom = true;
+                          _settleToken++;
+                          return widget.state
+                              .sendMessage(text, attachments: attachments);
+                        },
                         attachments: _attachments,
-                        enabled: widget.state.conn == ConnState.connected,
+                        controller: _composerText,
+                        focusNode: _composerFocus,
+                        enabled: true,
                         running: widget.state.isTurnRunning(chat.id),
                         onStop: () => widget.state.interruptTurn(chat.id),
                         onVoice: _voiceAvailable
@@ -401,12 +561,23 @@ class _ChatViewState extends State<ChatView> {
     if (msgs.isEmpty && !showActivity) {
       return _ConversationEmpty(
         onPrompt: widget.state.conn == ConnState.connected
-            ? (p) => widget.state.sendMessage(p)
+            ? (p) {
+                _pendingJumpToBottom = true;
+                _settleToken++;
+                widget.state.sendMessage(p);
+              }
             : null,
       );
     }
 
     final rows = _rowsFor(chatId, msgs);
+    // A live turn that follows the model's own mid-turn messages is the same
+    // reply still being written: it joins their run (no second avatar/name,
+    // no "Talon · Working" card) instead of starting a new one.
+    final lastRow = rows.isEmpty ? null : rows.last;
+    final liveJoinsRun = showActivity &&
+        lastRow is ClientMessage &&
+        lastRow.role == Role.assistant;
 
     final topLoader = widget.state.isLoadingOlder(chatId);
     final itemCount =
@@ -463,14 +634,27 @@ class _ChatViewState extends State<ChatView> {
                       mi + 1 < rows.length && rows[mi + 1] is ClientMessage
                           ? rows[mi + 1] as ClientMessage
                           : null;
+                  final assistant = m.role == Role.assistant;
+                  // Another row of this assistant run follows: a later
+                  // message, or (for the newest row) the live turn.
+                  final continues = assistant &&
+                      (next != null
+                          ? _grouped(m, next)
+                          : mi == rows.length - 1 && liveJoinsRun);
+                  final runStart = assistant && !_grouped(prev, m);
                   return MessageBubble(
                     key: ValueKey<Object>(_rowKey(m)),
                     message: m,
                     botName: widget.state.status.botName,
                     animateIn: _shouldAnimate(m),
-                    showHeader:
-                        !(m.role == Role.assistant && _grouped(prev, m)),
+                    showHeader: !(assistant && _grouped(prev, m)),
                     showTime: !(m.role == Role.user && _grouped(m, next)),
+                    showFooter: !continues,
+                    continues: continues,
+                    copyText: assistant && !continues && !runStart
+                        ? _runText(rows, mi)
+                        : null,
+                    onReply: _reply,
                     // activeConfig, not config: in local auto-discover mode the
                     // saved config lacks the bridge's real port/token, and media
                     // fetched through it 404s or gets rejected.
@@ -483,7 +667,10 @@ class _ChatViewState extends State<ChatView> {
                   );
                 }
                 return LiveTurn(
-                    turn: turn, botName: widget.state.status.botName);
+                  turn: turn,
+                  botName: widget.state.status.botName,
+                  showHeader: !liveJoinsRun,
+                );
               },
             ),
           ),
@@ -893,10 +1080,17 @@ class _ChatMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<String>(
-      icon: Icon(Icons.more_vert,
-          size: TalonDensity.d(20, 24), color: TalonColors.textDim),
+      icon: Icon(Icons.menu,
+          size: TalonDensity.d(20, 24), color: TalonColors.accent),
+      tooltip: 'Conversation menu',
       iconSize: TalonDensity.d(20, 24),
       color: TalonColors.surfaceHi,
+      surfaceTintColor: Colors.transparent,
+      elevation: 6,
+      shape: RoundedRectangleBorder(
+        borderRadius: TalonRadius.rMd,
+        side: BorderSide(color: TalonColors.glassStroke),
+      ),
       onSelected: (v) async {
         switch (v) {
           case 'reset':
@@ -953,9 +1147,10 @@ class _MenuRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = danger ? TalonColors.bad : TalonColors.text;
+    final iconColor = danger ? TalonColors.bad : TalonColors.accent;
     return Row(
       children: [
-        Icon(icon, size: 17, color: color),
+        Icon(icon, size: 17, color: iconColor),
         const SizedBox(width: 10),
         Text(label, style: TextStyle(color: color, fontSize: 13.5)),
       ],

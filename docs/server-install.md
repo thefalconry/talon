@@ -106,6 +106,11 @@ talon status                 # as youruser
 above. `talon run` stays in the foreground, which is what systemd expects
 (`talon start` would fork away from it).
 
+If you'd rather keep starting Talon with `talon start`, don't install the
+unit above: add the [watchdog](watchdog.md) timer instead, which starts the
+daemon when it is down and leaves it alone after a `talon stop`. Use one or
+the other, never both.
+
 Open the port on the firewall:
 
 ```bash
@@ -142,7 +147,9 @@ See [headless-node.md](headless-node.md).
 
 The token grants the whole bridge API, so don't forward port 19880 on your
 router. Use a VPN or tailnet, or put a reverse proxy with client
-certificates in front ([mtls.md](mtls.md)).
+certificates in front ([mtls.md](mtls.md)). If you use a proxy, validate
+its config before every reload
+([mtls.md](mtls.md#2-configure-the-proxy), "Changing the proxy config").
 
 ## Troubleshooting
 
@@ -151,7 +158,7 @@ certificates in front ([mtls.md](mtls.md)).
 | `Telegram frontend requires "botToken"`                 | `frontend` still includes `telegram`. Set it to `"native"`.                                                            |
 | App can't reach the server                              | `ss -ltnp \| grep 19880` should show `0.0.0.0:19880`. If it shows `127.0.0.1`, set `native.host`. Check the firewall.  |
 | `401` / unauthorized in the app                         | Token mismatch. Re-copy `~/.talon/keys/bridge-token`.                                                                  |
-| `429` / too many failed auth attempts                   | That address sent wrong tokens repeatedly. Fix the token, then wait out the lockout (`Retry-After`), or restart Talon. |
+| `429` / too many failed auth attempts                   | That address sent wrong tokens repeatedly. Fix the token, then wait out the lockout (`Retry-After`), or restart Talon. Devices on per-device credentials are not locked out. |
 | `Refusing to start the bridge: native.token looks weak` | Remove `native.token` (Talon mints a strong one) or use `openssl rand -hex 32`.                                        |
 | App refuses the certificate after a reinstall           | `~/.talon/keys` was regenerated. Reconnect from the connect screen to re-pin, after checking the fingerprint.          |
 | Anything else                                           | `talon doctor` and `talon logs`.                                                                                       |

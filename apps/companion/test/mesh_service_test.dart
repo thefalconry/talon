@@ -59,6 +59,55 @@ void main() {
     expect(bridge.locations.single, containsPair('batteryPct', 82));
   });
 
+  test('heartbeat backs off exponentially to a 5-minute cap', () {
+    expect(MeshService.heartbeatDelay(0), const Duration(seconds: 60));
+    expect(MeshService.heartbeatDelay(1), const Duration(seconds: 30));
+    expect(MeshService.heartbeatDelay(2), const Duration(seconds: 60));
+    expect(MeshService.heartbeatDelay(3), const Duration(minutes: 2));
+    expect(MeshService.heartbeatDelay(4), const Duration(minutes: 4));
+    expect(MeshService.heartbeatDelay(5), const Duration(minutes: 5));
+    expect(MeshService.heartbeatDelay(500), const Duration(minutes: 5));
+  });
+
+  test('a failed registration is counted, not thrown, and resets on success',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await Prefs.load();
+    // A port nothing listens on: every registration fails fast.
+    final dead = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final deadPort = dead.port;
+    await dead.close();
+    final client = BridgeClient(
+      ConnectionConfig(
+        host: '127.0.0.1',
+        port: deadPort,
+        manageLocalDaemon: false,
+        localAutoDiscover: false,
+      ),
+    );
+    addTearDown(client.dispose);
+    final service = MeshService(
+      prefs,
+      client,
+      batteryProvider: () async => const MeshBattery(),
+      nameProvider: () async => 'Test phone',
+      versionProvider: () async => '1.0.0+1',
+      foregroundStarter: () async {},
+    );
+    addTearDown(service.stop);
+
+    expect(await service.tryRegister(), isFalse);
+    expect(await service.tryRegister(), isFalse);
+    expect(service.registerFailures, 2);
+
+    final bridge = await MockBridge.start();
+    addTearDown(bridge.close);
+    client.config = configFor(bridge);
+    expect(await service.tryRegister(), isTrue);
+    expect(service.registerFailures, 0);
+    expect(bridge.devices, hasLength(1));
+  });
+
   test('streams upload_file and download_file via /devices/file', () async {
     SharedPreferences.setMockInitialValues({});
     final prefs = await Prefs.load();

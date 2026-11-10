@@ -16,6 +16,11 @@ import {
   credentialOverview,
   type CredentialAdminContext,
 } from "../mesh/credentials/index.js";
+import {
+  addClaudeAccount,
+  listClaudeAccountsWithStatus,
+  removeClaudeAccount,
+} from "../auth/claude-accounts-admin.js";
 import { log, logError } from "../../util/log.js";
 import { checkGatewayTransport, hasValidGatewayToken } from "./gateway-auth.js";
 
@@ -71,6 +76,26 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   return JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+}
+
+/** The JSON object body, or null after answering 400. */
+async function readObjectBody(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await readJsonBody(req);
+    if (body && typeof body === "object" && !Array.isArray(body))
+      return body as Record<string, unknown>;
+  } catch {
+    // Answered below.
+  }
+  sendJson(res, 400, { ok: false, error: "Invalid JSON" });
+  return null;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 const ROUTES: readonly GatewayRoute[] = [
@@ -221,6 +246,52 @@ const ROUTES: readonly GatewayRoute[] = [
     },
   },
   {
+    // Claude accounts — the transport for `talon accounts`, so an add or
+    // remove applies to the running daemon without a restart.
+    method: "GET",
+    path: "/claude-accounts",
+    handle: async ({ res }) =>
+      sendJson(res, 200, {
+        ok: true,
+        accounts: await listClaudeAccountsWithStatus(),
+      }),
+  },
+  {
+    method: "POST",
+    path: "/claude-accounts/add",
+    handle: async ({ req, res }) => {
+      const body = await readObjectBody(req, res);
+      if (!body) return;
+      sendJson(
+        res,
+        200,
+        await addClaudeAccount({
+          name: optionalString(body.name),
+          label: optionalString(body.label),
+        }),
+      );
+    },
+  },
+  {
+    method: "POST",
+    path: "/claude-accounts/remove",
+    handle: async ({ req, res }) => {
+      const body = await readObjectBody(req, res);
+      if (!body) return;
+      if (typeof body.id !== "string") {
+        sendJson(res, 400, { ok: false, error: "id must be a string" });
+        return;
+      }
+      sendJson(
+        res,
+        200,
+        await removeClaudeAccount(body.id, {
+          deleteCredentials: body.deleteCredentials !== false,
+        }),
+      );
+    },
+  },
+  {
     // MCP hub — daemon-hosted MCP-over-HTTP endpoints for every backend
     // (see core/mcp-hub).
     method: "ANY",
@@ -321,15 +392,44 @@ export async function dispatchGatewayRoute(
 const PORT_RETRIES = 5;
 
 /**
+ * Asked before walking past a busy port. Resolves a reason to refuse the
+ * fallback (the bind then fails with it), or `undefined` to keep walking.
+ */
+export type PortInUseCheck = (busyPort: number) => Promise<string | undefined>;
+
+/**
  * Bind to 127.0.0.1, walking up from `port` on EADDRINUSE (at most
  * `PORT_RETRIES` times). Resolves with the port actually bound — `port`
  * 0 asks the OS for a free one — and leaves a persistent error handler
  * on the server, so a later server-level error is logged instead of
  * crashing the process via an unhandled 'error' event.
+ *
+ * `onPortInUse` can veto the walk: the daemon uses it to fail outright when
+ * the busy port belongs to another Talon daemon, rather than settling on
+ * the next port and running as a second instance.
  */
-export function listenWithRetry(server: Server, port: number): Promise<number> {
+export function listenWithRetry(
+  server: Server,
+  port: number,
+  onPortInUse?: PortInUseCheck,
+): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     let attempt = 0;
+    const walkOn = async (
+      candidate: number,
+      err: NodeJS.ErrnoException,
+    ): Promise<void> => {
+      const refusal = onPortInUse
+        ? await onPortInUse(candidate).catch(() => undefined)
+        : undefined;
+      if (refusal) {
+        reject(
+          Object.assign(new Error(refusal), { code: err.code, cause: err }),
+        );
+        return;
+      }
+      tryPort(candidate + 1);
+    };
     const tryPort = (candidate: number): void => {
       server.once("error", (err: NodeJS.ErrnoException) => {
         if (err.code === "EADDRINUSE" && attempt < PORT_RETRIES) {
@@ -339,7 +439,7 @@ export function listenWithRetry(server: Server, port: number): Promise<number> {
           // registered; drop it or every stale callback fires when a later
           // port finally binds.
           server.removeAllListeners("listening");
-          tryPort(candidate + 1);
+          void walkOn(candidate, err);
         } else {
           reject(err);
         }

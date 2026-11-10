@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:io' show ProcessSignal, exit;
+import 'dart:ui' show AppExitResponse;
 
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
@@ -11,6 +13,7 @@ import 'src/services/connection_vault.dart';
 import 'src/services/dynamic_accent.dart';
 import 'src/services/haptics.dart';
 import 'src/services/linux_theme.dart';
+import 'src/services/log.dart';
 import 'src/services/mesh_background.dart';
 import 'src/services/message_notifications.dart';
 import 'src/services/prefs.dart';
@@ -110,10 +113,19 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
   /// The app-lock state last handed to the background isolate.
   bool? _pushedAppLock;
 
+  StreamSubscription<ProcessSignal>? _sigtermSub;
+  StreamSubscription<ProcessSignal>? _sighupSub;
+  StreamSubscription<ProcessSignal>? _sigintSub;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.macOS)) {
+      _setupTerminationSignals();
+    }
     // The background isolate redacts reply notifications while the lock is
     // on; tell it as soon as the lock is turned on or off.
     widget.appLock?.addListener(_onAppLockChanged);
@@ -167,6 +179,55 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
     }
   }
 
+  void _setupTerminationSignals() {
+    void onSignal(ProcessSignal signal) async {
+      AppLog.info('lifecycle',
+          'Received ${signal.name}, flushing snapshot and terminating cleanly');
+      try {
+        if (defaultTargetPlatform == TargetPlatform.linux) {
+          LinuxThemeService.stopMonitoring();
+        }
+        await widget.state
+            .flushSnapshot()
+            .timeout(const Duration(milliseconds: 1500));
+      } catch (e) {
+        AppLog.warn('lifecycle', 'error during clean exit flush', e);
+      } finally {
+        exit(0);
+      }
+    }
+
+    try {
+      _sigtermSub = ProcessSignal.sigterm.watch().listen(onSignal);
+    } catch (e) {
+      AppLog.warn('lifecycle', 'failed to watch SIGTERM', e);
+    }
+    try {
+      _sighupSub = ProcessSignal.sighup.watch().listen(onSignal);
+    } catch (e) {
+      AppLog.warn('lifecycle', 'failed to watch SIGHUP', e);
+    }
+    try {
+      _sigintSub = ProcessSignal.sigint.watch().listen(onSignal);
+    } catch (e) {
+      AppLog.warn('lifecycle', 'failed to watch SIGINT', e);
+    }
+  }
+
+  @override
+  Future<AppExitResponse> didRequestAppExit() async {
+    AppLog.info('lifecycle', 'System requested application exit');
+    try {
+      if (defaultTargetPlatform == TargetPlatform.linux) {
+        LinuxThemeService.stopMonitoring();
+      }
+      await widget.state
+          .flushSnapshot()
+          .timeout(const Duration(milliseconds: 1500));
+    } catch (_) {}
+    return AppExitResponse.exit;
+  }
+
   /// Jump into full-screen voice mode (assist gesture). Ensures a chat is
   /// selected first so AppShell settles its conversation route BENEATH the
   /// voice screen, then pushes the orb on top.
@@ -199,10 +260,11 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
     await MessageNotifications.clearChat(chatId);
   }
 
-  /// Resume does two jobs: mirror foreground state into prefs for the
-  /// background isolate (which shares no memory with us and would otherwise
-  /// notify for replies the user is watching stream in), and re-read the
-  /// platform accent in case the wallpaper changed while we were away.
+  /// Resume mirrors foreground state into prefs for the background isolate
+  /// (which shares no memory with us and would otherwise notify for replies
+  /// the user is watching stream in), reopens an event stream that went
+  /// quiet while we were away, and re-reads the platform accent in case the
+  /// wallpaper changed meanwhile.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Desktop reports `inactive` for an unfocused window and `hidden` for a
@@ -214,10 +276,20 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       widget.state.persistSnapshot();
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        widget.state.pauseUiStream();
+      }
     }
     unawaited(widget.state.prefs.setUiForeground(foreground));
     _pushUiState(foreground: foreground);
     if (foreground) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        widget.state.resumeUiStream();
+      }
+      // A stream that stayed "connected" while the app was frozen (laptop
+      // lid, iOS suspension, a network switch meanwhile) may be half-open:
+      // if it has been quiet past a keep-alive or two, reopen it now.
+      widget.state.reconnectIfStale();
       final chatId = widget.state.selectedChatId;
       // Anything waiting in the shade for the chat now on screen is read.
       if (chatId != null) unawaited(MessageNotifications.clearChat(chatId));
@@ -288,6 +360,9 @@ class _TalonAppState extends State<TalonApp> with WidgetsBindingObserver {
     if (defaultTargetPlatform == TargetPlatform.linux) {
       LinuxThemeService.stopMonitoring();
     }
+    _sigtermSub?.cancel();
+    _sighupSub?.cancel();
+    _sigintSub?.cancel();
     _assistSub?.cancel();
     widget.appLock?.removeListener(_onAppLockChanged);
     HardwareKeyboard.instance.removeHandler(_onKey);

@@ -49,7 +49,7 @@ import {
   getRecentHistory,
   pushMessage,
 } from "../storage/history.js";
-import { deleteChat } from "../storage/repositories/history-repo.js";
+import { purgeChat as deleteChat } from "../storage/repositories/history-repo.js";
 
 const CHAT = "wa_dm_5550001";
 const chat = {

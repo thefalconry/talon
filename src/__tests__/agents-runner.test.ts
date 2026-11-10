@@ -37,27 +37,75 @@ import {
 import {
   agentContextLabel,
   agentRegistry,
+  clampTimeout,
   initAgents,
   killAgent,
+  recordInterimMessage,
   spawnAgent,
   type AgentParent,
 } from "../core/agents/index.js";
 import { taskTable } from "../core/tasks/index.js";
+import { getTrail } from "../core/agents/trail.js";
+import { existsSync, writeFileSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  agentScratchDir,
+  setScratchRootForTest,
+} from "../core/agents/scratch.js";
 import { bus } from "../core/bus/index.js";
 
 // The plan-aware router, stubbed. These tests assert what the runner ASKS
 // it and what it does with the answer; how it decides is
 // backend-router.test.ts's job.
 const chooseBackend = vi.hoisted(() =>
-  vi.fn(async (request: { chatBackendId: string }) => ({
-    backendId: request.chatBackendId,
-    reason: "no candidates",
-    routed: false,
-  })),
+  vi.fn(
+    async (request: {
+      chatBackendId: string;
+    }): Promise<{
+      backendId: string;
+      reason: string;
+      routed: boolean;
+      headroom?: unknown;
+    }> => ({
+      backendId: request.chatBackendId,
+      reason: "no candidates",
+      routed: false,
+    }),
+  ),
+);
+// Headroom reads, stubbed: unmeasured by default, so the guard only bites
+// in the tests that hand it a reading.
+const unmeasured = (id: string, label: string) => ({
+  id,
+  label,
+  headroom: 0,
+  source: "none" as const,
+  fetchedAt: 0,
+});
+const getBackendHeadroom = vi.hoisted(() =>
+  vi.fn(
+    async (
+      id: string,
+      label: string,
+    ): Promise<{
+      id: string;
+      label: string;
+      headroom: number;
+      source: "plan" | "ledger" | "none";
+      fetchedAt: number;
+      limiting?: { label: string; percent: number; resetsAt?: string };
+      unavailable?: string;
+    }> => ({ id, label, headroom: 0, source: "none", fetchedAt: 0 }),
+  ),
 );
 vi.mock("../core/engine/backend-router/index.js", () => ({
   chooseBackend,
+  getBackendHeadroom,
   recordBackendRunUsage: vi.fn(),
+  recordBackendRunFailure: vi.fn(),
+  recordBackendRunSuccess: vi.fn(),
   taskClassForEffort: (effort?: string) =>
     effort === "high" || effort === "xhigh" ? "reasoning" : undefined,
 }));
@@ -167,6 +215,10 @@ beforeEach(async () => {
       routed: false,
     }),
   );
+  getBackendHeadroom.mockReset();
+  getBackendHeadroom.mockImplementation(async (id, label) =>
+    unmeasured(id, label),
+  );
   initAgents({ execute });
 });
 
@@ -250,6 +302,142 @@ describe("spawnAgent routing", () => {
   });
 });
 
+/** A catalog offering two models, defaulting to the first. */
+function twoModels(defaultId: string, other: string): ModelCatalog {
+  return {
+    resolveModelInfo: async (query: string) =>
+      query === defaultId || query === other
+        ? {
+            kind: "exact" as const,
+            storedValue: query,
+            model: { id: query, name: query } as never,
+          }
+        : { kind: "missing" as const },
+    getDefaultModelId: () => defaultId,
+    getRawModelInfo: async () => undefined,
+  };
+}
+
+/** Register a live parent agent on `backendId`/`model`. */
+function liveParent(backendId: string, model: string): AgentParent {
+  const parent = agentRegistry.register(
+    { label: "parent", brief: "b", parent: CHAT, backendId },
+    {
+      maxConcurrent: 10,
+      maxDepth: 2,
+      defaultTimeoutMs: 60_000,
+      stallTimeoutMs: 0,
+      minHeadroomPct: 0,
+    },
+  );
+  if (!parent.ok) throw new Error(parent.error);
+  agentRegistry.start(parent.record.id, {
+    model,
+    abort: new AbortController(),
+  });
+  return { kind: "agent", agentId: parent.record.id };
+}
+
+describe("spawnAgent inheritance and allowlist", () => {
+  it("a child of an agent inherits its backend and model without routing", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run, { models: twoModels("sonnet", "haiku") });
+    const parent = liveParent("codex", "haiku");
+
+    const outcome = await spawnAgent({ brief: "b", label: "kid", parent });
+    expect(outcome).toMatchObject({
+      ok: true,
+      backendId: "codex",
+      model: "haiku",
+    });
+    expect(chooseBackend).not.toHaveBeenCalled();
+    if (!outcome.ok) return;
+    await settled(outcome.agentId);
+    const params = run.mock.calls[0]?.[0] as OneShotAgentParams;
+    expect(params.model).toBe("haiku");
+  });
+
+  it("a child that names a model keeps it on the routed path", async () => {
+    await withBackend(
+      vi.fn<OneShot>(async () => {}),
+      {
+        models: twoModels("sonnet", "haiku"),
+      },
+    );
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "pinned",
+      routed: false,
+    });
+    const parent = liveParent("codex", "haiku");
+    const outcome = await spawnAgent({
+      brief: "b",
+      label: "kid",
+      parent,
+      model: "sonnet",
+    });
+    expect(outcome).toMatchObject({ ok: true, model: "sonnet" });
+    expect(chooseBackend).toHaveBeenCalled();
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("refuses a backend outside agents.allowedBackends with a clear error", async () => {
+    initAgents({ execute, caps: { allowedBackends: ["claude"] } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toContain('Backend "codex" is not allowed');
+    expect(outcome.error).toContain("agents.allowedBackends: claude");
+    expect(agentRegistry.list()).toEqual([]);
+  });
+
+  it("refuses an inherited backend outside the allowlist too", async () => {
+    initAgents({ execute, caps: { allowedBackends: ["claude"] } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const parent = liveParent("codex", "sonnet");
+    const outcome = await spawnAgent({ brief: "b", label: "kid", parent });
+    expect(outcome.ok).toBe(false);
+  });
+
+  it("falls back to the inherited backend when routing picks a disallowed one", async () => {
+    initAgents({ execute, caps: { allowedBackends: ["claude"] } });
+    const run = vi.fn<OneShot>(async () => {});
+    for (const id of ["claude", "codex"] as const) {
+      registerBackend(
+        backendFactory(
+          id,
+          composeBackend({
+            id,
+            label: id,
+            background: { runOneShotAgent: run },
+            models: catalog(),
+          }),
+        ),
+      );
+    }
+    await initBackendPool(STUB_CONFIG, STUB_CTX);
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "most headroom",
+      routed: true,
+    });
+    const outcome = await spawn({ backendId: undefined });
+    expect(outcome).toMatchObject({ ok: true, backendId: "claude" });
+    if (!outcome.ok) return;
+    expect(outcome.routing).toBeUndefined();
+    await settled(outcome.agentId);
+  });
+
+  it("allows any backend when the allowlist is empty", async () => {
+    initAgents({ execute, caps: { allowedBackends: [] } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+});
+
 describe("spawnAgent resolution", () => {
   it("runs on the chosen backend's default model with an agent context label", async () => {
     const run = vi.fn<OneShot>(async () => {});
@@ -270,6 +458,25 @@ describe("spawnAgent resolution", () => {
     expect(params.prompt).toContain("investigate the thing");
     expect(params.systemPrompt).toContain(outcome.agentId);
     expect(params.systemPrompt).toContain("report_result");
+  });
+
+  it("appends the pre-flight lane to the brief only when asked", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+
+    const withLane = await spawn({ preflight: true });
+    const without = await spawn({ preflight: false });
+    if (!withLane.ok || !without.ok) throw new Error("spawn refused");
+    await settled(withLane.agentId);
+    await settled(without.agentId);
+
+    const prompts = run.mock.calls.map(
+      (call) => (call[0] as OneShotAgentParams).prompt,
+    );
+    const lane = prompts.filter((p) => p.includes("npm run preflight"));
+    expect(lane).toHaveLength(1);
+    expect(lane[0]).toContain("investigate the thing");
+    expect(lane[0]).toContain("run_preflight");
   });
 
   it("inherits the parent chat's backend when none is given", async () => {
@@ -450,7 +657,13 @@ describe("spawnAgent settlement", () => {
           parent: { kind: "agent", agentId: parentId },
           backendId: "codex",
         },
-        { maxConcurrent: 10, maxDepth: 2, defaultTimeoutMs: 1000 },
+        {
+          maxConcurrent: 10,
+          maxDepth: 2,
+          defaultTimeoutMs: 1000,
+          stallTimeoutMs: 0,
+          minHeadroomPct: 0,
+        },
       );
       if (child.ok) {
         childId = child.record.id;
@@ -500,5 +713,284 @@ describe("spawnAgent observability", () => {
     expect(wake?.prompt).toContain("AGENT FINISHED");
     expect(wake?.prompt).toContain(outcome.agentId);
     expect(wake?.prompt).toContain("probe");
+  });
+});
+
+describe("timeouts, the watchdog and the trail", () => {
+  /** A run that only ends when aborted, after doing some visible work. */
+  function busyThenHang(): OneShot {
+    return async (params) => {
+      await params.appendLog?.(
+        '\n**Tool call:** `Write`\n```json\n{\n  "file_path": "/tmp/work.ts"\n}\n```\n',
+      );
+      params.onAssistantText?.("wrote the first half");
+      await new Promise<void>((_resolve, reject) => {
+        const stop = (): void => reject(new Error("aborted"));
+        if (params.abortController.signal.aborted) stop();
+        params.abortController.signal.addEventListener("abort", stop);
+      });
+    };
+  }
+
+  it("has no hard timeout by default, and a ceiling caps it when set", async () => {
+    expect(clampTimeout(undefined)).toBeUndefined();
+    expect(clampTimeout(5_000_000)).toBe(5_000_000);
+    expect(clampTimeout(10)).toBe(30_000);
+    initAgents({ execute, caps: { maxTimeoutMs: 60_000 } });
+    expect(clampTimeout(undefined)).toBe(60_000);
+    expect(clampTimeout(5_000_000)).toBe(60_000);
+    initAgents({ execute, caps: { defaultTimeoutMs: 45_000 } });
+    expect(clampTimeout(undefined)).toBe(45_000);
+  });
+
+  it("applies the global ceiling to a spawn that set no timeout", async () => {
+    initAgents({ execute, caps: { maxTimeoutMs: 40, stallTimeoutMs: 0 } });
+    await withBackend(busyThenHang());
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("timed_out");
+  });
+
+  it("kills a stalled run, warns the parent first, and reports its trail", async () => {
+    initAgents({ execute, caps: { stallTimeoutMs: 30 } });
+    await withBackend(busyThenHang());
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("timed_out");
+    expect(record?.error).toMatch(/stalled/);
+    expect(record?.inboxDepth).toBeGreaterThanOrEqual(1);
+    expect(record?.trail?.files).toEqual(["/tmp/work.ts"]);
+    expect(record?.trail?.notes).toEqual(["wrote the first half"]);
+
+    await vi.waitFor(() => {
+      const prompts = execute.mock.calls.map((c) => c[0].prompt);
+      expect(prompts.some((p) => p.includes("[Watchdog]"))).toBe(true);
+      expect(
+        prompts.some(
+          (p) => p.includes("AGENT FINISHED") && p.includes("/tmp/work.ts"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("hands a killed run's interim messages and files to its parent", async () => {
+    initAgents({ execute, caps: { stallTimeoutMs: 0 } });
+    await withBackend(busyThenHang());
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    await vi.waitFor(() =>
+      expect(agentRegistry.get(outcome.agentId)?.taskId).toBeDefined(),
+    );
+    recordInterimMessage(outcome.agentId, "schema migrated");
+    await vi.waitFor(() =>
+      expect(getTrail(outcome.agentId)?.snapshot().files).toEqual([
+        "/tmp/work.ts",
+      ]),
+    );
+    killAgent(outcome.agentId);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("killed");
+    expect(record?.trail?.messages).toEqual(["schema migrated"]);
+    await vi.waitFor(() => {
+      const report = execute.mock.calls
+        .map((c) => c[0].prompt)
+        .find((p) => p.includes("AGENT FINISHED"));
+      expect(report).toContain("schema migrated");
+      expect(report).toContain("/tmp/work.ts");
+    });
+  });
+});
+
+describe("private scratch dir", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "talon-scratch-test-"));
+    setScratchRootForTest(root);
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("exports its own TMPDIR to the run, names it in the brief, and removes it on success", async () => {
+    let seen: { env?: Record<string, string>; existed: boolean } = {
+      existed: false,
+    };
+    const run = vi.fn<OneShot>(async (params) => {
+      const dir = params.env?.TMPDIR;
+      seen = {
+        ...(params.env ? { env: { ...params.env } } : {}),
+        existed: dir ? existsSync(dir) : false,
+      };
+      if (dir) writeFileSync(join(dir, "scratch.txt"), "x");
+      params.onAssistantText?.("done");
+    });
+    await withBackend(run);
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    await settled(outcome.agentId);
+
+    const dir = agentScratchDir(outcome.agentId);
+    expect(dir.startsWith(root)).toBe(true);
+    expect(seen.env).toEqual({ TMPDIR: dir, TMP: dir, TEMP: dir });
+    expect(seen.existed).toBe(true);
+    const params = run.mock.calls[0]?.[0] as OneShotAgentParams;
+    expect(params.systemPrompt).toContain(dir);
+    await vi.waitFor(() => expect(existsSync(dir)).toBe(false));
+  });
+
+  it("keeps the scratch dir when the run fails", async () => {
+    await withBackend(async (params) => {
+      writeFileSync(join(params.env!.TMPDIR!, "evidence.log"), "boom");
+      throw new Error("backend exploded");
+    });
+    const outcome = await spawn();
+    if (!outcome.ok) throw new Error(outcome.error);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("failed");
+    const dir = agentScratchDir(outcome.agentId);
+    // give the post-settle cleanup its chance to (wrongly) run
+    await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(join(dir, "evidence.log"))).toBe(true);
+  });
+});
+
+describe("spawnAgent headroom guard", () => {
+  /** A plan reading with `left` percent of headroom. */
+  function plan(id: string, left: number) {
+    return {
+      id,
+      label: id,
+      headroom: left / 100,
+      source: "plan" as const,
+      fetchedAt: 0,
+      limiting: {
+        label: "5h",
+        percent: 100 - left,
+        resetsAt: "2026-10-20T18:00:00Z",
+      },
+    };
+  }
+
+  it("refuses a pinned spawn below the floor, naming headroom, reset and force", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+    getBackendHeadroom.mockResolvedValue(plan("codex", 21));
+
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.error).toContain("21% headroom");
+    expect(outcome.error).toContain("5h 79% used");
+    expect(outcome.error).toContain("2026-10-20T18:00:00Z");
+    expect(outcome.error).toContain("agents.minHeadroomPct");
+    expect(outcome.error).toContain("force: true");
+    expect(getBackendHeadroom).toHaveBeenCalledWith(
+      "codex",
+      "codex",
+      expect.anything(),
+    );
+    expect(run).not.toHaveBeenCalled();
+    // A refused spawn claims no slot.
+    expect(agentRegistry.listForChat("42")).toHaveLength(0);
+  });
+
+  it("refuses a model-pinned spawn the router passed through as pinned", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "pinned",
+      routed: false,
+    });
+    getBackendHeadroom.mockResolvedValue(plan("codex", 10));
+
+    const outcome = await spawn({ backendId: undefined, model: "sonnet" });
+    expect(outcome).toMatchObject({ ok: false });
+  });
+
+  it("uses the router's own reading of a routed backend", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    chooseBackend.mockResolvedValue({
+      backendId: "codex",
+      reason: "every backend is over the ceiling",
+      routed: true,
+      headroom: plan("codex", 5),
+    });
+
+    const outcome = await spawn({ backendId: undefined });
+    expect(outcome).toMatchObject({ ok: false });
+    expect(getBackendHeadroom).not.toHaveBeenCalled();
+  });
+
+  it("allows a spawn at exactly the floor", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+    getBackendHeadroom.mockResolvedValue(plan("codex", 25));
+
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true, backendId: "codex" });
+    if (outcome.ok) await settled(outcome.agentId);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("allows a spawn above the floor", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue(plan("codex", 80));
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true });
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("allows a spawn on an unmeasured backend", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true });
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("refuses a backend flagged unavailable even without a plan reading", async () => {
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue({
+      ...unmeasured("codex", "codex"),
+      limiting: { label: "breaker open 5m — auth", percent: 100 },
+      unavailable: "breaker open 5m — auth",
+    });
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("unavailable");
+  });
+
+  it("force: true bypasses the guard", async () => {
+    const run = vi.fn<OneShot>(async () => {});
+    await withBackend(run);
+    getBackendHeadroom.mockResolvedValue(plan("codex", 3));
+
+    const outcome = await spawn({ force: true });
+    expect(outcome).toMatchObject({ ok: true });
+    expect(getBackendHeadroom).not.toHaveBeenCalled();
+    if (outcome.ok) await settled(outcome.agentId);
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("minHeadroomPct: 0 disables the guard", async () => {
+    initAgents({ execute, caps: { minHeadroomPct: 0 } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue(plan("codex", 3));
+
+    const outcome = await spawn();
+    expect(outcome).toMatchObject({ ok: true });
+    expect(getBackendHeadroom).not.toHaveBeenCalled();
+    if (outcome.ok) await settled(outcome.agentId);
+  });
+
+  it("honours a configured floor", async () => {
+    initAgents({ execute, caps: { minHeadroomPct: 50 } });
+    await withBackend(vi.fn<OneShot>(async () => {}));
+    getBackendHeadroom.mockResolvedValue(plan("codex", 40));
+
+    const outcome = await spawn();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toContain("50% floor");
   });
 });

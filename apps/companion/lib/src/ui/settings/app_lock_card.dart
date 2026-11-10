@@ -195,6 +195,7 @@ class _AppLockCardState extends State<AppLockCard> {
                     ),
                   ),
                   DropdownButton<int>(
+                    alignment: AlignmentDirectional.centerEnd,
                     value: AppLockController.timeoutChoices
                             .contains(_c.timeout.inSeconds)
                         ? _c.timeout.inSeconds
@@ -236,21 +237,20 @@ class _AppLockCardState extends State<AppLockCard> {
               _c.requireUnlockForElevated,
               _busy ? null : (v) => _run(() => _c.setRequireUnlockForElevated(v)),
             ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _changePasscode,
-                  icon: const Icon(Icons.password, size: 18),
-                  label: const Text('Change passcode'),
-                ),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _c.lockNow,
-                  icon: const Icon(Icons.lock_outline, size: 18),
-                  label: const Text('Lock now'),
-                ),
-              ],
+            const Divider(height: 18),
+            ControlButton(
+              icon: Icons.password,
+              label: 'Change passcode',
+              subtitle: 'Needs the current one.',
+              pending: false,
+              onTap: _busy ? null : _changePasscode,
+            ),
+            ControlButton(
+              icon: Icons.lock_outline,
+              label: 'Lock now',
+              subtitle: 'Cover the app until you unlock it again.',
+              pending: false,
+              onTap: _busy ? null : _c.lockNow,
             ),
           ],
         ],

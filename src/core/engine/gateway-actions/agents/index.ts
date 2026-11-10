@@ -6,6 +6,8 @@
  *   - `report`  — what a sub-agent calls about itself and its siblings:
  *     report_result / message_parent / check_inbox / list_peers /
  *     message_peer.
+ *   - `preflight` — run_preflight: the pre-flight lane (light CI suite) in
+ *     the caller's checkout, so an agent pushes only on green.
  *
  * Both sets are reachable from an `agent:<id>` context: the gateway routes
  * those chat keys straight here (see `Gateway.handleAction`), because a
@@ -15,11 +17,13 @@
 
 import type { SharedActionHandlers } from "../types.js";
 import { agentControlHandlers } from "./control.js";
+import { agentPreflightHandlers } from "./preflight.js";
 import { agentReportHandlers } from "./report.js";
 
 export const agentHandlers: SharedActionHandlers = {
   ...agentControlHandlers,
   ...agentReportHandlers,
+  ...agentPreflightHandlers,
 };
 
 /**

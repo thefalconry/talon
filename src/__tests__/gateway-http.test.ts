@@ -51,6 +51,18 @@ vi.mock("../storage/cron.js", () => ({
   loadCronJobs: vi.fn(),
 }));
 
+const accountsAdmin = vi.hoisted(() => ({
+  listClaudeAccountsWithStatus: vi.fn(async () => [
+    { id: "claude", label: "Claude", status: "signed in" },
+  ]),
+  addClaudeAccount: vi.fn(async (req: { name?: string }) => ({
+    ok: true,
+    account: { id: `claude-${req.name ?? "2"}` },
+  })),
+  removeClaudeAccount: vi.fn(async () => ({ ok: true, chatsMoved: 0 })),
+}));
+vi.mock("../core/auth/claude-accounts-admin.js", () => accountsAdmin);
+
 vi.mock("write-file-atomic", () => ({
   default: { sync: vi.fn() },
 }));
@@ -184,6 +196,59 @@ describe("gateway HTTP server", () => {
         },
       );
       expect(nonIntegerId.status).toBe(400);
+    });
+  });
+
+  describe("claude accounts", () => {
+    const post = (path: string, body: string) =>
+      gatewayFetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+
+    it("GET /claude-accounts lists every account with its status", async () => {
+      const resp = await gatewayFetch(
+        `http://127.0.0.1:${port}/claude-accounts`,
+      );
+      expect(await resp.json()).toEqual({
+        ok: true,
+        accounts: [{ id: "claude", label: "Claude", status: "signed in" }],
+      });
+    });
+
+    it("POST /claude-accounts/add passes the name through", async () => {
+      const resp = await post("/claude-accounts/add", '{"name":"work"}');
+      expect(await resp.json()).toEqual({
+        ok: true,
+        account: { id: "claude-work" },
+      });
+      expect(accountsAdmin.addClaudeAccount).toHaveBeenLastCalledWith({
+        name: "work",
+        label: undefined,
+      });
+    });
+
+    it("POST /claude-accounts/remove deletes credentials unless told not to", async () => {
+      await post("/claude-accounts/remove", '{"id":"claude-2"}');
+      expect(accountsAdmin.removeClaudeAccount).toHaveBeenLastCalledWith(
+        "claude-2",
+        { deleteCredentials: true },
+      );
+      await post(
+        "/claude-accounts/remove",
+        '{"id":"claude-2","deleteCredentials":false}',
+      );
+      expect(accountsAdmin.removeClaudeAccount).toHaveBeenLastCalledWith(
+        "claude-2",
+        { deleteCredentials: false },
+      );
+    });
+
+    it("rejects malformed bodies", async () => {
+      expect((await post("/claude-accounts/add", "nope{")).status).toBe(400);
+      expect((await post("/claude-accounts/add", "[1]")).status).toBe(400);
+      expect((await post("/claude-accounts/remove", "{}")).status).toBe(400);
     });
   });
 

@@ -21,6 +21,7 @@ import {
   getPinnedMessages as userbotPinnedMessages,
   getOnlineCount as userbotOnlineCount,
 } from "../userbot.js";
+import { getMediaForMessage } from "../../../storage/media-index.js";
 import { savePackToLibrary } from "../sticker-library.js";
 import { toPositiveId } from "./coerce.js";
 import type { TelegramActionHandlers } from "./types.js";
@@ -308,16 +309,32 @@ export const chatInfoHandlers: TelegramActionHandlers = {
   },
 
   download_media: async (body, chatId) => {
+    const msgId = toPositiveId(body.message_id);
+    if (!msgId) return { ok: false, error: "Required: message_id" };
+    // Media the bot received is already on disk and indexed. Answer from
+    // the index first: the userbot can't see messages in the bot's own
+    // DMs (message ids there are per-account), so asking it for an
+    // inbound photo by id reports "not found".
+    const indexed = getMediaForMessage(String(chatId), msgId);
+    if (indexed && existsSync(indexed.filePath)) {
+      return {
+        ok: true,
+        text: `Saved at: ${indexed.filePath} (${indexed.type}). Use the Read tool on this path to view the content.`,
+        file_path: indexed.filePath,
+      };
+    }
     if (isUserClientReady()) {
       const { downloadMessageMedia } = await import("../userbot.js");
       return {
         ok: true,
-        text: await downloadMessageMedia({
-          chatId,
-          messageId: Number(body.message_id),
-        }),
+        text: await downloadMessageMedia({ chatId, messageId: msgId }),
       };
     }
-    return { ok: false, error: "User client not connected." };
+    return {
+      ok: false,
+      error: indexed
+        ? `Media for message ${msgId} is no longer on disk and the user client is not connected to re-download it.`
+        : "User client not connected.",
+    };
   },
 };

@@ -37,14 +37,28 @@ export const CODEX_SYSTEM_PROMPT_SUFFIX = codexSystemPromptSuffix("telegram");
 export const CODEX_DEFAULT_MODEL = "gpt-5-codex";
 
 /**
- * Default model used by the Codex backend when the user is signed in
- * via ChatGPT OAuth (`~/.codex/auth.json` `auth_mode: "chatgpt"`).
- * The `gpt-5-codex` model is rejected with a 400
- * `invalid_request_error` ("not supported when using Codex with a
- * ChatGPT account") on this auth path; `gpt-5.5` is the supported
- * flagship for ChatGPT users.
+ * Last-resort default model for the Codex backend when the user is signed
+ * in via ChatGPT OAuth (`~/.codex/auth.json` `auth_mode: "chatgpt"`).
+ * The `gpt-5-codex` model is rejected with a 400 `invalid_request_error`
+ * ("not supported when using Codex with a ChatGPT account") on this auth
+ * path.
+ *
+ * This is only the floor of the resolution ladder — see
+ * `getCodexChatGptDefaultModel()` in `models.ts`, which prefers (1) an
+ * explicit operator override, then (2) the Codex CLI's own default for the
+ * signed-in account (the first listed model in `~/.codex/models_cache.json`
+ * by priority). `gpt-6-astra` is the first entry of the model catalog
+ * bundled with codex-cli 0.154. The previous value, `gpt-5.5`, was retired
+ * for ChatGPT accounts in Sep 2026: every run on it returned
+ * `404 The model gpt-5.5 does not exist or you do not have access to it`.
  */
-export const CODEX_CHATGPT_DEFAULT_MODEL = "gpt-5.5";
+export const CODEX_CHATGPT_DEFAULT_MODEL = "gpt-6-astra";
+
+/**
+ * Environment override for the ChatGPT-OAuth default model. Takes
+ * precedence over the `codexChatGptDefaultModel` config key.
+ */
+export const CODEX_CHATGPT_MODEL_ENV = "TALON_CODEX_CHATGPT_MODEL";
 
 /**
  * ThreadOptions permission settings shared by both the chat handler and

@@ -25,6 +25,15 @@ export async function readArray<T>(path: string): Promise<T[]> {
   }
 }
 
+/**
+ * Resolve once every write queued for `path` so far has finished (settled,
+ * success or failure) — for callers that persisted fire-and-forget and now
+ * need the file on disk.
+ */
+export function writesSettled(path: string): Promise<void> {
+  return writeQueues.get(path) ?? Promise.resolve();
+}
+
 /** Persist JSON atomically with 0600 perms, serialized per path. */
 export async function writePrivateJson(
   path: string,

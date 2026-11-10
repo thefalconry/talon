@@ -453,6 +453,106 @@ describe("restore round-trip", () => {
     ).rejects.toThrow(/--clone/);
   });
 
+  /**
+   * The daemon's scheduler always names the Talon home, so its snapshots
+   * discover nothing outside it — yet they still carry absolute plugin
+   * paths. Build one that way and copy it to a second machine.
+   */
+  async function schedulerStyleOnNewMachine(
+    m: Machine,
+    originUserHome?: string,
+  ): Promise<{ manifest: Manifest; newUser: string; newHome: string }> {
+    const manifest = await buildSnapshot({
+      kind: "backup",
+      settings: SETTINGS,
+      home: m.home,
+      copyDatabase,
+      ...(originUserHome ? { originUserHome } : {}),
+    });
+    const newUser = join(m.root, "newuser");
+    const newHome = join(newUser, ".talon");
+    mkdirSync(join(newHome, "backups"), { recursive: true });
+    const { cpSync } = await import("node:fs");
+    cpSync(
+      join(m.home, "backups", manifest.id),
+      join(newHome, "backups", manifest.id),
+      { recursive: true },
+    );
+    return { manifest, newUser, newHome };
+  }
+
+  it("records the origin of a scheduler-style snapshot without archiving outside stores", async () => {
+    const m = machine();
+    const { manifest } = await schedulerStyleOnNewMachine(m, m.userHome);
+    expect(manifest.origin).toEqual({ userHome: m.userHome, home: m.home });
+    expect(manifest.external?.some((r) => r.root.startsWith("sessions/"))).toBe(
+      false,
+    );
+    expect(manifest.external?.some((r) => r.kind === "plugin")).toBe(true);
+  });
+
+  it("clones a scheduler-style snapshot: plugin checkout lands under the new user home", async () => {
+    const m = machine();
+    const { manifest, newUser, newHome } = await schedulerStyleOnNewMachine(
+      m,
+      m.userHome,
+    );
+    await restoreSnapshot({
+      id: manifest.id,
+      settings: SETTINGS,
+      home: newHome,
+      userHome: newUser,
+      env: {},
+      clone: true,
+      skipCheckpoint: true,
+    });
+    expect(
+      existsSync(join(newUser, "code", "local-plugin", "package.json")),
+    ).toBe(true);
+  });
+
+  it("refuses to clone a snapshot with no origin before replacing anything", async () => {
+    const m = machine();
+    const { manifest, newUser, newHome } = await schedulerStyleOnNewMachine(m);
+    expect(manifest.origin).toBeUndefined();
+    await expect(
+      restoreSnapshot({
+        id: manifest.id,
+        settings: SETTINGS,
+        home: newHome,
+        userHome: newUser,
+        env: {},
+        clone: true,
+        skipCheckpoint: true,
+      }),
+    ).rejects.toThrow(/--origin-user-home/);
+    // Refused up front: the new home holds only the copied snapshot.
+    expect(existsSync(join(newHome, "config.json"))).toBe(false);
+    expect(existsSync(join(newHome, "workspace"))).toBe(false);
+  });
+
+  it("clones an origin-less snapshot when told the source user home", async () => {
+    const m = machine();
+    const { manifest, newUser, newHome } = await schedulerStyleOnNewMachine(m);
+    const report = await restoreSnapshot({
+      id: manifest.id,
+      settings: SETTINGS,
+      home: newHome,
+      userHome: newUser,
+      env: {},
+      clone: true,
+      originUserHome: m.userHome,
+      skipCheckpoint: true,
+    });
+    expect(
+      existsSync(join(newUser, "code", "local-plugin", "package.json")),
+    ).toBe(true);
+    expect(report.configRewritten).toBe(true);
+    expect(readFileSync(join(newHome, "config.json"), "utf8")).not.toContain(
+      m.userHome,
+    );
+  });
+
   it("clones onto a new user home: relocated stores, re-slugged transcripts, rewritten config", async () => {
     const m = machine();
     const manifest = await snapshot(m);

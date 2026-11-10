@@ -13,7 +13,7 @@ import { notifyAdmin } from "../frontend-runtime/admin-notify.js";
 import { logWarn } from "../../util/log.js";
 import {
   daysUntil,
-  PROVIDER_LABELS,
+  providerLabel,
   readAllProviderStatus,
   type ProviderAuthStatus,
 } from "./status.js";
@@ -35,7 +35,7 @@ export function alertKeyFor(
 }
 
 export function alertTextFor(s: ProviderAuthStatus, now = Date.now()): string {
-  const label = PROVIDER_LABELS[s.provider];
+  const label = providerLabel(s.provider);
   if (!s.loggedIn)
     return `🔑 ${label} is not signed in — send /auth to sign in from here.`;
   if (s.expired)

@@ -24,8 +24,18 @@ subscription or an Anthropic API key).
   owner, which is the user the container runs as.
 
 Note the path, e.g. `/mnt/tank/apps/talon`. Everything Talon keeps lives
-here: config, chat history, workspace, memory, keys, and the Claude and
-Antigravity sign-ins. Snapshotting this one dataset backs up all of it.
+here: config, chat history, workspace, memory, keys, every backend's sign-in,
+and every backend's conversation transcripts (`.claude/`, `.claude.json`,
+`.codex/`, `.gemini/`, `.local/share/`). Snapshotting this one dataset backs
+up all of it.
+
+Map the dataset to `/data` as a whole. If you build the app by hand in the
+_Custom App_ screen instead of pasting the YAML, add exactly one storage
+entry: host path = the dataset, mount path = `/data`. Mapping only a
+`.talon` directory keeps Talon's config but puts every conversation
+transcript on the container's own filesystem, and the next update deletes
+it. Talon sends an alert at boot when it spots that; see
+[docker.md](docker.md#what-must-be-persisted).
 
 ## 2. Install the app
 
@@ -111,7 +121,8 @@ auto-minted token.
 The YAML uses `image: …:latest` with `pull_policy: always`, so **Apps →
 talon → Stop → Start** (or editing and saving the app) pulls the newest
 release. To control updates yourself, pin a version instead (`:5.5.1`) and
-change it when you choose. Your dataset is untouched by updates.
+change it when you choose. Your dataset is untouched by updates. Only what's
+outside it (a path you didn't map) is lost.
 
 ## Optional: reach it from anywhere, certificate-only
 
@@ -125,11 +136,13 @@ proxy. Don't forward port 19880 on your router.
 
 ## Troubleshooting
 
-| Symptom                                                      | Fix                                                                                                                                                                                                        |
-| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Log says `… is not writable by uid 568`                      | The dataset isn't owned by `apps`. Edit the dataset's permissions and set owner/group to `apps`, or recreate it with the **Apps** preset. A mount path that didn't exist gets created by Docker as `root`. |
-| `Telegram frontend requires "botToken"`                      | The config was seeded without a token. Add `"botToken"` to `/data/.talon/config.json` and restart. Changing the env var alone does nothing once the file exists.                                         |
-| Companion can't connect                                      | Check that port `19880` is in the YAML and not used by another app, **HTTPS** is on in the app, and the token matches `/data/.talon/keys/bridge-token`.                                                  |
-| Pairing link points at a `172.x.x.x` address                 | Set `"publicUrl": "https://<nas>:19880"` in the `native` section of the config (that's what `TALON_BRIDGE_URL` seeds) and restart.                                                                         |
-| `Client certificate required` in the companion               | Your reverse proxy wants a client certificate: import the device's `.p12` in the app ([mtls.md](mtls.md)), or connect on your home network.                                                                |
-| Want to start over                                           | Stop the app, delete `/data/.talon/config.json` (keeps history) or empty the dataset (everything), then start it again.                                                                                  |
+| Symptom                                                                                               | Fix                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Log says `… is not writable by uid 568`                                                               | The dataset isn't owned by `apps`. Edit the dataset's permissions and set owner/group to `apps`, or recreate it with the **Apps** preset. A mount path that didn't exist gets created by Docker as `root`.                                                                                                                                                                                            |
+| `Telegram frontend requires "botToken"`                                                               | The config was seeded without a token. Add `"botToken"` to `/data/.talon/config.json` and restart. Changing the env var alone does nothing once the file exists.                                                                                                                                                                                                                                      |
+| Companion can't connect                                                                               | Check that port `19880` is in the YAML and not used by another app, **HTTPS** is on in the app, and the token matches `/data/.talon/keys/bridge-token`.                                                                                                                                                                                                                                               |
+| Pairing link points at a `172.x.x.x` address                                                          | Set `"publicUrl": "https://<nas>:19880"` in the `native` section of the config (that's what `TALON_BRIDGE_URL` seeds) and restart.                                                                                                                                                                                                                                                                    |
+| `Client certificate required` in the companion                                                        | Your reverse proxy wants a client certificate: import the device's `.p12` in the app ([mtls.md](mtls.md)), or connect on your home network.                                                                                                                                                                                                                                                           |
+| Chats lost their context after an update, or a boot alert says a path is "not on a persistent volume" | Only part of the data was mapped (typically `.talon`). Stop the app, make sure the dataset is mounted at `/data` as a whole, copy any directories you still have from the old mapping into the dataset (`.claude`, `.codex`, …), and start it. See [docker.md](docker.md#upgrading-from-the-old-layout). Transcripts already deleted by an earlier update can only come back from a dataset snapshot. |
+| Log says `found Talon data at /home/bun/.talon`                                                       | The app still uses the old two-mount layout. It keeps working; to move to the single dataset, follow [docker.md](docker.md#upgrading-from-the-old-layout).                                                                                                                                                                                                                                            |
+| Want to start over                                                                                    | Stop the app, delete `/data/.talon/config.json` (keeps history) or empty the dataset (everything), then start it again.                                                                                                                                                                                                                                                                               |

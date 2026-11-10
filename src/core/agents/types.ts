@@ -87,6 +87,21 @@ export interface AgentRecord {
   readonly children: readonly string[];
   /** Messages waiting to be drained by `check_inbox`. */
   readonly inboxDepth: number;
+  /**
+   * What the run had been doing when it settled — set on every settlement
+   * the runner makes, shown to the parent when the run did not end `done`.
+   */
+  readonly trail?: AgentTrail;
+}
+
+/** A settled run's last interim messages, progress notes and changed files. */
+export interface AgentTrail {
+  /** Last `message_parent` notes, oldest first. */
+  readonly messages: readonly string[];
+  /** Last assistant texts, oldest first. */
+  readonly notes: readonly string[];
+  /** Files it wrote or edited (best-effort, from the run log). */
+  readonly files: readonly string[];
 }
 
 /** What `spawnAgent` is asked for. */
@@ -94,13 +109,35 @@ export interface AgentSpawnSpec {
   readonly brief: string;
   readonly label: string;
   readonly parent: AgentParent;
-  /** Defaults to the parent's backend. */
+  /**
+   * Unset: a child of another agent inherits its parent's backend (and,
+   * with no model either, its model); a top-level spawn starts from the
+   * chat's backend and may be routed.
+   */
   readonly backendId?: string;
-  /** Defaults to the resolved backend's own default model. */
+  /**
+   * Defaults to the parent agent's model when the backend is inherited from
+   * one, else the resolved backend's own default model.
+   */
   readonly model?: string;
   readonly reasoningEffort?: ReasoningEffortLevel;
-  /** Hard wall-clock cap. Defaults to `agents.defaultTimeoutMs`. */
+  /**
+   * Hard wall-clock cap. Unset = `agents.defaultTimeoutMs`, and with that
+   * unset too, no cap at all — the no-progress watchdog is what ends a run
+   * that has gone quiet.
+   */
   readonly timeoutMs?: number;
+  /**
+   * Skip the headroom guard (`agents.minHeadroomPct`): spawn even when the
+   * target backend is nearly out of plan.
+   */
+  readonly force?: boolean;
+  /**
+   * Append the pre-flight lane instruction (run `npm run preflight` before
+   * every push) to the brief. Resolved by the spawn tool: explicit value,
+   * else on when the brief mentions a PR.
+   */
+  readonly preflight?: boolean;
 }
 
 /** `spawnAgent`'s answer — an error here is a tool error, never a throw. */
@@ -124,6 +161,25 @@ export interface AgentCaps {
   readonly maxConcurrent: number;
   /** Deepest `depth` an agent may have — 2 means chat → A → B. */
   readonly maxDepth: number;
-  /** Default hard timeout for one run. */
-  readonly defaultTimeoutMs: number;
+  /** Hard timeout for a spawn that sets none. Unset = no hard timeout. */
+  readonly defaultTimeoutMs?: number;
+  /** Ceiling on any run's hard timeout, requested or not. Unset = none. */
+  readonly maxTimeoutMs?: number;
+  /**
+   * No-progress watchdog step N: ping the agent after N ms of silence, warn
+   * its parent after 2N, kill it after 3N. 0 disables the watchdog.
+   */
+  readonly stallTimeoutMs: number;
+  /**
+   * Backends a sub-agent may run on. Unset or empty = any backend with a
+   * background capability. Enforced by `spawnAgent` on the final choice.
+   */
+  readonly allowedBackends?: readonly string[];
+  /**
+   * Refuse a spawn when the backend it would run on has less than this
+   * percentage of headroom left (measured readings only; an unmeasured
+   * backend is allowed). Applies to pinned backends and models too. 0
+   * disables the guard; a spawn with `force: true` bypasses it.
+   */
+  readonly minHeadroomPct: number;
 }

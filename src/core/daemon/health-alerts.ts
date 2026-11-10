@@ -231,6 +231,8 @@ function crashMessage(marker: CrashMarker, held: number): string {
       return `Talon failed to start at ${when}: ${marker.message}${frame}. It is running again now.${more}`;
     case "handoff":
       return `A Talon restart at ${when} didn't come up (${marker.message}); it was started again.${more}`;
+    case "watchdog":
+      return `Talon was found down at ${when} (${marker.message}) and the watchdog started it again. Check \`talon logs\` for how it went down.${more}`;
     default:
       return `Talon restarted after a crash at ${when}: ${marker.message}${frame}${more}`;
   }

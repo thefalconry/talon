@@ -14,13 +14,6 @@ vi.mock("../util/log.js", () => ({
   logDebug: vi.fn(),
 }));
 
-// Identity-wrap so existing assertions can match the raw MCP server shape
-// without the launcher prefix. Dedicated wrap behavior is covered in
-// mcp-launcher.test.ts.
-vi.mock("../core/mcp-hub/launcher.js", () => ({
-  wrapMcpServer: <T>(server: T) => server,
-}));
-
 describe("plugin system", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -59,6 +52,7 @@ describe("plugin system", () => {
       plugins: [],
       botDisplayName: "Talon",
       nativeTools: false,
+      allowNativeSubagents: false,
       fuse: "off",
       teamsWebhookPort: 19878,
       teamsGraphPollMs: 10000,
@@ -263,6 +257,21 @@ describe("plugin system", () => {
       expect(servers["test-plugin-tools"].env.TALON_GATEWAY_TOKEN).toBe(
         "vitest-gateway-token",
       );
+    });
+
+    it("returns raw specs — the hub applies orphan protection at spawn time", async () => {
+      const plugin = createMockPlugin({
+        mcpServer: { command: "python3", args: ["-m", "srv"] },
+      });
+      const { loadPlugins, getPluginMcpServers } = await setup(plugin);
+      await loadPlugins([{ path: "/fake/plugin" }]);
+
+      const spec = getPluginMcpServers("http://localhost:19876", "chat1")[
+        "test-plugin-tools"
+      ];
+      expect(spec.command).toBe("python3");
+      expect(spec.args).toEqual(["-m", "srv"]);
+      expect(spec.args).not.toContain("_mcp-launch");
     });
 
     it("skips plugins without mcpServerPath", async () => {
@@ -664,6 +673,33 @@ describe("plugin system", () => {
         expect(keys()).toEqual([]);
         expect(sent.at(-1)).toMatch(
           /Plugin "test-plugin" initialised normally/,
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("an init that outlives its deadline keeps running and clears the alert when it finishes", async () => {
+      vi.useFakeTimers();
+      try {
+        const plugin = createMockPlugin({
+          init: () => new Promise<void>((r) => setTimeout(r, 45_000)),
+        });
+        const mod = await setup(plugin);
+        const { sent, keys } = await captureAlerts();
+
+        const loading = mod.loadPlugins([{ path: "/fake/plugin" }]);
+        await vi.advanceTimersByTimeAsync(30_001);
+        await loading;
+        // Boot moved on; the plugin is registered and alerted, not dropped.
+        expect(mod.getPluginCount()).toBe(1);
+        expect(keys()).toEqual(["plugin.test-plugin"]);
+        expect(sent[0]).toMatch(/timed out after 30s/);
+
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(keys()).toEqual([]);
+        expect(sent.at(-1)).toMatch(
+          /Plugin "test-plugin" finished initialising late \(45s\)/,
         );
       } finally {
         vi.useRealTimers();

@@ -36,25 +36,30 @@
  *   1. `modelByBackend[B]` — per-chat-per-backend pick, if it still
  *      validates against B's catalog. Cross-backend orphans surface
  *      as `kind: "missing"` and fall through.
- *   2. `backend.models?.getDefaultModelId()` — backend's canonical default.
+ *   2. `config.backendDefaults[B]` — operator-configured per-backend
+ *      default in `talon.json`.
+ *   3. `config.model` — only when B is the global chat-role backend
+ *      (`config.backend === B`).
+ *      Operator picks (2/3) must validate against B's catalog when B
+ *      has a canonical default to fall back to; an unknown pin falls
+ *      through to step 4 (what the boot-time model audit warns about).
+ *   4. `backend.models?.getDefaultModelId()` — backend's canonical default.
  *      Codex picks auth-aware (`gpt-5-codex` on API key, `gpt-5.5`
  *      on ChatGPT OAuth). Claude SDK returns the `"default"` alias.
  *      Stock OpenAI Agents returns a constant.
  *      Catalog-driven backends without a canonical (Kilo, OpenCode,
  *      OpenAI Agents on OpenRouter / custom OpenAI-compatible) do
- *      NOT implement this — they fall through to step 3.
- *   3. `config.backendDefaults[B]` — operator-configured per-backend
- *      default in `talon.json`. Escape hatch for "no canonical"
- *      backends.
- *   4. `config.model` — only when B is the global chat-role backend
- *      (`config.backend === B`). Back-compat for installs that
- *      predate `backendDefaults`.
+ *      NOT implement this.
  *   5. `null` → UI renders "No model selected", send guard refuses
  *      with a "use /model to pick one" reply.
  *
  * Validation step: when step 1 has a candidate, `backend.models?.resolveModelInfo`
  * is called. Only `kind: "exact"` with `selectable: true` honours the
  * stored override. Anything else falls through to step 2.
+ *
+ * Operator config ranks above the canonical so a pinned `config.model`
+ * is actually honoured (it used to lose to Claude's `"default"`, so a
+ * claude install pinned to any model silently ran the default).
  *
  * Backends with no `resolveModel` (rare — defensive fallback only)
  * have their stored override returned verbatim — no way to validate.
@@ -157,8 +162,8 @@ async function runChain(
     }
   }
 
-  // ── Step 2-5: backend canonical → config.backendDefaults →
-  //              config.model (chat-role only) → null
+  // ── Steps 2-5: backendDefaults → config.model (chat-role only) →
+  //              backend canonical → null
   return stepsTwoThroughFive(backend, backendId, config, null);
 }
 
@@ -196,57 +201,61 @@ async function stepsTwoThroughFive(
   config: TalonConfig,
   fallbackSourceOverride: "override-invalid-fallback" | null,
 ): Promise<{ model: string | null; source: ActiveModelSource }> {
-  // Step 2: backend.models.getDefaultModelId()
-  if (backend?.models) {
-    const canonical = await safeBackendDefault(backend);
-    if (canonical) {
-      return {
-        model: canonical,
-        source: fallbackSourceOverride ?? "backend-canonical",
-      };
+  const withSource = (model: string, source: ActiveModelSource) => ({
+    model,
+    source: fallbackSourceOverride ?? source,
+  });
+
+  const operatorPick = pickOperatorDefault(backendId, config);
+  const canonical = backend?.models ? await safeBackendDefault(backend) : null;
+
+  // Operator config (steps 2/3) beats the backend canonical (step 4): a
+  // pinned `config.model` is an explicit choice, and letting the canonical
+  // win meant a claude install pinned to e.g. "opus[1m]" silently ran
+  // "default" on every turn. The pin must still validate — a withdrawn id
+  // falls back to the canonical, exactly what the boot-time model audit
+  // warns about. Without a canonical to fall back to, the pin is returned
+  // unvalidated (catalog-driven backends with no default, unchanged).
+  if (operatorPick) {
+    if (!canonical) return withSource(operatorPick.model, operatorPick.source);
+    if (await validateModelOnBackend(backend, operatorPick.model)) {
+      return withSource(operatorPick.model, operatorPick.source);
     }
   }
 
-  // Step 3: config.backendDefaults[backendId]
-  if (backendId && config.backendDefaults) {
-    const operatorDefault = config.backendDefaults[backendId];
-    if (operatorDefault && operatorDefault.length > 0) {
-      return {
-        model: operatorDefault,
-        source: fallbackSourceOverride ?? "config-backend-defaults",
-      };
-    }
-  }
-
-  // Step 4: legacy config.model — only for the global chat-role backend
-  if (
-    backendId &&
-    backendId === config.backend &&
-    typeof config.model === "string" &&
-    config.model.length > 0
-  ) {
-    return {
-      model: config.model,
-      source: fallbackSourceOverride ?? "config-legacy-global",
-    };
-  }
-
-  // Step 4b: even without a backendId, honour config.model if no
-  // backend is bound at all (callers passing null for both — rare,
-  // typically pre-bootstrap code paths).
-  if (
-    !backendId &&
-    typeof config.model === "string" &&
-    config.model.length > 0
-  ) {
-    return {
-      model: config.model,
-      source: fallbackSourceOverride ?? "config-legacy-global",
-    };
-  }
+  // Step 4: backend.models.getDefaultModelId()
+  if (canonical) return withSource(canonical, "backend-canonical");
 
   // Step 5: null. Callers must render "No model selected" / refuse send.
   return { model: null, source: "none" };
+}
+
+/**
+ * The operator-configured default for a backend, if any:
+ *   - `config.backendDefaults[B]`;
+ *   - else `config.model` — only when B is the global chat-role backend
+ *     (`config.backend === B`), or when no backend id is known at all
+ *     (pre-bootstrap callers passing null).
+ */
+function pickOperatorDefault(
+  backendId: string | null,
+  config: TalonConfig,
+): { model: string; source: ActiveModelSource } | null {
+  if (backendId && config.backendDefaults) {
+    const operatorDefault = config.backendDefaults[backendId];
+    if (operatorDefault && operatorDefault.length > 0) {
+      return { model: operatorDefault, source: "config-backend-defaults" };
+    }
+  }
+  const modelAppliesHere = !backendId || backendId === config.backend;
+  if (
+    modelAppliesHere &&
+    typeof config.model === "string" &&
+    config.model.length > 0
+  ) {
+    return { model: config.model, source: "config-legacy-global" };
+  }
+  return null;
 }
 
 async function validateModelOnBackend(

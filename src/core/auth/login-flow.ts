@@ -10,19 +10,30 @@
  * currently using; only a successful exit installs the new file over the
  * real one (atomic rename). One flow per provider at a time — starting a
  * new one cancels the old.
+ *
+ * An extra Claude account (`claude-2`, …) is a provider of its own: the
+ * same `claude auth login`, installed into that account's config dir
+ * (created if needed, with its `projects` linked to the default account's
+ * so sessions carry across — core/auth/claude-projects.ts).
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { copyFile, mkdtemp, rename, rm } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { log, logWarn } from "../../util/log.js";
 import {
-  claudeCredentialsPath,
+  claudeConfigDirFor,
+  defaultClaudeConfigDir,
+} from "../config/claude-accounts.js";
+import { ensureSharedProjects } from "./claude-projects.js";
+import {
   clearProviderExpired,
   codexAuthPath,
+  credentialsPathFor,
   type AuthProvider,
 } from "./status.js";
+import { TalonError } from "../errors.js";
 
 const LOGIN_TIMEOUT_MS = 15 * 60_000;
 
@@ -96,6 +107,8 @@ interface Spec {
   parse: (out: string) => LoginPrompt | undefined;
   /** Credential file inside the throwaway home → real destination. */
   install: (tmpHome: string) => { from: string; to: string };
+  /** Runs after the credentials are in place. */
+  afterInstall?: () => Promise<unknown>;
 }
 
 function specFor(provider: AuthProvider, bins: LoginBinaries): Spec {
@@ -108,19 +121,35 @@ function specFor(provider: AuthProvider, bins: LoginBinaries): Spec {
       install: (tmp) => ({ from: join(tmp, "auth.json"), to: codexAuthPath() }),
     };
   }
+  const to = credentialsPathFor(provider);
+  if (!to)
+    throw new TalonError(`"${provider}" is not a configured Claude account`, {
+      reason: "auth",
+    });
+  const accountDir =
+    provider === "claude" ? undefined : claudeConfigDirFor(provider);
   return {
     bin: bins.claude || "claude",
     args: ["auth", "login"],
     homeVar: "CLAUDE_CONFIG_DIR",
     parse: parseClaudeLoginPrompt,
-    install: (tmp) => ({
-      from: join(tmp, ".credentials.json"),
-      to: claudeCredentialsPath(),
-    }),
+    install: (tmp) => ({ from: join(tmp, ".credentials.json"), to }),
+    ...(accountDir
+      ? {
+          afterInstall: () =>
+            ensureSharedProjects(
+              accountDir,
+              defaultClaudeConfigDir(),
+              provider,
+            ),
+        }
+      : {}),
   };
 }
 
 async function installCredentials(from: string, to: string): Promise<void> {
+  // An extra account's dir may not exist before its first login.
+  await mkdir(dirname(to), { recursive: true, mode: 0o700 });
   const staging = join(dirname(to), `.${Date.now()}.login.tmp`);
   await copyFile(from, staging);
   await rename(staging, to);
@@ -220,6 +249,14 @@ export function startLogin(
         try {
           await installCredentials(from, to);
           clearProviderExpired(provider);
+          await spec
+            .afterInstall?.()
+            .catch((err: unknown) =>
+              logWarn(
+                "notify",
+                `${provider} login installed, but linking its sessions failed: ${err instanceof Error ? err.message : String(err)}`,
+              ),
+            );
           log("notify", `${provider} login installed at ${to}`);
           await finish({ ok: true });
           return;

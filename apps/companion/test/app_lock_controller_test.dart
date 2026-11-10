@@ -223,6 +223,126 @@ void main() {
     });
   });
 
+  group('keychain recovery', () {
+    AppLockController withStores(
+      Prefs prefs,
+      SecretStore primary,
+      SecretStore params,
+    ) {
+      final c = AppLockController(
+        prefs: prefs,
+        store: primary,
+        sealedSnapshots: sealed,
+        deriver: const Argon2PasscodeDeriver(useIsolate: false),
+        cipher: const SnapshotCipher(useIsolate: false),
+        kdfParams: testKdf,
+        clock: () => now,
+        paramsStore: params,
+      );
+      created.add(c);
+      return c;
+    }
+
+    test('the params mirror never holds the verifier', () async {
+      final prefs = await prefsWith();
+      final params = MemorySecretStore();
+      final first = withStores(prefs, store, params);
+      await first.load();
+      await first.enable('123456');
+      final mirror = params.values[AppLockController.paramsKey]!;
+      expect(mirror, isNot(contains('verifier')));
+      expect(store.values[AppLockController.recordKey], contains('verifier'));
+    });
+
+    test('an unreadable keychain is recovered with the passcode, not erased',
+        () async {
+      final prefs = await prefsWith();
+      final params = MemorySecretStore();
+      final first = withStores(prefs, store, params);
+      await first.load();
+      await first.enable('123456');
+
+      // Next launch: a new code signature, the keychain item won't open.
+      var wiped = false;
+      final lock = withStores(prefs, ThrowingSecretStore(), params)
+        ..onWipe = () async => wiped = true;
+      await lock.load();
+      expect(lock.locked, isTrue);
+      expect(lock.storeError, isFalse);
+      expect(lock.recovering, isTrue);
+
+      var r = await lock.unlockWithPasscode('000000');
+      expect(r.outcome, UnlockOutcome.wrongPasscode);
+      expect(lock.locked, isTrue);
+
+      now = now.add(const Duration(seconds: 2));
+      r = await lock.unlockWithPasscode('123456');
+      expect(r.outcome, UnlockOutcome.success);
+      expect(lock.status, AppLockStatus.unlocked);
+      expect(wiped, isFalse);
+      expect(prefs.appLockEnabled, isTrue);
+    });
+
+    test('recovery writes the record back to a store that accepts it',
+        () async {
+      final prefs = await prefsWith();
+      final params = MemorySecretStore();
+      final first = withStores(prefs, store, params);
+      await first.load();
+      await first.enable('123456');
+      store.values.clear(); // the item this build can see is gone
+
+      final lock = withStores(prefs, store, params);
+      await lock.load();
+      expect(lock.recovering, isTrue);
+      expect(lock.enabled, isTrue, reason: 'never falls open');
+
+      final r = await lock.unlockWithPasscode('123456');
+      expect(r.outcome, UnlockOutcome.success);
+      expect(lock.recovering, isFalse);
+      expect(store.values[AppLockController.recordKey], contains('verifier'));
+
+      // And the next launch reads it normally.
+      final again = withStores(prefs, store, params);
+      await again.load();
+      expect(again.recovering, isFalse);
+      expect(
+        (await again.unlockWithPasscode('123456')).outcome,
+        UnlockOutcome.success,
+      );
+    });
+
+    test('retryLoad reads the store again after a denied prompt', () async {
+      final prefs = await prefsWith();
+      final first = controller(prefs);
+      await first.load();
+      await first.enable('123456');
+
+      final flaky = _FlakySecretStore(store)..failing = true;
+      final lock = AppLockController(
+        prefs: prefs,
+        store: flaky,
+        sealedSnapshots: sealed,
+        deriver: const Argon2PasscodeDeriver(useIsolate: false),
+        cipher: const SnapshotCipher(useIsolate: false),
+        kdfParams: testKdf,
+        clock: () => now,
+      );
+      created.add(lock);
+      await lock.load();
+      expect(lock.storeError, isTrue);
+
+      flaky.failing = false; // "Always Allow" this time
+      await lock.retryLoad();
+      expect(lock.storeError, isFalse);
+      expect(lock.locked, isTrue);
+      expect(
+        (await lock.unlockWithPasscode('123456')).outcome,
+        UnlockOutcome.success,
+      );
+    });
+  });
+
   group('failures', () {
     test('back off 1s, 2s, 4s and survive a restart', () async {
       final prefs = await prefsWith();
@@ -527,4 +647,29 @@ void main() {
       expect(lock.locked, isTrue);
     });
   });
+}
+
+class _FlakySecretStore implements SecretStore {
+  _FlakySecretStore(this.inner);
+
+  final SecretStore inner;
+  bool failing = false;
+
+  @override
+  Future<String?> read(String key) async {
+    if (failing) throw StateError('keychain access denied');
+    return inner.read(key);
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    if (failing) throw StateError('keychain access denied');
+    await inner.write(key, value);
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    if (failing) throw StateError('keychain access denied');
+    await inner.delete(key);
+  }
 }

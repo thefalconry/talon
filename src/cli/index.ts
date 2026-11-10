@@ -31,15 +31,22 @@ import { viewConfig } from "./config-view.js";
 import { runLogsCommand } from "./logs.js";
 import { runDoctor } from "./doctor.js";
 import { startChat } from "./chat.js";
-import { daemonStart, daemonStop, daemonRestart } from "./daemon.js";
+import {
+  daemonStart,
+  daemonStop,
+  daemonRestart,
+  daemonWatchdog,
+} from "./daemon.js";
 import { showTasks, killTask } from "./tasks.js";
 import { showEvents } from "./events.js";
 import { runPluginCommand } from "./plugin.js";
 import { runSkillCommand } from "./skill.js";
 import { runMemoryCommand } from "./memory.js";
+import { runHistoryCommand } from "./commands/history.js";
 import { mainMenu } from "./menu.js";
 import { runBackupCommand } from "./commands/backup.js";
 import { runMeshCommand } from "./commands/mesh.js";
+import { runAccountsCommand } from "./commands/accounts.js";
 
 export * from "./context.js";
 export * from "./config.js";
@@ -53,6 +60,7 @@ const CLI_COMMANDS = [
   "start",
   "stop",
   "restart",
+  "watchdog",
   "run",
   "chat",
   "doctor",
@@ -62,8 +70,10 @@ const CLI_COMMANDS = [
   "plugin",
   "skill",
   "memory",
+  "history",
   "backup",
   "mesh",
+  "accounts",
 ];
 
 /** `talon events [-f] [--history [N]]` → the tail options. */
@@ -90,6 +100,9 @@ function printHelp(): void {
   console.log(`    ${pc.cyan("start")}      Start as background daemon`);
   console.log(`    ${pc.cyan("stop")}       Stop the daemon`);
   console.log(`    ${pc.cyan("restart")}    Restart the daemon`);
+  console.log(
+    `    ${pc.cyan("watchdog")}   Start the daemon if it is down (one check, for a timer)`,
+  );
   console.log(`    ${pc.cyan("run")}        Run in foreground (attached)`);
   console.log(`    ${pc.cyan("chat")}       Terminal chat mode`);
   console.log(`    ${pc.cyan("status")}     Show bot health`);
@@ -110,10 +123,16 @@ function printHelp(): void {
     `    ${pc.cyan("memory")}     Read/edit the memory store (list/search/import/render)`,
   );
   console.log(
+    `    ${pc.cyan("history")}    Chat history kept by Talon (show/hidden/purge)`,
+  );
+  console.log(
     `    ${pc.cyan("backup")}     Snapshots and checkpoints (now/list/show/pin/restore)`,
   );
   console.log(
     `    ${pc.cyan("mesh")}       Device credentials + command audit (list/revoke/rotate/scopes/audit)`,
+  );
+  console.log(
+    `    ${pc.cyan("accounts")}   Claude accounts (list/add/remove/login)`,
   );
   console.log(`    ${pc.cyan("config")}     View/edit configuration`);
   console.log(
@@ -163,6 +182,7 @@ const COMMANDS: Record<string, CommandHandler> = {
     printBanner();
     await daemonRestart();
   },
+  watchdog: () => daemonWatchdog(),
   run: () => {
     process.chdir(PKG_ROOT);
     void import("../index.js");
@@ -177,9 +197,11 @@ const COMMANDS: Record<string, CommandHandler> = {
   events: (args) => showEvents(eventsOptions(args)),
   backup: (args) => runBackupCommand(args),
   mesh: (args) => runMeshCommand(args),
+  accounts: (args) => runAccountsCommand(args),
   plugin: (args) => runPluginCommand(args),
   skill: (args) => runSkillCommand(args),
   memory: (args) => runMemoryCommand(args),
+  history: (args) => runHistoryCommand(args),
   "--version": () => console.log(pkg.version),
   "-v": () => console.log(pkg.version),
   "--help": () => printHelp(),

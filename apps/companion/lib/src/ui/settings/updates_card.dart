@@ -127,6 +127,24 @@ class _UpdatesCardState extends State<UpdatesCard> {
           'v${svc.currentVersion ?? ''} is the newest release.',
         );
       case UpdatePhase.error:
+        if (svc.canInstallStaged) {
+          return _panel(
+            icon: Icons.error_outline,
+            title: 'Installation paused',
+            body: svc.error ?? 'Permission or installer error occurred.',
+            actions: [
+              FilledButton.icon(
+                onPressed: svc.installStaged,
+                icon: const Icon(Icons.install_mobile, size: 17),
+                label: const Text('Retry install'),
+              ),
+              TextButton(
+                onPressed: () => svc.check(force: true),
+                child: const Text('Check updates'),
+              ),
+            ],
+          );
+        }
         return healthRow(
           SettingsHealth.warn,
           'Check failed',
@@ -165,6 +183,12 @@ class _UpdatesCardState extends State<UpdatesCard> {
           title: svc.error == null ? 'Almost there' : 'Finish it yourself',
           body: svc.error ?? svc.message ?? 'Handed off to the installer.',
           actions: [
+            if (svc.canInstallStaged)
+              FilledButton.icon(
+                onPressed: svc.installStaged,
+                icon: const Icon(Icons.install_mobile, size: 17),
+                label: const Text('Retry install'),
+              ),
             if (svc.error != null)
               TextButton(
                 onPressed: () => _open(rel?.pageUrl ?? kReleasesPageUrl),

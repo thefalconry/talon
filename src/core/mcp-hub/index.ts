@@ -20,7 +20,10 @@
  *   - tool-surface trimming (disabledTools / disabledToolTags)
  *   - plugin reload retires children; the next request respawns from
  *     the current registry (see reloadHubChildren)
- *   - children run under the supervisor wrap (orphan cleanup)
+ *   - children are orphan-guarded (one reaper per daemon, falling back
+ *     to the per-child supervisor wrap — see child-guard.ts)
+ *   - a session's tools/list does not spawn its chat's child when any
+ *     chat already listed that server (see listChildTools)
  *
  * Endpoints live on the gateway HTTP server (127.0.0.1-bound, behind the
  * same token and Host/Origin guard as /action — see engine/gateway-auth.ts;
@@ -33,7 +36,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { getPluginMcpServers } from "../plugin/index.js";
-import { wrapMcpServer } from "./launcher.js";
+import { enableChildGuard, stopChildGuard } from "./child-guard.js";
 import { log, logError } from "../../util/log.js";
 import { buildTalonToolServer, VALID_TOOL_FRONTENDS } from "./talon-server.js";
 import { buildProxyServer } from "./proxy-server.js";
@@ -42,6 +45,7 @@ import {
   closeAllChildren,
   formatChildExit,
   getLastChildExit,
+  listChildTools,
   retireAllChildren,
   startChildReaper,
   stopChildReaper,
@@ -71,6 +75,12 @@ export type HubConfig = {
   adminUserId?: number;
   /** Further operator sender keys (see guest-scope.ts). */
   operatorIds?: readonly string[];
+  /**
+   * Orphan-guard hub children with the reaper (child-guard.ts). Set by the
+   * daemon bootstrap, whose entrypoint dispatches `_mcp-reaper`; left off
+   * by embedders/tests that drive the hub from an entry that doesn't.
+   */
+  guardChildren?: boolean;
 };
 
 let hubConfig: HubConfig = {};
@@ -79,6 +89,7 @@ let hubConfig: HubConfig = {};
 export function initHub(config: HubConfig): void {
   hubConfig = config;
   initGuestDmScope(config.guestDmScope, config.adminUserId, config.operatorIds);
+  if (config.guardChildren) enableChildGuard();
   startChildReaper();
 }
 
@@ -124,10 +135,10 @@ export async function listHubPluginToolNames(
   chatId: string,
   bridgeUrl: string,
 ): Promise<string[]> {
-  const child = await acquireChild(childKey(serverName, chatId), () =>
+  const tools = await listChildTools(childKey(serverName, chatId), () =>
     pluginSpec(serverName, chatId, bridgeUrl),
   );
-  return (await child.listTools()).map((tool) => tool.name);
+  return tools.map((tool) => tool.name);
 }
 
 /** Stderr lines quoted in a registration-failure warning (full tail is in the exit log line). */
@@ -181,15 +192,16 @@ function parseHubPath(rawUrl: string): HubTarget | null {
   return null;
 }
 
-function braveSpec(): ChildSpec {
-  return wrapMcpServer({
+function braveSpec(bridgeUrl: string): ChildSpec {
+  return {
     command: resolve(
       import.meta.dirname ?? ".",
       "../../../node_modules/.bin/brave-search-mcp-server",
     ),
     args: [],
     env: { BRAVE_API_KEY: hubConfig.braveApiKey ?? "" },
-  });
+    bridgeUrl,
+  };
 }
 
 /**
@@ -202,11 +214,16 @@ function pluginSpec(
   chatId: string,
   bridgeUrl: string,
 ): ChildSpec {
-  if (serverName === "brave-search") return braveSpec();
+  if (serverName === "brave-search") return braveSpec(bridgeUrl);
   const specs = getPluginMcpServers(bridgeUrl, chatId);
   const spec = specs[serverName];
   if (!spec) throw new Error(`Unknown hub plugin server: ${serverName}`);
-  return { command: spec.command, args: [...spec.args], env: spec.env };
+  return {
+    command: spec.command,
+    args: [...spec.args],
+    env: spec.env,
+    bridgeUrl,
+  };
 }
 
 /** Test-only: expose the spec resolution for the pass-through contract. */
@@ -226,13 +243,15 @@ function buildServerFor(target: HubTarget, bridgeUrl: string) {
   }
   // Re-checked per request: a session opened during an operator turn must
   // not serve a later guest turn in the same chat.
-  return buildProxyServer(target.serverName, () => {
-    if (guestPluginDenied(target)) {
-      return Promise.reject(new Error("Not available in this chat"));
-    }
-    return acquireChild(childKey(target.serverName, target.chatId), () =>
-      pluginSpec(target.serverName, target.chatId, bridgeUrl),
-    );
+  const key = childKey(target.serverName, target.chatId);
+  const spec = () => pluginSpec(target.serverName, target.chatId, bridgeUrl);
+  const denied = () =>
+    guestPluginDenied(target)
+      ? Promise.reject(new Error("Not available in this chat"))
+      : null;
+  return buildProxyServer(target.serverName, {
+    listTools: () => denied() ?? listChildTools(key, spec),
+    getChild: () => denied() ?? acquireChild(key, spec),
   });
 }
 
@@ -412,6 +431,7 @@ export async function shutdownHub(): Promise<void> {
   sessions.clear();
   await Promise.allSettled(entries.map((entry) => entry.transport.close()));
   await closeAllChildren();
+  stopChildGuard();
 }
 
 /** Diagnostic: live hub session count. */

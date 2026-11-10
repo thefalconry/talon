@@ -109,6 +109,99 @@ describe("buildSdkOptions", () => {
     expect(options.model).toBe("sonnet[1m]");
   });
 
+  it("the default account inherits the daemon's environment", async () => {
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-default-account");
+    expect(options.env).toBeUndefined();
+  });
+
+  it("an extra account's spawn gets its CLAUDE_CONFIG_DIR; the daemon env is untouched", async () => {
+    const before = process.env.CLAUDE_CONFIG_DIR;
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions(
+      "chat-account-2",
+      undefined,
+      undefined,
+      undefined,
+      {
+        backendId: "claude-2",
+        label: "Claude (account 2)",
+        configDir: "/srv/talon-test/accounts/claude-2",
+      },
+    );
+    expect(options.env?.CLAUDE_CONFIG_DIR).toBe(
+      "/srv/talon-test/accounts/claude-2",
+    );
+    // Starts from the daemon's env (the SDK replaces, not merges, `env`).
+    expect(options.env?.PATH).toBe(process.env.PATH);
+    expect(process.env.CLAUDE_CONFIG_DIR).toBe(before);
+  });
+
+  it("pins transcript retention so the CLI's sweep never deletes chats", async () => {
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-retention");
+
+    expect(options.settings).toEqual({ cleanupPeriodDays: 100_000 });
+  });
+
+  describe("Claude Code's own sub-agent tool", () => {
+    const baseConfig = {
+      model: "claude-sonnet-4-6",
+      frontend: "terminal",
+      systemPrompt: "test prompt",
+      workspace: "/tmp/workspace",
+    };
+
+    it("is withheld and explicitly disallowed by default", async () => {
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-default");
+      expect(options.disallowedTools).toEqual(["Agent", "Task"]);
+      expect(options.tools).not.toContain("Agent");
+      expect(options.tools).not.toContain("Task");
+      // The rest of the chat whitelist is untouched.
+      expect(options.tools).toEqual(
+        expect.arrayContaining(["Bash", "Read", "Skill"]),
+      );
+    });
+
+    it("blocks only the built-in names, never an MCP tool like spawn_agent", async () => {
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-mcp");
+      for (const name of options.disallowedTools ?? []) {
+        expect(name).not.toMatch(/^mcp__|spawn_agent/);
+      }
+    });
+
+    it("is offered again with allowNativeSubagents: true", async () => {
+      mockGetConfig.mockReturnValue({
+        ...baseConfig,
+        allowNativeSubagents: true,
+      });
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-opt-in");
+      expect(options.disallowedTools).toBeUndefined();
+      expect(options.tools).toContain("Agent");
+    });
+
+    it("stays off under nativeTools even when opted in", async () => {
+      mockGetConfig.mockReturnValue({
+        ...baseConfig,
+        nativeTools: true,
+        allowNativeSubagents: true,
+      });
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-native");
+      expect(options.tools).not.toContain("Agent");
+    });
+  });
+
   describe("systemPrompt cache boundary", () => {
     it("falls back to the plain string when config has no parts", async () => {
       const { buildSdkOptions } =

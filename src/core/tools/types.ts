@@ -32,7 +32,8 @@ export type ToolTag =
   | "mesh"
   | "moderation"
   | "native"
-  | "backup";
+  | "backup"
+  | "secrets";
 
 /** The bridge caller signature — injected into execute(). */
 export type BridgeFunction = (

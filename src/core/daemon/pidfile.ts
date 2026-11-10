@@ -96,3 +96,110 @@ export function isProcessAlive(pid: number): boolean {
     return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
+
+// ── Child ownership ─────────────────────────────────────────────────────────
+
+/**
+ * Daemon ownership of child processes.
+ *
+ * Every process the daemon spawns (backend CLIs, MCP children, trigger
+ * scripts) inherits its environment. At boot the daemon stamps two
+ * variables into that environment: its own pid and its /proc start time.
+ * Any orphan sweep can then tell a child whose daemon is gone (safe to
+ * reap) from a child of a daemon that is still running.
+ *
+ * The distinction matters because "orphan" used to mean "alive and
+ * tagged with our chat or trigger id". On 2026-09-27 two daemons ran at
+ * once for 13 minutes. Each one's sweeps saw the other's live children as
+ * leftovers from a previous run, and the newcomer's trigger resume
+ * SIGKILLed the running daemon's watchers.
+ *
+ * Linux-only in practice: the reads go through /proc. Where /proc is
+ * absent, {@link childBelongsToLiveDaemon} answers false and the sweeps
+ * behave exactly as before.
+ */
+
+/** Pid of the daemon that spawned this process (inherited env). */
+export const DAEMON_PID_ENV = "TALON_DAEMON_PID";
+/** That daemon's /proc start time, so a recycled pid cannot pass for it. */
+export const DAEMON_STARTTIME_ENV = "TALON_DAEMON_STARTTIME";
+
+/**
+ * Field 22 of /proc/<pid>/stat: start time in jiffies since boot.
+ * Monotonic per boot and unchanged by exec(), so it pins a pid to one
+ * process. `undefined` without /proc or when the read fails.
+ *
+ * The `comm` field (2nd) is wrapped in parens and may itself contain ')'
+ * — split after the LAST ')'; index 19 of the rest is field 22.
+ */
+export function readPidStarttimeSync(pid: number): number | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const lastParen = stat.lastIndexOf(")");
+    if (lastParen < 0) return undefined;
+    const tail = stat.slice(lastParen + 2).split(" ");
+    const starttime = Number(tail[19]);
+    return Number.isFinite(starttime) ? starttime : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Stamp this process as the daemon in `env` (default: our own), so every
+ * child spawned from here on names us. Overwrites any inherited stamp: a
+ * `/restart` successor inherits its predecessor's environment.
+ */
+export function stampDaemonOwner(env: NodeJS.ProcessEnv = process.env): void {
+  env[DAEMON_PID_ENV] = String(process.pid);
+  const starttime = readPidStarttimeSync(process.pid);
+  if (starttime !== undefined) env[DAEMON_STARTTIME_ENV] = String(starttime);
+  else delete env[DAEMON_STARTTIME_ENV];
+}
+
+export interface DaemonOwner {
+  pid: number;
+  starttime?: number;
+}
+
+/** The owner stamp carried in a NUL-split `/proc/<pid>/environ`. */
+export function ownerFromEnviron(entries: string[]): DaemonOwner | undefined {
+  const value = (key: string): string | undefined => {
+    const prefix = `${key}=`;
+    return entries.find((e) => e.startsWith(prefix))?.slice(prefix.length);
+  };
+  const pid = Number(value(DAEMON_PID_ENV));
+  if (!Number.isInteger(pid) || pid <= 0) return undefined;
+  const starttime = Number(value(DAEMON_STARTTIME_ENV));
+  return Number.isFinite(starttime) && value(DAEMON_STARTTIME_ENV)
+    ? { pid, starttime }
+    : { pid };
+}
+
+/**
+ * Whether `owner` is a daemon other than this one that is still running.
+ * A matching pid with a different start time is a recycled pid, so the
+ * owner is dead.
+ */
+export function isOtherLiveDaemon(owner: DaemonOwner | undefined): boolean {
+  if (!owner || owner.pid === process.pid) return false;
+  if (!isProcessAlive(owner.pid)) return false;
+  if (owner.starttime === undefined) return true;
+  const current = readPidStarttimeSync(owner.pid);
+  return current === undefined || current === owner.starttime;
+}
+
+/**
+ * Whether process `pid` was spawned by a daemon other than this one that
+ * is still alive. Orphan sweeps must leave such a process alone. Reads
+ * `/proc/<pid>/environ`; false when it can't be read.
+ */
+export function childBelongsToLiveDaemon(pid: number): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(`/proc/${pid}/environ`, "utf-8");
+  } catch {
+    return false;
+  }
+  return isOtherLiveDaemon(ownerFromEnviron(raw.split("\0")));
+}

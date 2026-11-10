@@ -38,12 +38,16 @@ import {
 } from "./tls.js";
 import { checkBridgeTokenStrength } from "./auth.js";
 import { AuthGuard, type AuthGuardPolicy } from "./auth-guard.js";
-import { contentTypeFor } from "../media/media.js";
+import { clientAddress } from "./client-address.js";
+import { basename } from "node:path";
+import { contentTypeFor, safeUploadName } from "../media/media.js";
 import { type BridgeEvent } from "../protocol.js";
 import { buildRoutes } from "./routes/index.js";
 import type { BridgeServerHandlers, RouteHost } from "./routes/host.js";
+import type { AdvertisedEndpoints } from "../../../core/mesh/links/endpoints.js";
 import {
   BRIDGE_ROUTE_AUTH,
+  QUERY_TOKEN_ROUTES,
   type AuthState,
   type BridgeRouteKey,
   type RouteContext,
@@ -52,6 +56,7 @@ import {
 import {
   describeTier,
   hasScope,
+  presentedCredentialId,
   resolvePrincipal,
   routeAllows,
   type BridgeCredentials,
@@ -61,6 +66,21 @@ import {
 export type { BridgeServerHandlers, SendOptions } from "./routes/host.js";
 export { BRIDGE_ROUTE_AUTH, type BridgeRouteKey } from "./routes/table.js";
 export type { BridgeCredentials } from "./credentials/principal.js";
+
+/**
+ * Where `sendToDevice` put a frame: on a stream the device itself claimed,
+ * on the unclaimed legacy fallback, or nowhere (the device is between
+ * streams — reconnecting, or this process just started).
+ */
+export type DeviceDelivery = "claimed" | "fallback" | "none";
+
+/**
+ * Cap on the device ids remembered as "has claimed a stream". Ids come
+ * from authenticated clients only; the cap just keeps a misbehaving one
+ * from growing the set without bound. Past it, new ids fall back to the
+ * legacy delivery rule.
+ */
+const MAX_REMEMBERED_CLAIMERS = 1_024;
 
 /** One live SSE connection: the device it claimed and who opened it. */
 type StreamSession = {
@@ -77,7 +97,29 @@ const SSE_PING_MS = 25_000;
  * and gets a fresh `hello`.
  */
 const SSE_MAX_BACKLOG_BYTES = 16 * 1024 * 1024;
-const MAX_BODY_BYTES = 256 * 1024;
+// Device command results ride this route, and a `computer` screenshot is up
+// to 300 KB of JPEG, i.e. ~400 KB once base64'd into JSON. At 256 KB a busy
+// screen's result was rejected and the daemon timed out waiting for it.
+export const MAX_BODY_BYTES = 1024 * 1024;
+
+/**
+ * Routes a page served by the bridge itself posts a plain HTML form to
+ * (the secret drop). A browser stamps that POST with the bridge's own
+ * origin, which is no cross-site request — so these, and only these,
+ * accept it without `native.allowedOrigins`. Every other route still
+ * refuses any Origin not configured, same-origin included: a page under
+ * /media is the bridge's origin too.
+ */
+const SAME_ORIGIN_FORM_ROUTES: ReadonlySet<string> = new Set(["POST /secret"]);
+
+/** `host[:port]` of an Origin header, or undefined when it doesn't parse. */
+function originHost(origin: string): string | undefined {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return undefined;
+  }
+}
 const PORT_FALLBACKS = 5;
 
 /**
@@ -87,7 +129,8 @@ const PORT_FALLBACKS = 5;
  * bodies) are unaffected. It does bound request bodies, and every
  * body-reading route sits behind the bearer check (an unauthenticated
  * request is answered 401/429 with `Connection: close` before its body is
- * read), so the budget is sized for the largest authenticated upload
+ * read) — the one pre-auth exception, `POST /secret`, reads a body only
+ * for a live single-use grant and caps it at 200 KB — so the budget is sized for the largest authenticated upload
  * (512 MB) on a slow link, not for an attacker.
  */
 export type BridgeTimeouts = {
@@ -127,6 +170,17 @@ export class BridgeServer {
    * the principal is what lets a revocation find and drop the session.
    */
   private clients = new Map<ServerResponse, StreamSession>();
+  /**
+   * Device ids that have claimed a stream since this server started. Such a
+   * device is addressable, so while it is between streams its traffic is
+   * held for it (see `sendToDevice`) instead of falling back to unclaimed
+   * clients.
+   */
+  private readonly claimers = new Set<string>();
+  /** Told whenever a stream claiming a device opens (the command hold). */
+  private readonly deviceStreamListeners = new Set<
+    (deviceId: string) => void
+  >();
   private unsubscribeRevocations: (() => void) | undefined;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private port = 0;
@@ -166,6 +220,11 @@ export class BridgeServer {
        * (±10% jitter) so clients re-authenticate. Unset = never.
        */
       sseMaxLifetimeMs?: number;
+      /**
+       * `native.endpoints`, resolved: the other ways devices can reach this
+       * bridge, sent in every device's register reply. Absent = no field.
+       */
+      endpoints?: AdvertisedEndpoints;
       /** Overrides for tests; production uses the defaults. */
       authPolicy?: Partial<AuthGuardPolicy>;
       timeouts?: Partial<BridgeTimeouts>;
@@ -273,9 +332,14 @@ export class BridgeServer {
    *
    * With per-device credentials the claim IS enforced: a credential can
    * only claim the device it is bound to (credentials/claims.ts).
+   *
+   * A device that has claimed a stream before — or signs in with its own
+   * per-device credential (`claimsItsStreams`) — is never handed to the
+   * fallback: when it has no stream right now it is reconnecting, and the
+   * caller should hold the frame until `onDeviceStream` reports it back.
+   * The return value says which of the three happened.
    */
-  sendToDevice(deviceId: string, event: BridgeEvent): void {
-    if (this.clients.size === 0) return;
+  sendToDevice(deviceId: string, event: BridgeEvent): DeviceDelivery {
     const claimed: ServerResponse[] = [];
     const unclaimed: ServerResponse[] = [];
     for (const [res, { deviceId: id, principal }] of this.clients) {
@@ -284,13 +348,58 @@ export class BridgeServer {
         unclaimed.push(res);
       }
     }
-    if (claimed.length === 0) {
+    if (claimed.length > 0) {
+      this.write(claimed, event);
+      return "claimed";
+    }
+    if (unclaimed.length === 0 || this.claimsItsStreams(deviceId)) {
       logDebug(
         "native",
-        `No SSE client claims device ${deviceId} — delivering to ${unclaimed.length} unclaimed client(s)`,
+        `bridge.device_send device=${deviceId} result=no_stream`,
       );
+      return "none";
     }
-    this.write(claimed.length > 0 ? claimed : unclaimed, event);
+    logDebug(
+      "native",
+      `No SSE client claims device ${deviceId} — delivering to ${unclaimed.length} unclaimed client(s)`,
+    );
+    this.write(unclaimed, event);
+    return "fallback";
+  }
+
+  /**
+   * Whether `deviceId` addresses its own streams, so having none right now
+   * means it is reconnecting: it has claimed one since this server started,
+   * or it has authenticated with its own per-device credential, which binds
+   * every stream it opens to its id (credentials/claims.ts). The second
+   * matters after a daemon restart, when `claimers` starts empty and the
+   * first client back may well be an unclaimed one (the desktop app, the
+   * CLI).
+   */
+  private claimsItsStreams(deviceId: string): boolean {
+    if (this.claimers.has(deviceId)) return true;
+    const live = this.opts.credentials?.authority.activeFor(deviceId) ?? [];
+    return live.some((credential) => credential.lastUsedAt !== undefined);
+  }
+
+  /**
+   * Subscribe to "a stream claiming `deviceId` just opened". Fires after
+   * the stream is addressable, so a listener may `sendToDevice` at once.
+   * Returns an unsubscribe.
+   */
+  onDeviceStream(listener: (deviceId: string) => void): () => void {
+    this.deviceStreamListeners.add(listener);
+    return () => this.deviceStreamListeners.delete(listener);
+  }
+
+  private notifyDeviceStream(deviceId: string): void {
+    for (const listener of Array.from(this.deviceStreamListeners)) {
+      try {
+        listener(deviceId);
+      } catch (err) {
+        logError("native", "Device stream listener threw", err);
+      }
+    }
   }
 
   private write(targets: Iterable<ServerResponse>, event: BridgeEvent): void {
@@ -456,12 +565,32 @@ export class BridgeServer {
     });
   }
 
-  async stop(): Promise<void> {
+  /**
+   * Close every stream and stop listening. Each stream is told why first
+   * (a `bye` frame): with `restart`, a successor is about to listen on the
+   * same address and clients should be back after `reconnectAfterMs`
+   * instead of whenever their backoff next fires.
+   */
+  async stop(
+    opts: { restart?: { reconnectAfterMs: number } } = {},
+  ): Promise<void> {
     clearInterval(this.pingTimer);
     this.unsubscribeRevocations?.();
     this.unsubscribeRevocations = undefined;
+    const bye: BridgeEvent = opts.restart
+      ? {
+          kind: "bye",
+          reason: "restart",
+          reconnectAfterMs: Math.max(
+            0,
+            Math.round(opts.restart.reconnectAfterMs),
+          ),
+        }
+      : { kind: "bye", reason: "shutdown" };
+    const frame = `data: ${JSON.stringify(bye)}\n\n`;
     for (const res of this.clients.keys()) {
       try {
+        res.write(frame);
         res.end();
       } catch {
         /* ignore */
@@ -493,7 +622,10 @@ export class BridgeServer {
     // slip the browser is asking for.
     const origin =
       typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-    const refusal = this.originGuard(req);
+    const refusal = this.originGuard(
+      req,
+      SAME_ORIGIN_FORM_ROUTES.has(`${method} ${path}`),
+    );
     if (refusal !== undefined) {
       res.writeHead(403, {
         ...this.corsHeaders(),
@@ -517,11 +649,19 @@ export class BridgeServer {
       return;
     }
 
-    const remote = req.socket.remoteAddress ?? "unknown";
-    const { state: auth, principal } = this.authState(req, url);
-    if (!(await this.admit(res, remote, auth))) return;
-
+    // Behind a same-host reverse proxy the socket peer is the proxy; the
+    // guard keys on the client it forwarded for (client-address.ts).
+    const remote = clientAddress(req);
     const key = `${method} ${path}` as BridgeRouteKey;
+    const {
+      state: auth,
+      principal,
+      credentialId,
+    } = this.authState(req, url, QUERY_TOKEN_ROUTES.has(key));
+    const deviceCredential = principal?.kind === "device";
+    if (!(await this.admit(res, remote, auth, credentialId, deviceCredential)))
+      return;
+
     const route = this.routes.get(key);
     const ctx: RouteContext = { req, res, url, auth, principal };
     const tier = route ? BRIDGE_ROUTE_AUTH[key] : undefined;
@@ -571,6 +711,7 @@ export class BridgeServer {
       openStream: (res, deviceId, principal) =>
         this.openStream(res, deviceId, principal),
       credentials: this.opts.credentials,
+      endpoints: () => this.opts.endpoints,
       unknownProvision: (res) => this.unknownProvision(res),
     };
   }
@@ -609,10 +750,15 @@ export class BridgeServer {
       if (!info.isFile()) {
         return this.json(res, 404, { ok: false, error: "No such media" });
       }
+      const rawName =
+        this.handlers.mediaName?.(id) ??
+        basename(filePath).replace(/^\d+-[0-9a-z]+-/, "");
+      const filename = safeUploadName(rawName);
       res.writeHead(200, {
         ...this.corsHeaders(),
         "Content-Type": contentTypeFor(filePath),
         "Content-Length": String(info.size),
+        "Content-Disposition": `inline; filename="${filename}"`,
         "Cache-Control": "private, max-age=3600",
       });
       const stream = createReadStream(filePath);
@@ -671,6 +817,12 @@ export class BridgeServer {
       this.clients.delete(res);
       logDebug("native", `SSE client left (${this.clients.size} total)`);
     });
+    if (deviceId !== undefined) {
+      if (this.claimers.size < MAX_REMEMBERED_CLAIMERS) {
+        this.claimers.add(deviceId);
+      }
+      this.notifyDeviceStream(deviceId);
+    }
   }
 
   /**
@@ -700,19 +852,34 @@ export class BridgeServer {
 
   // ── Helpers ──────────────────────────────────────────────────────────────
 
+  /**
+   * Evaluate the presented credential. `queryToken` says whether this route
+   * also takes it as `?token=` (QUERY_TOKEN_ROUTES); elsewhere a query
+   * token is ignored, so the request reads as tokenless. A refused
+   * per-device credential reports the id it named, for the auth guard.
+   */
   private authState(
     req: IncomingMessage,
     url: URL,
-  ): { state: AuthState; principal: BridgePrincipal | null } {
-    if (!this.opts.token) return { state: "ok", principal: { kind: "open" } };
+    queryToken: boolean,
+  ): {
+    state: AuthState;
+    principal: BridgePrincipal | null;
+    credentialId: string | null;
+  } {
+    if (!this.opts.token) {
+      return { state: "ok", principal: { kind: "open" }, credentialId: null };
+    }
     const header = req.headers["authorization"];
     const fromHeader =
       typeof header === "string" && header.startsWith("Bearer ")
         ? header.slice("Bearer ".length)
         : null;
-    // EventSource can't set headers, so SSE clients pass ?token=… instead.
-    const candidate = fromHeader ?? url.searchParams.get("token");
-    if (candidate === null) return { state: "anonymous", principal: null };
+    const candidate =
+      fromHeader ?? (queryToken ? url.searchParams.get("token") : null);
+    if (candidate === null) {
+      return { state: "anonymous", principal: null, credentialId: null };
+    }
     // The shared token or a per-device credential (credentials/principal.ts).
     const principal = resolvePrincipal(
       candidate,
@@ -721,8 +888,12 @@ export class BridgeServer {
       this.opts.credentials,
     );
     return principal
-      ? { state: "ok", principal }
-      : { state: "bad", principal: null };
+      ? { state: "ok", principal, credentialId: null }
+      : {
+          state: "bad",
+          principal: null,
+          credentialId: presentedCredentialId(candidate),
+        };
   }
 
   /**
@@ -734,8 +905,15 @@ export class BridgeServer {
     res: ServerResponse,
     remote: string,
     auth: AuthState,
+    credentialId: string | null,
+    deviceCredential: boolean,
   ): Promise<boolean> {
-    const verdict = this.authGuard.check(remote, auth);
+    const verdict = this.authGuard.check(
+      remote,
+      auth,
+      credentialId,
+      deviceCredential,
+    );
     if (verdict.kind === "reject") {
       this.refuse(
         res,
@@ -828,10 +1006,15 @@ export class BridgeServer {
    *
    * Returns an error string when the request must be refused.
    */
-  private originGuard(req: IncomingMessage): string | undefined {
+  private originGuard(
+    req: IncomingMessage,
+    sameOriginAllowed = false,
+  ): string | undefined {
     const origin = req.headers.origin;
     if (typeof origin === "string" && origin !== "" && origin !== "null") {
-      if (!this.isAllowedOrigin(origin)) {
+      const sameOrigin =
+        sameOriginAllowed && originHost(origin) === req.headers.host;
+      if (!sameOrigin && !this.isAllowedOrigin(origin)) {
         return `Origin ${origin} is not allowed. Add it to native.allowedOrigins to permit browser clients.`;
       }
     }

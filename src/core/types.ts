@@ -172,6 +172,28 @@ export type OneShotAgentParams = {
    * and logs a throwing callback so a consumer bug can never fail the run.
    */
   onAssistantText?: (text: string) => void;
+  /**
+   * Resume this backend conversation instead of starting a fresh one — the
+   * handle an earlier run reported through `onSessionId`. Honoured only by
+   * backends whose `BackgroundRunner.supportsResume` is true (Claude SDK:
+   * session id; Codex: thread id); the others ignore it and start fresh,
+   * which is why the sub-agent runner checks that flag before relying on it.
+   */
+  resumeSessionId?: string;
+  /**
+   * Called once the backend knows the run's conversation handle (Claude SDK
+   * session id, Codex thread id) — a sub-agent persists it so a daemon
+   * restart can resume the conversation. Best-effort and synchronous, like
+   * `onAssistantText`: a throwing callback must never fail the run.
+   */
+  onSessionId?: (sessionId: string) => void;
+  /**
+   * Extra environment for the run's own subprocesses (shells, tools),
+   * layered over the daemon's. A sub-agent passes its private scratch dir
+   * as `TMPDIR` here. Honoured by the Claude SDK backend; backends whose
+   * subprocess environment is fixed per process ignore it.
+   */
+  env?: Readonly<Record<string, string>>;
 };
 
 /** How much cache telemetry a backend can surface in /status. */

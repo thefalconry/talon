@@ -121,6 +121,21 @@ describe("parseAgyUsage", () => {
     expect(typeof usage?.fetchedAt).toBe("number");
   });
 
+  it("parses the separate Gemini 4 Argon window (agy 1.4.4)", () => {
+    // Verbatim from 1.4.4: the Argon bucket's name drops "Remaining",
+    // but the JSON form of the same report confirms the figure is still
+    // remaining (remaining_fraction 0.2257 → "23%").
+    const usage = parseAgyUsage(
+      `${SAMPLE}Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t23%\t2026-10-24T11:32:53Z\n`,
+    );
+    expect(usage?.windows.at(-1)).toEqual({
+      label: "Gemini 4 Argon · 7d",
+      percent: 77,
+      resetsAt: "2026-10-24T11:32:53Z",
+    });
+    expect(usage?.windows).toHaveLength(5);
+  });
+
   it("tolerates CRLF line endings and padding around columns", () => {
     const usage = parseAgyUsage(
       "  Gemini Models \t Five Hour Limit Remaining \t 30% \t 2026-09-23T21:23:05Z \r\n",
@@ -236,6 +251,17 @@ describe("runAgyUsage", () => {
   it("resolves undefined when the binary cannot be spawned", async () => {
     scripted({ error: "spawn agy ENOENT" });
     await expect(runAgyUsage("agy")).resolves.toBeUndefined();
+    // A host without agy is not a fault: no warning every refresh.
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("still warns on a spawn error that is not a missing binary", async () => {
+    scripted({ error: "spawn agy EACCES" });
+    await expect(runAgyUsage("agy")).resolves.toBeUndefined();
+    expect(logWarn).toHaveBeenCalledWith(
+      "agent",
+      expect.stringContaining("EACCES"),
+    );
   });
 
   it("resolves undefined on unparseable output", async () => {

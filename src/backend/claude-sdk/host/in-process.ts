@@ -34,9 +34,13 @@ import {
   runOneShotAgent as claudeRunOneShotAgent,
 } from "../index.js";
 import {
-  runChatTurn as claudeRunChatTurn,
+  runChatTurnAs as claudeRunChatTurnAs,
   interruptChatTurn as claudeInterruptChatTurn,
 } from "../handler.js";
+import {
+  DEFAULT_CLAUDE_ACCOUNT,
+  type ClaudeRunAccount,
+} from "../accounts/account.js";
 import { waitForMcpServersReady } from "../mcp-ready.js";
 import { listModels as claudeListModels } from "../model-provider.js";
 import { getPlanUsage } from "../usage/plan-usage.js";
@@ -116,28 +120,30 @@ async function resetSession(chatId: string): Promise<boolean> {
 /**
  * Build the in-process host. `config` and `getBridgePort` are held only
  * for `hello()`, which performs the same `initAgent(config,
- * getBridgePort)` the factory used to call inline.
+ * getBridgePort)` the factory used to call inline. `account` is the Claude
+ * login every spawn from this host runs as (default: the `claude` backend's).
  */
 export function createInProcessAgentHost(
   config: TalonConfig,
   getBridgePort?: () => number,
+  account: ClaudeRunAccount = DEFAULT_CLAUDE_ACCOUNT,
 ): AgentHostClient {
   return {
     async hello(): Promise<HostReadyInfo> {
-      await claudeInitAgent(config, getBridgePort);
+      await claudeInitAgent(config, getBridgePort, account);
       // `sdk` is omitted: in-process there is no separately-pinned SDK
       // build to name — the daemon's own lockfile is the answer, and
       // Phase 4 gives the host a `package.json` of its own to report.
       return { protocol: AGENT_HOST_PROTOCOL_VERSION, host: talonVersion() };
     },
-    runTurn: (params) => claudeRunChatTurn(params),
+    runTurn: claudeRunChatTurnAs(account),
     interrupt: (chatId) => claudeInterruptChatTurn(chatId),
-    runOneShot: (params) => claudeRunOneShotAgent(params),
-    warmSession: (chatId) => claudeWarmSession(chatId),
+    runOneShot: (params) => claudeRunOneShotAgent(params, account),
+    warmSession: (chatId) => claudeWarmSession(chatId, account),
     setMcpServers,
     refreshTools,
     listModels: (filter) => claudeListModels(filter),
-    planUsage: () => getPlanUsage(),
+    planUsage: () => getPlanUsage(account.configDir),
     sessionInfo,
     resetSession,
     // Nothing to drain while the host is this process: the daemon's own

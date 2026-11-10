@@ -215,6 +215,7 @@ describe("telegram auth panel", () => {
     expect(panel.keyboard.map((row) => row[0])).toEqual([
       { text: "🔄 Re-sign in to Claude", callback_data: "auth:login:claude" },
       { text: "🔑 Sign in to Codex", callback_data: "auth:login:codex" },
+      { text: "➕ Add Claude account", callback_data: "auth:add" },
       { text: "↻ Refresh", callback_data: "auth:refresh" },
     ]);
   });

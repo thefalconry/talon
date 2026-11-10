@@ -10,16 +10,23 @@
  * Everything degrades to `undefined`: no credentials, an API-key session
  * (plan limits don't apply), or any transport failure. /status hides the
  * section rather than rendering zeroes.
+ *
+ * Per account: every function takes the account's Claude config dir
+ * (absent = the default account, `$CLAUDE_CONFIG_DIR` or `~/.claude`), reads
+ * that account's credentials and keeps that account's cache, so two
+ * subscriptions never report each other's windows.
  */
 
-import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { logWarn } from "../../../util/log.js";
+import { dirs } from "../../../util/paths.js";
 import type {
   PlanUsage,
   PlanWindow,
 } from "../../../core/agent-runtime/capabilities.js";
+import { defaultClaudeConfigDir } from "../../../core/config/claude-accounts.js";
 
 // `cedar_ember=1` asks the endpoint to include banked limit resets (the
 // claude.ai "Reset for free" grants); `skip_spend=1` drops the spend block we
@@ -31,16 +38,84 @@ export const USAGE_ENDPOINT =
 export const CLI_USER_AGENT = "claude-cli/2.1.280 (external, cli)";
 const REQUEST_TIMEOUT_MS = 5_000;
 const CACHE_TTL_MS = 60_000;
+/**
+ * How long to leave the endpoint alone after it says 429 (or fails with a
+ * 5xx) and gives no usable Retry-After. Polling a rate-limited endpoint
+ * every minute is what keeps it rate-limited.
+ */
+export const DEFAULT_BACKOFF_MS = 5 * 60_000;
+/** Ceiling on a server-supplied Retry-After, so one bad header can't mute an account for a day. */
+const MAX_BACKOFF_MS = 30 * 60_000;
 
-let cache: { value: PlanUsage; fetchedAt: number } | undefined;
-let inFlight: Promise<PlanUsage | undefined> | undefined;
+/** Config dir → last good reading. */
+const cache = new Map<string, { value: PlanUsage; fetchedAt: number }>();
+const inFlight = new Map<string, Promise<PlanUsage | undefined>>();
+/** Config dir → epoch ms before which the endpoint is not asked again. */
+const backoffUntil = new Map<string, number>();
+/** Config dirs whose on-disk reading has already been loaded into `cache`. */
+const restored = new Set<string>();
 
-function credentialsPath(): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return join(
-    configDir && configDir.length > 0 ? configDir : join(homedir(), ".claude"),
-    ".credentials.json",
-  );
+/**
+ * Backoff for a failed response: the server's Retry-After (seconds or an
+ * HTTP date) when it gives one, else {@link DEFAULT_BACKOFF_MS}; capped.
+ */
+export function backoffMs(
+  retryAfter: string | null | undefined,
+  now = Date.now(),
+): number {
+  if (retryAfter) {
+    const secs = Number(retryAfter);
+    const ms = Number.isFinite(secs)
+      ? secs * 1000
+      : Date.parse(retryAfter) - now;
+    if (Number.isFinite(ms) && ms > 0) return Math.min(ms, MAX_BACKOFF_MS);
+  }
+  return DEFAULT_BACKOFF_MS;
+}
+
+/**
+ * Where an account's last good reading is kept across restarts. Keyed by a
+ * hash of the config dir so the file name carries no path.
+ */
+function snapshotPath(key: string): string {
+  const id = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  return join(dirs.data, "plan-usage", `claude-${id}.json`);
+}
+
+async function saveSnapshot(key: string, value: PlanUsage): Promise<void> {
+  try {
+    const path = snapshotPath(key);
+    await mkdir(join(dirs.data, "plan-usage"), { recursive: true });
+    const tmp = `${path}.${process.pid}.tmp`;
+    await writeFile(tmp, JSON.stringify(value), { mode: 0o600 });
+    await rename(tmp, path);
+  } catch {
+    // Best effort: losing the snapshot only costs a blank panel after a restart.
+  }
+}
+
+async function restoreSnapshot(key: string): Promise<void> {
+  if (restored.has(key)) return;
+  restored.add(key);
+  if (cache.has(key)) return;
+  try {
+    const value = JSON.parse(
+      await readFile(snapshotPath(key), "utf8"),
+    ) as PlanUsage;
+    if (Array.isArray(value?.windows) && typeof value.fetchedAt === "number")
+      cache.set(key, { value, fetchedAt: value.fetchedAt });
+  } catch {
+    // No snapshot yet.
+  }
+}
+
+/** The account's config dir; the default account's when absent. */
+function accountDir(configDir?: string): string {
+  return configDir ?? defaultClaudeConfigDir();
+}
+
+function credentialsPath(configDir?: string): string {
+  return join(accountDir(configDir), ".credentials.json");
 }
 
 interface OAuthCredentials {
@@ -48,9 +123,12 @@ interface OAuthCredentials {
   subscriptionType?: string;
 }
 
-export async function readCredentials(): Promise<OAuthCredentials | undefined> {
+export async function readCredentials(
+  configDir?: string,
+): Promise<OAuthCredentials | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(credentialsPath(), "utf8")) as {
+    const path = credentialsPath(configDir);
+    const parsed = JSON.parse(await readFile(path, "utf8")) as {
       claudeAiOauth?: OAuthCredentials;
     };
     const oauth = parsed.claudeAiOauth;
@@ -166,8 +244,8 @@ export function parsePlanUsage(
   };
 }
 
-async function load(): Promise<PlanUsage | undefined> {
-  const creds = await readCredentials();
+async function load(configDir?: string): Promise<PlanUsage | undefined> {
+  const creds = await readCredentials(configDir);
   if (!creds?.accessToken) return undefined;
 
   try {
@@ -180,7 +258,16 @@ async function load(): Promise<PlanUsage | undefined> {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) {
-      logWarn("agent", `plan usage: endpoint returned ${res.status}`);
+      if (res.status === 429 || res.status >= 500) {
+        const wait = backoffMs(res.headers.get("retry-after"));
+        backoffUntil.set(accountDir(configDir), Date.now() + wait);
+        logWarn(
+          "agent",
+          `plan usage: endpoint returned ${res.status}; not asking again for ${Math.round(wait / 1000)}s`,
+        );
+      } else {
+        logWarn("agent", `plan usage: endpoint returned ${res.status}`);
+      }
       return undefined;
     }
     return parsePlanUsage(await res.json(), creds.subscriptionType);
@@ -198,25 +285,49 @@ async function load(): Promise<PlanUsage | undefined> {
  * makes one request. A failed refresh falls back to the last known values
  * — `fetchedAt` lets the caller age them.
  */
-export async function getPlanUsage(): Promise<PlanUsage | undefined> {
+export async function getPlanUsage(
+  configDir?: string,
+): Promise<PlanUsage | undefined> {
   // An API-key session bills against the key, not the subscription, so the
   // stored OAuth credentials would describe limits that don't apply here.
   if (process.env.ANTHROPIC_API_KEY) return undefined;
 
-  if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) return cache.value;
+  const key = accountDir(configDir);
+  await restoreSnapshot(key);
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS)
+    return cached.value;
+  // Rate-limited or failing: serve the last reading (its fetchedAt ages it
+  // in the panel) rather than adding to the requests that got us limited.
+  if (Date.now() < (backoffUntil.get(key) ?? 0)) return cached?.value;
 
-  inFlight ??= load().finally(() => {
-    inFlight = undefined;
-  });
-  const loaded = await inFlight;
-  if (loaded) cache = { value: loaded, fetchedAt: loaded.fetchedAt };
-  return loaded ?? cache?.value;
+  let pending = inFlight.get(key);
+  if (!pending) {
+    pending = load(configDir).finally(() => inFlight.delete(key));
+    inFlight.set(key, pending);
+  }
+  const loaded = await pending;
+  if (loaded) {
+    cache.set(key, { value: loaded, fetchedAt: loaded.fetchedAt });
+    backoffUntil.delete(key);
+    void saveSnapshot(key, loaded);
+  }
+  return loaded ?? cache.get(key)?.value;
 }
 
 /**
- * Expire the cache after the SDK reports a rate-limit change, so the next
- * /status re-reads instead of showing figures from before the turn.
+ * Expire an account's cache after the SDK reports a rate-limit change, so
+ * the next /status re-reads instead of showing figures from before the turn.
  */
-export function invalidatePlanUsage(): void {
-  if (cache) cache.fetchedAt = 0;
+export function invalidatePlanUsage(configDir?: string): void {
+  const cached = cache.get(accountDir(configDir));
+  if (cached) cached.fetchedAt = 0;
+}
+
+/** Test-only: forget every account's cached reading. */
+export function resetPlanUsageCacheForTest(): void {
+  cache.clear();
+  inFlight.clear();
+  backoffUntil.clear();
+  restored.clear();
 }

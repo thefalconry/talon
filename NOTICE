@@ -14,3 +14,57 @@ The relicensing relies on the MIT License's own permission to sublicense, so
 the earlier contributions are redistributed here under Apache-2.0 with the
 original MIT notice retained. Contributions made from this release onward are
 licensed under Apache-2.0 per section 5 of that licence.
+
+Android companion app: GPL-3.0 binary
+-------------------------------------
+The Android build of the Talon companion app (apps/companion) includes an
+on-device neural text-to-speech voice. That voice runs on sherpa-onnx, whose
+Android library statically links espeak-ng, which is licensed under the GNU
+General Public License, version 3. The Android companion APK is therefore a
+combined work that is distributed under the terms of the GPL-3.0
+(https://www.gnu.org/licenses/gpl-3.0.html).
+
+The complete corresponding source code for that APK is this repository
+(https://github.com/thefalconry/talon), together with the upstream sources of
+the third-party components listed below at the pinned versions. Talon's own
+source files remain licensed under Apache-2.0, which is compatible with
+distribution as part of a GPL-3.0 combined work. Builds of the companion for
+other platforms (Windows, macOS, Linux, iOS) do not include sherpa-onnx or
+espeak-ng and are not affected.
+
+Upstream plans to remove the espeak-ng dependency in sherpa-onnx 2.0
+(https://github.com/k2-fsa/sherpa-onnx/issues/3731); this section will be
+revisited when the companion moves to such a release.
+
+Third-party components in the Android companion APK:
+
+  espeak-ng
+    Copyright (C) 2005-2017 Jonathan Duddington, Reece H. Dunn and contributors
+    License: GPL-3.0-or-later
+    Source: https://github.com/espeak-ng/espeak-ng
+    Linked statically into the sherpa-onnx JNI library (phonemization).
+
+  sherpa-onnx 1.13.8 (sherpa-onnx-static-link-onnxruntime-1.13.8.aar)
+    Copyright (c) 2022-2026 Xiaomi Corporation and contributors
+    License: Apache-2.0
+    Source: https://github.com/k2-fsa/sherpa-onnx
+    Includes ONNX Runtime (Copyright (c) Microsoft Corporation, MIT License,
+    https://github.com/microsoft/onnxruntime).
+
+  piper-phonemize
+    Copyright (c) 2023 Michael Hansen
+    License: MIT
+    Source: https://github.com/rhasspy/piper-phonemize
+    Linked into the sherpa-onnx JNI library.
+
+On-device model (downloaded at runtime when the user enables the neural voice;
+not bundled in the APK):
+
+  Kokoro-82M v1.0, int8, as packaged by sherpa-onnx
+  (kokoro-int8-multi-lang-v1_0.tar.bz2, SHA-256
+  4c3052abaa60943a341f193888cf6abd68787dae6ab8ae5c925a706caa247e4e)
+    Copyright (c) hexgrad
+    License: Apache-2.0
+    Source: https://huggingface.co/hexgrad/Kokoro-82M
+    The archive also carries espeak-ng-data (GPL-3.0, see above) and lexicons
+    distributed with the sherpa-onnx model release.

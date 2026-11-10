@@ -73,6 +73,7 @@ const handlers = {
   control: async () => ({ ok: true, message: "" }),
   logs: () => [],
   liveTurnEvents: () => [],
+  listCommands: () => [],
   mediaPath: () => null,
   registerDevice: async () => ({}) as never,
   storeLocation: async () => ({}) as never,
@@ -83,6 +84,9 @@ const handlers = {
   openNodeInstall: () => null,
   openCompanionPair: () => null,
   openNodeBinary: () => null,
+  openSecretDrop: () => null,
+  isLiveSecretDrop: () => false,
+  submitSecretDrop: async () => ({ status: 404, html: "" }),
 } satisfies BridgeServerHandlers;
 
 let server: BridgeServer;

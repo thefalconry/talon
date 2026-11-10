@@ -3,8 +3,8 @@
  * the token format, the scope vocabulary, and the operator surface.
  */
 
-export { DeviceCredentialStore } from "./store.js";
-export { isDeviceCredentialToken } from "./token.js";
+export { DeviceCredentialStore, UNBOUND_TTL_MS } from "./store.js";
+export { credentialIdOf, isDeviceCredentialToken } from "./token.js";
 export {
   DEFAULT_COMPANION_SCOPES,
   FORMER_COMPANION_SCOPES,

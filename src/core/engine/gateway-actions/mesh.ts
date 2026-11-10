@@ -34,6 +34,11 @@ export const meshHandlers: SharedActionHandlers = {
       body.cwd,
       body.timeout_sec,
     ),
+  device_computer: (body) =>
+    getMeshService().computerOnDevice(body.device ?? body.deviceId, {
+      ...body,
+      action: body.computer_action,
+    }),
   device_list_dir: (body) =>
     getMeshService().listDirOnDevice(body.device ?? body.deviceId, body.path),
   device_stat: (body) =>
@@ -91,6 +96,9 @@ export const meshHandlers: SharedActionHandlers = {
       body.name,
       body.bridge_url,
     ),
+  // Companion pairing: the agent-tool twin of Telegram's `/mesh pair`.
+  make_companion_pair_link: async (body) =>
+    getMeshService().makeCompanionPairLinkText(body.label, body.bridge_url),
 };
 
 /**
@@ -114,6 +122,7 @@ export const chatFreeActions: ReadonlySet<string> = new Set([
   "remove_device",
   "get_device_status",
   "device_exec",
+  "device_computer",
   "device_list_dir",
   "device_stat",
   "device_read_file",
@@ -124,4 +133,5 @@ export const chatFreeActions: ReadonlySet<string> = new Set([
   "update_node",
   "get_node_binary",
   "make_node_install_link",
+  "make_companion_pair_link",
 ]);

@@ -226,6 +226,13 @@ describe("uploadSnapshot", () => {
   });
 });
 
+const NEWEST = (keepLast: number) => ({
+  keepLast,
+  keepDaily: 0,
+  keepWeekly: 0,
+  keepCheckpoints: 10,
+});
+
 describe("pruneRemote", () => {
   it("keeps the newest N and every pinned snapshot", async () => {
     const home = mkdtempSync(join(tmpdir(), "talon-prune-remote-"));
@@ -241,11 +248,55 @@ describe("pruneRemote", () => {
     }
     expect(fake.stored.size).toBe(4);
 
-    await pruneRemote(targets, 2);
+    await pruneRemote(targets, NEWEST(2));
     expect([...fake.stored.keys()].sort()).toEqual([
       "20260101T000020Z-bbbbbb", // pinned
       "20260101T000030Z-cccccc",
       "20260101T000040Z-dddddd",
+    ]);
+  });
+
+  it("never prunes an entry whose manifest is unreadable or has no createdAt", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-prune-remote-"));
+    const fake = fakeTarget();
+    const targets = await discoverTargets(fake.deps);
+    for (const id of ["20260101T000030Z-cccccc", "20260101T000040Z-dddddd"]) {
+      await uploadSnapshot(manifestFor(home, id), targets, home);
+    }
+    // A manifest that came back partial: no createdAt, nothing to rank by.
+    // `createdAt ?? 0` used to make this look oldest and delete it first.
+    fake.stored.set("20260101T000010Z-aaaaaa", {
+      id: "20260101T000010Z-aaaaaa",
+    } as unknown as Manifest);
+    fake.stored.set("20260101T000020Z-bbbbbb", {
+      ...manifestFor(home, "20260101T000020Z-bbbbbb"),
+      createdAt: Number.NaN,
+    });
+
+    await pruneRemote(targets, NEWEST(1));
+    expect([...fake.stored.keys()].sort()).toEqual([
+      "20260101T000010Z-aaaaaa", // unreadable — kept
+      "20260101T000020Z-bbbbbb", // no usable createdAt — kept
+      "20260101T000040Z-dddddd", // newest
+    ]);
+  });
+
+  it("keeps checkpoints on their own budget and the newest verified snapshot", async () => {
+    const home = mkdtempSync(join(tmpdir(), "talon-prune-remote-"));
+    const fake = fakeTarget();
+    const targets = await discoverTargets(fake.deps);
+    const at = (id: string, patch: Partial<Manifest>) =>
+      uploadSnapshot({ ...manifestFor(home, id), ...patch }, targets, home);
+    await at("20260101T000010Z-aaaaaa", { verifiedAt: 5 });
+    await at("20260101T000020Z-bbbbbb", {});
+    await at("20260101T000030Z-cccccc", { kind: "checkpoint" });
+    await at("20260101T000040Z-dddddd", {});
+
+    await pruneRemote(targets, NEWEST(1));
+    expect([...fake.stored.keys()].sort()).toEqual([
+      "20260101T000010Z-aaaaaa", // last verified
+      "20260101T000030Z-cccccc", // checkpoint, own budget
+      "20260101T000040Z-dddddd", // newest scheduled
     ]);
   });
 
@@ -257,7 +308,7 @@ describe("pruneRemote", () => {
           : { ok: false, error: "network down" },
     );
     const targets = await discoverTargets({ plugins: () => ["p"], dispatch });
-    await pruneRemote(targets, 1);
+    await pruneRemote(targets, NEWEST(1));
     const deletes = dispatch.mock.calls.filter(
       ([, body]) => body.action === "backup.target.delete",
     );

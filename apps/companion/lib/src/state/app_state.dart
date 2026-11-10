@@ -20,6 +20,7 @@ import '../services/menu_bar.dart';
 import '../services/mesh_background.dart';
 import '../services/mesh_liveness.dart';
 import '../services/mesh_service.dart';
+import '../services/network_watch.dart';
 import '../services/prefs.dart';
 import '../services/updater.dart';
 import 'frame_coalescer.dart';
@@ -129,8 +130,10 @@ class AppState extends ChangeNotifier {
       scheduleMicrotask(() {
         if (_disposed || selectedChatId != id) return;
         markRead(id);
+        final needLoad = !_loadedHistory.contains(id);
+        if (needLoad) _loadingHistory.add(id);
         notifyListeners();
-        if (!_loadedHistory.contains(id)) unawaited(_loadHistory(id));
+        if (needLoad) unawaited(_loadHistory(id));
       });
     }
   }
@@ -143,10 +146,21 @@ class AppState extends ChangeNotifier {
   int _backoffMs = 800;
   bool _disposed = false;
 
-  /// Network changes, watched while the profile has a local address so the
-  /// app hops between it and the main address as the phone moves.
+  /// Network changes, watched for every profile: a stream opened on the old
+  /// interface goes half-open after a switch and never errors on its own, and
+  /// a profile with a local address also hops between it and the main one.
   StreamSubscription<List<ConnectivityResult>>? _networkWatch;
   Timer? _networkDebounce;
+
+  /// The last connectivity reading ([networkKey]), and whether it changed
+  /// since the debounced handler last ran.
+  String? _lastNetwork;
+  bool _networkChanged = false;
+
+  /// Resuming after at least this much event-stream silence reopens the
+  /// stream: the daemon pings every 25 s, so a quiet stream is suspect (the
+  /// OS may have frozen the app while its socket died underneath it).
+  static const Duration resumeStaleAfter = Duration(seconds: 30);
 
   /// Per-chat grace timers that promote a delivered-but-not-ended turn into the
   /// "still working" state. Keyed by chatId; cancelled on `turn_end`, fresh
@@ -240,11 +254,16 @@ class AppState extends ChangeNotifier {
   /// bridge file first; legacy managed mode can still supervise a daemon when
   /// explicitly configured; everywhere, open the event stream and load chats.
   Future<void> start() async {
+    // Paused in the background (Android, foreground service owns the
+    // connection): nothing — network changes, timers — may reopen the UI
+    // stream until resumeUiStream() clears the flag and calls start().
+    if (_uiStreamPaused) return;
     _reconnect?.cancel();
     final epoch = ++_epoch;
     AppLog.info('app_state', 'connect attempt ${config.host}:${config.port}');
     _setConn(ConnState.connecting, null);
 
+    _watchNetwork();
     if (config.canAutoDiscoverLocal) {
       daemon = const DaemonState(DaemonPhase.unknown);
       final bridge = await readLocalBridge();
@@ -270,6 +289,8 @@ class AppState extends ChangeNotifier {
         // any pin left over from an earlier profile.
         fingerprint: discoveredPin,
         clearFingerprint: bridge.scheme != 'https' || discoveredPin == null,
+        // The daemon itself named its certificate: enforce it from the start.
+        pinObserved: discoveredPin != null,
         manageLocalDaemon: false,
       );
       AppLog.info(
@@ -297,7 +318,6 @@ class AppState extends ChangeNotifier {
       await _openStream(null, epoch);
     } else {
       daemon = const DaemonState(DaemonPhase.unknown);
-      _watchNetwork();
       // The local address when it answers, the main one otherwise.
       final endpoint = await resolveEndpoint(config);
       if (epoch != _epoch) return;
@@ -314,29 +334,28 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Re-pick the address whenever the network changes (Wi-Fi ↔ cellular,
-  /// arriving home…), reconnecting only if the answer changed.
+  /// Watch the network for every profile. On an interface change (Wi-Fi ↔
+  /// cellular, a new Wi-Fi) the open stream is bound to the old interface and
+  /// goes half-open — no bytes, no error — so reconnect now rather than wait
+  /// out the idle deadline. A profile with a local address also re-picks it.
   void _watchNetwork() {
-    if (config.localUrl == null) {
-      _networkWatch?.cancel();
-      _networkWatch = null;
-      return;
-    }
-    if (_networkWatch != null) return;
+    if (_networkWatch != null || !connectivityWatchAvailable) return;
     try {
-      _networkWatch = Connectivity().onConnectivityChanged.listen(
+      final connectivity = Connectivity();
+      unawaited(_seedNetwork(connectivity));
+      _networkWatch = connectivity.onConnectivityChanged.listen(
         (results) {
+          final key = networkKey(results);
+          if (_lastNetwork != null && key != _lastNetwork) {
+            _networkChanged = true;
+          }
+          _lastNetwork = key;
           if (results.every((r) => r == ConnectivityResult.none)) return;
           _networkDebounce?.cancel();
-          _networkDebounce = Timer(const Duration(seconds: 2), () async {
-            if (_disposed || config.localUrl == null) return;
-            final next = await resolveEndpoint(config);
-            if (_disposed) return;
-            if (next.baseUrl != _activeConfig?.baseUrl) {
-              AppLog.info('app_state', 'network changed → ${next.baseUrl}');
-              unawaited(start());
-            }
-          });
+          _networkDebounce = Timer(
+            const Duration(seconds: 2),
+            () => unawaited(_onNetworkSettled(key)),
+          );
         },
         onError: (Object e) =>
             AppLog.debug('app_state', 'network watch unavailable', e),
@@ -346,6 +365,74 @@ class AppState extends ChangeNotifier {
       // is still re-picked on every reconnect, just not proactively.
       AppLog.debug('app_state', 'network watch unavailable', e);
     }
+  }
+
+  Future<void> _seedNetwork(Connectivity connectivity) async {
+    try {
+      _lastNetwork ??= networkKey(await connectivity.checkConnectivity());
+    } catch (e) {
+      AppLog.debug('app_state', 'connectivity check unavailable', e);
+    }
+  }
+
+  Future<void> _onNetworkSettled(String key) async {
+    if (_disposed || _uiStreamPaused) return;
+    final interfaceChanged = _networkChanged;
+    _networkChanged = false;
+    String? nextUrl;
+    if (config.localUrl != null) {
+      final next = await resolveEndpoint(config);
+      if (_disposed) return;
+      if (next.baseUrl != _activeConfig?.baseUrl) nextUrl = next.baseUrl;
+    }
+    final endpointChanged = nextUrl != null;
+    // A fatal stop (bad token, pin mismatch) stays stopped unless the address
+    // itself moved; a live or retrying connection is reopened on the new
+    // interface straight away.
+    final live = conn == ConnState.connected || (_reconnect?.isActive ?? false);
+    if (endpointChanged || (interfaceChanged && live)) {
+      AppLog.info(
+        'app_state',
+        endpointChanged
+            ? 'network changed → $nextUrl'
+            : 'network interface changed ($key); reconnecting',
+      );
+      _backoffMs = 800;
+      unawaited(start());
+    }
+  }
+
+  /// When the event stream last delivered anything (event or keep-alive).
+  DateTime? get streamLastRx => _client?.lastRx;
+
+  /// The app came back to the foreground. If the stream has been silent for
+  /// [resumeStaleAfter] — the OS froze us and the socket may have died — or a
+  /// backoff retry is pending, reconnect now instead of trusting a stream
+  /// that may be half-open or waiting out the backoff.
+  void reconnectIfStale({DateTime? now}) {
+    if (_disposed || _uiStreamPaused) return;
+    if (conn == ConnState.connecting) return;
+    if (_reconnect?.isActive ?? false) {
+      AppLog.info('app_state', 'resumed while retrying; reconnecting now');
+      _backoffMs = 800;
+      unawaited(start());
+      return;
+    }
+    if (conn != ConnState.connected) {
+      AppLog.info('app_state', 'resumed while disconnected ($conn); reconnecting now');
+      _backoffMs = 800;
+      unawaited(start());
+      return;
+    }
+    final rx = _client?.lastRx;
+    if (rx == null) return;
+    final quiet = (now ?? DateTime.now()).difference(rx);
+    if (quiet < resumeStaleAfter) return;
+    AppLog.info(
+      'app_state',
+      'resumed after ${quiet.inSeconds}s of stream silence; reconnecting',
+    );
+    unawaited(start());
   }
 
   Future<void> _openStream(
@@ -359,7 +446,7 @@ class AppState extends ChangeNotifier {
     final cfg = effectiveConfig ?? config;
     // Keep the process-wide pin (Image.network et al.) in step with the
     // profile this attempt uses; TOFU below adopts one when none is set.
-    BridgeTrust.pin(cfg.tls ? cfg.fingerprint : null);
+    _pinProcessWide(cfg.tls ? cfg : null);
     BridgeTrust.useClientContext(cfg.tls ? cfg.clientSecurityContext() : null);
     final client = BridgeClient(cfg);
     // Claim our mesh identity on this stream (when one has been minted) so
@@ -510,21 +597,59 @@ class AppState extends ChangeNotifier {
   /// yet, adopt the certificate the handshake presented. Remote profiles
   /// persist the pin ([persist]); local-discovery ones re-read it from the
   /// daemon's discovery file every connect instead.
+  ///
+  /// Either way the bridge has now been seen presenting the pinned
+  /// certificate itself, so the pin becomes binding even for a CA-valid
+  /// certificate ([ConnectionConfig.pinObserved]). A pin that came from a
+  /// pair link is marked the same way the first time a handshake matches it.
   Future<void> _adoptFingerprint(
     ConnectionConfig cfg,
     BridgeClient client, {
     required bool persist,
   }) async {
+    if (!cfg.tls) return;
     final seen = client.seenFingerprint;
-    if (!cfg.tls || cfg.fingerprint != null || seen == null) return;
-    BridgeTrust.pin(seen);
-    client.config = cfg.copyWith(fingerprint: seen);
-    _activeConfig = client.config;
-    if (persist) {
-      config = config.copyWith(fingerprint: seen);
-      await prefs.setConnection(config);
-      AppLog.info('app_state', 'pinned bridge certificate $seen');
+    if (cfg.fingerprint == null) {
+      if (seen == null) return;
+      _applyPin(cfg.copyWith(fingerprint: seen, pinObserved: true), client);
+      if (persist) {
+        config = config.copyWith(fingerprint: seen, pinObserved: true);
+        await prefs.setConnection(config);
+        AppLog.info('app_state', 'pinned bridge certificate $seen');
+      }
+      return;
     }
+    if (cfg.pinObserved || !client.pinObserved) return;
+    _applyPin(cfg.copyWith(pinObserved: true), client);
+    if (persist && config.fingerprint == cfg.fingerprint) {
+      config = config.copyWith(pinObserved: true);
+      await prefs.setConnection(config);
+      AppLog.info('app_state', 'bridge certificate pin is now enforced');
+    }
+  }
+
+  /// Make [active] the profile [client] and the process-wide trust use.
+  void _applyPin(ConnectionConfig active, BridgeClient client) {
+    _pinProcessWide(active);
+    client.config = active;
+    _activeConfig = active;
+  }
+
+  /// The process-wide pin (Image.network, attachments) for [cfg]: binding
+  /// on the bridge's own address once [ConnectionConfig.enforcesPin], and
+  /// nowhere else.
+  static void _pinProcessWide(ConnectionConfig? cfg) {
+    final strict = cfg != null && cfg.enforcesPin;
+    // The address exactly as the URLs this profile builds will name it.
+    final base = strict ? Uri.tryParse(cfg.baseUrl) : null;
+    BridgeTrust.pin(
+      cfg?.fingerprint,
+      enforceOn: strict
+          ? (host: base?.host ?? cfg.host, port: base?.port ?? cfg.port)
+          : null,
+      strictContext:
+          strict ? cfg.clientSecurityContext(trustedRoots: false) : null,
+    );
   }
 
   /// Tear down a client from a superseded connection attempt without touching
@@ -534,7 +659,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _scheduleReconnect() {
-    if (_disposed) return;
+    if (_disposed || _uiStreamPaused) return;
     _reconnect?.cancel();
     AppLog.info('app_state', 'reconnect in ${_backoffMs}ms');
     _reconnect = Timer(Duration(milliseconds: _backoffMs), () {
@@ -556,10 +681,13 @@ class AppState extends ChangeNotifier {
     _setConn(ConnState.error, message);
   }
 
-  static bool _isUnauthorized(Object e) =>
-      e is BridgeException && e.unauthorized ||
-      e.toString().contains('Unauthorized') ||
-      e.toString().contains('(401)');
+  /// Only a real 401 is "check your token". A [BridgeException] knows which
+  /// it is; its message may be server text (a 403 bind refusal, say) that
+  /// must reach the user as-is, so it is never sniffed for keywords.
+  static bool _isUnauthorized(Object e) => e is BridgeException
+      ? e.unauthorized
+      : e.toString().contains('Unauthorized') ||
+          e.toString().contains('(401)');
 
   /// Drop the connection profile (token, client certificate, pins) and
   /// everything cached from it, back to the first-run screen: the app lock's
@@ -638,9 +766,14 @@ class AppState extends ChangeNotifier {
     selectedChatId = chatId;
     if (previous != null && previous != chatId) trimHistory(previous);
     markRead(chatId);
+    final needLoad = !_loadedHistory.contains(chatId);
+    if (needLoad) _loadingHistory.add(chatId);
     notifyListeners();
-    if (!_loadedHistory.contains(chatId)) await _loadHistory(chatId);
+    if (needLoad) await _loadHistory(chatId);
   }
+
+  /// Whether the initial history page for [chatId] has been loaded from the daemon.
+  bool hasLoadedHistory(String chatId) => _loadedHistory.contains(chatId);
 
   // ── Unread tracking ────────────────────────────────────────────────────────
 
@@ -680,13 +813,12 @@ class AppState extends ChangeNotifier {
     final msgs = _messages[chatId];
     if (msgs == null || msgs.isEmpty) return 0;
     // Oldest server-assigned id (local system notes have non-numeric ids).
+    // The minimum, not the first: the first numeric id is only the oldest
+    // when the list is in order.
     int? oldest;
     for (final m in msgs) {
       final n = int.tryParse(m.id);
-      if (n != null) {
-        oldest = n;
-        break;
-      }
+      if (n != null && (oldest == null || n < oldest)) oldest = n;
     }
     if (oldest == null) return 0;
 
@@ -702,7 +834,9 @@ class AppState extends ChangeNotifier {
       if (page.length < _historyPageSize) _historyExhausted.add(chatId);
       final existing = msgs.map((m) => m.id).toSet();
       final fresh = page.where((m) => !existing.contains(m.id)).toList();
-      msgs.insertAll(0, fresh);
+      msgs
+        ..insertAll(0, fresh)
+        ..sort(compareMessageOrder);
       return fresh.length;
     } catch (e) {
       AppLog.warn('app_state', 'older-history fetch failed', e);
@@ -830,6 +964,31 @@ class AppState extends ChangeNotifier {
     await _command(chatId, 'Delete', client.deleteChat(chatId));
   }
 
+  Future<bool> _waitForConnection({Duration timeout = const Duration(seconds: 6)}) async {
+    if (conn == ConnState.connected && _client != null) return true;
+    if (conn == ConnState.idle || conn == ConnState.error) {
+      unawaited(start());
+    }
+    final completer = Completer<bool>();
+    void listener() {
+      if (conn == ConnState.connected && _client != null) {
+        if (!completer.isCompleted) completer.complete(true);
+      }
+    }
+    addListener(listener);
+    final timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.complete(conn == ConnState.connected && _client != null);
+      }
+    });
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
+      removeListener(listener);
+    }
+  }
+
   /// Returns whether the daemon accepted the message — false lets the
   /// composer hand the draft back instead of silently losing it.
   Future<bool> sendMessage(
@@ -837,10 +996,19 @@ class AppState extends ChangeNotifier {
     List<Attachment> attachments = const [],
   }) async {
     final chatId = selectedChatId;
-    final client = _client;
-    if (chatId == null || client == null) return false;
+    if (chatId == null) return false;
     // Text may be empty when files are attached.
     if (text.trim().isEmpty && attachments.isEmpty) return false;
+
+    if (conn != ConnState.connected || _client == null) {
+      final ready = await _waitForConnection(timeout: const Duration(seconds: 6));
+      if (!ready || _client == null) {
+        _appendSystem(chatId, 'Unable to send: not connected to Talon');
+        return false;
+      }
+    }
+    final client = _client;
+    if (client == null) return false;
     // The user committed to this chat: it is no longer an untouched one, even
     // if the send fails or the reply is slow to arrive.
     _unusedChats.remove(chatId);
@@ -1692,14 +1860,23 @@ class AppState extends ChangeNotifier {
       // the bottom of the chat each time the app was reopened. Keep a system
       // notice only while it's genuinely the newest thing in the conversation;
       // once real history has moved past it, it has expired.
+      //
+      // Since the first fetch is a bounded window (the newest
+      // [_historyInitialSize]), "not in the window" also matches OLDER
+      // scrollback paged in earlier and old snapshot rows, and appending them
+      // pinned week-old messages below the newest on every reconnect. Only
+      // messages genuinely newer than the window survive the merge; older
+      // ones are dropped (scrolling up pages them back in, in order).
       final histIds = hist.map((m) => m.id).toSet();
       final newestTs = hist.isEmpty ? 0 : hist.last.ts;
-      final extras = (_messages[chatId] ?? const <ClientMessage>[]).where(
-        (m) =>
-            !histIds.contains(m.id) &&
-            (m.role != Role.system || m.ts >= newestTs),
-      );
-      _messages[chatId] = [...hist, ...extras];
+      final newestId = _maxServerId(hist);
+      final extras = (_messages[chatId] ?? const <ClientMessage>[]).where((m) {
+        if (histIds.contains(m.id)) return false;
+        final n = int.tryParse(m.id);
+        if (n != null && newestId != null) return n > newestId;
+        return m.ts >= newestTs;
+      });
+      _messages[chatId] = [...hist, ...extras]..sort(compareMessageOrder);
       _loadedHistory.add(chatId);
     } catch (_) {
       /* leave existing messages; stream will fill in */
@@ -1857,7 +2034,10 @@ class AppState extends ChangeNotifier {
                 .map(_map)
                 .whereType<Map<String, dynamic>>()
                 .map(ClientMessage.fromJson)
-                .toList();
+                .toList()
+              // Snapshots written before the merge fix can hold rows out of
+              // order; restoring them sorted heals those chats.
+              ..sort(compareMessageOrder);
           }
         });
       }
@@ -1880,7 +2060,7 @@ class AppState extends ChangeNotifier {
     });
   }
 
-  void _saveSnapshot() {
+  Future<void> _saveSnapshot() async {
     final snapshot = <String, dynamic>{
       'chats': chats.map((c) => c.toSnapshotJson()).toList(),
       'messages': {
@@ -1897,16 +2077,22 @@ class AppState extends ChangeNotifier {
       },
     };
     // Encoded and written off the UI isolate, to its own file (Prefs).
-    unawaited(prefs.saveSnapshot(snapshot));
+    await prefs.saveSnapshot(snapshot);
+  }
+
+  /// Flush the offline snapshot immediately and await completion (for clean
+  /// termination / exit without truncation or loss).
+  Future<void> flushSnapshot() async {
+    if (_disposed) return;
+    _snapshotTimer?.cancel();
+    _snapshotTimer = null;
+    await _saveSnapshot();
   }
 
   /// Write the offline snapshot now (app paused/hidden), instead of waiting
   /// for the debounce.
   void persistSnapshot() {
-    if (_disposed) return;
-    _snapshotTimer?.cancel();
-    _snapshotTimer = null;
-    _saveSnapshot();
+    unawaited(flushSnapshot());
   }
 
   @override
@@ -1952,9 +2138,57 @@ class AppState extends ChangeNotifier {
   static List<dynamic> _list(Object? value) =>
       value is List ? value : const <dynamic>[];
 
+  /// Highest server-assigned (numeric) id in [msgs], or null if none.
+  static int? _maxServerId(List<ClientMessage> msgs) {
+    int? max;
+    for (final m in msgs) {
+      final n = int.tryParse(m.id);
+      if (n != null && (max == null || n > max)) max = n;
+    }
+    return max;
+  }
+
+  bool _uiStreamPaused = false;
+
+  /// Whether the UI isolate's streaming connection is currently paused while
+  /// running in the background.
+  bool get uiStreamPaused => _uiStreamPaused;
+
+  /// Pause the UI isolate's streaming connection when the app is placed in
+  /// the background on Android, avoiding redundant network traffic and battery
+  /// drain while the foreground service maintains notifications and mesh connectivity.
+  void pauseUiStream() {
+    if (_uiStreamPaused || _disposed) return;
+    _uiStreamPaused = true;
+    _reconnect?.cancel();
+    _reconnect = null;
+    _sub?.cancel();
+    _sub = null;
+    _client?.dispose();
+    _client = null;
+    _setConn(ConnState.idle, null);
+    AppLog.info('app_state', 'UI stream paused for background battery savings');
+  }
+
+  /// Resume the UI isolate's connection when the app returns to the foreground.
+  void resumeUiStream() {
+    if (_disposed) return;
+    _uiStreamPaused = false;
+    _backoffMs = 800;
+    _reconnect?.cancel();
+    _reconnect = null;
+    if (conn != ConnState.connected) {
+      AppLog.info('app_state', 'UI stream resuming from background; reconnecting immediately');
+      unawaited(start());
+    } else {
+      reconnectIfStale();
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    _uiStreamPaused = false;
     _reconnect?.cancel();
     _networkDebounce?.cancel();
     _networkWatch?.cancel();

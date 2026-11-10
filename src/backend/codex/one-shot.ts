@@ -20,17 +20,21 @@
 import type { OneShotAgentParams, OneShotUsage } from "../../core/types.js";
 import { log, logWarn } from "../../util/log.js";
 import { appendBackendSuffix } from "../runtime/index.js";
-import { emitAssistantText } from "../runtime/one-shot-hooks.js";
+import { emitAssistantText, emitSessionId } from "../runtime/one-shot-hooks.js";
 import { ensureCodex, getCodexAuthInfo } from "./init.js";
 import {
   CODEX_SYSTEM_PROMPT_SUFFIX,
-  CODEX_CHATGPT_DEFAULT_MODEL,
   CODEX_THREAD_PERMISSIONS,
 } from "./constants.js";
 import { isChatGptModelMismatchError } from "./auth.js";
-import { chatGptFallbackFor, isCodexOAuthIncompat } from "./models.js";
+import {
+  chatGptFallbackFor,
+  getCodexChatGptDefaultModel,
+  isCodexOAuthIncompat,
+} from "./models.js";
 import { markOAuthIncompat } from "./oauth-incompat.js";
 import { toCodexReasoningEffort } from "./effort.js";
+import { abortLogLine } from "../../core/agents/abort-reason.js";
 
 /**
  * Resolve the effective model for a one-shot run, applying the same
@@ -39,7 +43,8 @@ import { toCodexReasoningEffort } from "./effort.js";
  * Heartbeats and dream calls pass `params.model` straight through from
  * `config.heartbeatModel ?? config.model`. If that's an OAuth-incompat
  * id (curated `apiKeyOnly: true` or runtime-learned) AND the active
- * Codex credential is ChatGPT OAuth, swap to `gpt-5.5` to avoid the
+ * Codex credential is ChatGPT OAuth, swap to the resolved ChatGPT default
+ * (`getCodexChatGptDefaultModel`) to avoid the
  * silent exit-1 failure mode that hit a group chat on 2026-05-20 23:13Z.
  *
  * Returns the resolved model id, whether a swap occurred, and an
@@ -56,7 +61,8 @@ function resolveOneShotModel(requested: string): {
     return { model: requested, swapped: false };
   }
 
-  const fallback = chatGptFallbackFor(requested) ?? CODEX_CHATGPT_DEFAULT_MODEL;
+  const fallback =
+    chatGptFallbackFor(requested) ?? getCodexChatGptDefaultModel();
   if (fallback === requested) return { model: requested, swapped: false };
 
   return {
@@ -81,6 +87,8 @@ export async function runOneShotAgent(
     abortController,
     appendLog,
     onAssistantText,
+    resumeSessionId,
+    onSessionId,
   } = params;
 
   const codex = ensureCodex(contextLabel);
@@ -93,7 +101,10 @@ export async function runOneShotAgent(
   // Codex SDK doesn't expose `system` on runStreamed — the system
   // prompt gets prepended to the user prompt for a one-shot, since
   // there's no thread continuity to worry about.
-  const inputText = `${finalSystemPrompt}\n\n---\n\n${prompt}`;
+  // A resumed thread already carries the system prompt from its first turn.
+  const inputText = resumeSessionId
+    ? prompt
+    : `${finalSystemPrompt}\n\n---\n\n${prompt}`;
 
   const resolved = resolveOneShotModel(requestedModel);
   const activeModel = resolved.model;
@@ -124,12 +135,24 @@ export async function runOneShotAgent(
     );
   }
 
-  const thread = codex.startThread({
-    model: activeModel,
-    skipGitRepoCheck: true,
-    ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
-    ...CODEX_THREAD_PERMISSIONS,
-  });
+  const thread = openThread(
+    codex,
+    {
+      model: activeModel,
+      skipGitRepoCheck: true,
+      ...(modelReasoningEffort ? { modelReasoningEffort } : {}),
+      ...CODEX_THREAD_PERMISSIONS,
+    },
+    params,
+  );
+
+  // The real reason a run failed lives in the stream, not in whatever the
+  // SDK throws afterwards: a model the account can't use yields
+  // `turn.failed` ("404 … The model `gpt-5.5` does not exist …") and the
+  // SDK then throws only "Codex Exec exited with code 1: Reading prompt
+  // from stdin...". Capture both so the failure the caller records is the
+  // one that explains it.
+  const failure = new StreamFailure();
 
   try {
     if (abortController.signal.aborted) {
@@ -145,62 +168,190 @@ export async function runOneShotAgent(
     let usage: OneShotUsage | undefined;
     for await (const event of events) {
       if (abortController.signal.aborted) break;
+      reportThreadStarted(event, onSessionId);
       await appendCodexEvent(appendLog, event, onAssistantText);
-      if (event.type === "turn.completed") {
-        const u = (event as { usage?: Record<string, number> }).usage;
-        if (u) {
-          usage = {
-            inputTokens: u.input_tokens ?? 0,
-            outputTokens: u.output_tokens ?? 0,
-            cacheRead: u.cached_input_tokens ?? 0,
-            cacheWrite: 0, // Codex doesn't report cache writes
-          };
-        }
-      }
+      failure.observe(event);
+      usage = turnUsage(event) ?? usage;
+    }
+    // A stream that ends cleanly after `turn.failed` is still a failed run
+    // — returning here is how 26/26 Codex cron runs were stored as "ok".
+    if (!abortController.signal.aborted && failure.message) {
+      throw new CodexOneShotError(failure.message);
     }
     return usage;
   } catch (err) {
+    const thrown = err instanceof Error ? err.message : String(err);
     if (
-      abortController.signal.aborted ||
-      /abort/i.test(err instanceof Error ? err.message : String(err))
+      !(err instanceof CodexOneShotError) &&
+      (abortController.signal.aborted || /abort/i.test(thrown))
     ) {
       const ts = new Date().toISOString().slice(11, 19);
-      await appendLog(`\n### [${ts}] Aborted\nRun aborted by timeout.\n`);
+      await appendLog(
+        `\n### [${ts}] Aborted\n${abortLogLine(abortController.signal)}\n`,
+      );
       return;
     }
-    const msg = err instanceof Error ? err.message : String(err);
-
-    // Learn only from EXPLICIT mismatches in one-shot context.
-    // Silent-exit failures are ambiguous (transient outage vs real
-    // model-incompat) and persisting them would over-poison the
-    // learning store with the result that one bad heartbeat
-    // permanently downgrades the model. Explicit mismatches carry the
-    // unambiguous server message so they're safe to mark.
-    //
-    // Unlike the interactive handler, heartbeat/dream can't recurse for
-    // a retry (would mess with the timing contract and lock
-    // semantics), so silent-exit failures here simply surface to the
-    // run log; the next scheduled run takes a fresh swing.
-    const authInfo = getCodexAuthInfo();
-    if (
-      authInfo?.mode === "chatgpt" &&
-      activeModel !== CODEX_CHATGPT_DEFAULT_MODEL &&
-      isChatGptModelMismatchError(msg)
-    ) {
-      const recorded = await markOAuthIncompat(activeModel);
-      if (recorded) {
-        logWarn(
-          "agent",
-          `[${contextLabel}] Codex one-shot: recorded ${activeModel} as ` +
-            `OAuth-incompat (explicit mismatch) — next ${contextLabel} run ` +
-            `will pre-emptively swap to ${CODEX_CHATGPT_DEFAULT_MODEL}`,
-        );
-      }
-    }
-
+    const msg = failure.describe(thrown);
+    await learnFromMismatch(activeModel, msg, contextLabel);
     logWarn("agent", `Codex one-shot run failed: ${msg}`);
     const ts = new Date().toISOString().slice(11, 19);
     await appendLog(`\n### [${ts}] Error\n${msg}\n`);
+    throw err instanceof CodexOneShotError
+      ? err
+      : new CodexOneShotError(msg, { cause: err });
+  }
+}
+
+type CodexClient = ReturnType<typeof ensureCodex>;
+type CodexThreadOptions = Parameters<CodexClient["startThread"]>[0];
+
+/**
+ * Start the run's thread — or, for a sub-agent interrupted by a daemon
+ * restart, continue its own thread and re-report the handle.
+ */
+function openThread(
+  codex: CodexClient,
+  options: CodexThreadOptions,
+  params: Pick<
+    OneShotAgentParams,
+    "resumeSessionId" | "onSessionId" | "contextLabel"
+  >,
+): ReturnType<CodexClient["startThread"]> {
+  const { resumeSessionId, onSessionId, contextLabel } = params;
+  if (!resumeSessionId) return codex.startThread(options);
+  log(
+    "agent",
+    `[${contextLabel}] Codex one-shot resuming thread ${resumeSessionId}`,
+  );
+  const thread = codex.resumeThread(resumeSessionId, options);
+  emitSessionId(onSessionId, resumeSessionId);
+  return thread;
+}
+
+/** Report the thread id from `thread.started` so a restart can resume it. */
+function reportThreadStarted(
+  event: { type: string },
+  onSessionId: OneShotAgentParams["onSessionId"],
+): void {
+  if (event.type !== "thread.started") return;
+  const threadId = (event as { thread_id?: unknown }).thread_id;
+  if (typeof threadId === "string") emitSessionId(onSessionId, threadId);
+}
+
+/** The cumulative usage a `turn.completed` event carries, if any. */
+function turnUsage(event: { type: string }): OneShotUsage | undefined {
+  if (event.type !== "turn.completed") return undefined;
+  const u = (event as { usage?: Record<string, number> }).usage;
+  if (!u) return undefined;
+  return {
+    inputTokens: u.input_tokens ?? 0,
+    outputTokens: u.output_tokens ?? 0,
+    cacheRead: u.cached_input_tokens ?? 0,
+    cacheWrite: 0, // Codex doesn't report cache writes
+  };
+}
+
+/**
+ * Record a model as OAuth-incompat when a one-shot failed on it with an
+ * explicit server mismatch, so the next run pre-emptively swaps.
+ */
+async function learnFromMismatch(
+  activeModel: string,
+  msg: string,
+  contextLabel: string,
+): Promise<void> {
+  // Learn only from EXPLICIT mismatches in one-shot context.
+  // Silent-exit failures are ambiguous (transient outage vs real
+  // model-incompat) and persisting them would over-poison the
+  // learning store with the result that one bad heartbeat
+  // permanently downgrades the model. Explicit mismatches (the 400
+  // "not supported … ChatGPT account" and the 404 "model … does not
+  // exist") carry the unambiguous server message so they're safe to
+  // mark.
+  //
+  // Unlike the interactive handler, heartbeat/dream can't recurse for
+  // a retry (would mess with the timing contract and lock
+  // semantics), so the failure is surfaced to the caller — the task
+  // settles as failed — and the next scheduled run takes a fresh
+  // swing on the learned fallback.
+  const authInfo = getCodexAuthInfo();
+  const fallback = getCodexChatGptDefaultModel();
+  if (
+    authInfo?.mode !== "chatgpt" ||
+    activeModel === fallback ||
+    !isChatGptModelMismatchError(msg)
+  ) {
+    return;
+  }
+  const recorded = await markOAuthIncompat(activeModel);
+  if (recorded) {
+    logWarn(
+      "agent",
+      `[${contextLabel}] Codex one-shot: recorded ${activeModel} as ` +
+        `OAuth-incompat (explicit mismatch) — next ${contextLabel} run ` +
+        `will pre-emptively swap to ${fallback}`,
+    );
+  }
+}
+
+/**
+ * A Codex one-shot that failed upstream. The message is the most specific
+ * reason the stream carried (the `turn.failed` text when there was one),
+ * so task tables, cron run records and the backend router see the cause
+ * rather than the SDK's generic exit wrapper.
+ */
+class CodexOneShotError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "CodexOneShotError";
+  }
+}
+
+/**
+ * Codex emits `error` events for transient retries it handles itself
+ * ("Reconnecting... 2/5 (…)", "Falling back from WebSockets to HTTPS
+ * transport. …"). Those are progress, not failure — only the terminal
+ * `turn.failed` / final `error` count.
+ */
+const TRANSIENT_ERROR_RE = /^\s*(reconnecting\.\.\.|falling back from)/i;
+
+/** Tracks the terminal failure reported on a Codex event stream. */
+class StreamFailure {
+  private turnFailed: string | undefined;
+  private lastError: string | undefined;
+
+  observe(event: { type: string } & Record<string, unknown>): void {
+    if (event.type === "turn.failed") {
+      const err = (event as { error?: { message?: unknown } }).error;
+      const text =
+        typeof err?.message === "string" && err.message.trim()
+          ? err.message.trim()
+          : "turn failed (no message)";
+      this.turnFailed = text;
+      return;
+    }
+    if (event.type === "error" && typeof event.message === "string") {
+      const text = event.message.trim();
+      if (text && !TRANSIENT_ERROR_RE.test(text)) this.lastError = text;
+    }
+  }
+
+  /** The failure the stream reported, or undefined when it reported none. */
+  get message(): string | undefined {
+    return this.turnFailed ?? this.lastError;
+  }
+
+  /**
+   * Combine the stream's failure with whatever the SDK threw, most
+   * specific first, without repeating the same text twice.
+   */
+  describe(thrown: string): string {
+    const streamed = this.message;
+    if (!streamed) return thrown;
+    if (!thrown || thrown === streamed || streamed.includes(thrown)) {
+      return streamed;
+    }
+    return `${streamed} (${thrown.trim()})`;
   }
 }
 

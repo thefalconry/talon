@@ -23,7 +23,7 @@ import { resolve } from "node:path";
 import { dirs } from "../../../util/paths.js";
 import { log, logWarn } from "../../../util/log.js";
 import { TalonError } from "../../errors.js";
-import { readArray, writePrivateJson } from "../persist.js";
+import { readArray, writePrivateJson, writesSettled } from "../persist.js";
 import { faultText } from "../../engine/fault-text.js";
 import { raiseAlert, resolveAlert } from "../../frontend-runtime/alerts.js";
 import {
@@ -43,7 +43,7 @@ import {
 const DEFAULT_FILE = resolve(dirs.root, "mesh-credentials.json");
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A pairing link or installer that is never used stops being a credential. */
-const UNBOUND_TTL_MS = 7 * DAY_MS;
+export const UNBOUND_TTL_MS = 7 * DAY_MS;
 /** How long a device has to pick up a requested rotation before it expires. */
 const ROTATION_GRACE_MS = 7 * DAY_MS;
 /** Revoked rows are kept this long for `talon mesh` / audit, then pruned. */
@@ -68,6 +68,12 @@ export type BindResult =
   { ok: true; credential: DeviceCredential } | { ok: false; error: string };
 
 const PERSIST_ALERT = "mesh.credentials.persist";
+
+/** Operator-minted, bind-on-first-use origins allowed to re-pair a device. */
+const REPAIR_ORIGINS: ReadonlySet<CredentialOrigin> = new Set([
+  "pair",
+  "install",
+]);
 
 export class DeviceCredentialStore {
   private records = new Map<string, DeviceCredentialRecord>();
@@ -146,9 +152,21 @@ export class DeviceCredentialStore {
   }
 
   /**
-   * Bind an unbound credential to the device id it just named. Refused when
-   * another live credential already holds that id — a pairing link can add
-   * a device, never take one over.
+   * Bind an unbound credential to the device id it just named.
+   *
+   * When that id already holds live credentials, an operator-minted pairing
+   * or installer credential takes the device over (a re-pair): the old
+   * credentials are revoked and their live sessions dropped. This is the
+   * "the Mac's app was reset but kept its device id" case, which otherwise
+   * needs a `talon mesh revoke` before the new link can work.
+   *
+   * Trust: every unbound credential is operator-minted (`pair`/`install`,
+   * see MeshService → BridgeLinks) and binds exactly once — after this call
+   * it is bound, so a replayed link cannot bind again. Takeover is further
+   * limited to devices whose live credentials carry no scope the new one
+   * lacks: a device-only installer link can re-provision a node, but can
+   * never evict (and then impersonate) a companion holding client/operator.
+   * A credential of any other origin keeps the old rule — refused.
    */
   bind(credentialId: string, deviceId: string): BindResult {
     const record = this.records.get(credentialId);
@@ -164,17 +182,50 @@ export class DeviceCredentialStore {
     if (!id || id.length > MAX_DEVICE_ID_CHARS) {
       return { ok: false, error: "Invalid device id" };
     }
-    if (this.activeRecordsFor(id).length > 0) {
-      return {
-        ok: false,
-        error: `Device ${id} already has a credential — revoke it first (talon mesh revoke ${id})`,
-      };
+    const existing = this.activeRecordsFor(id);
+    if (existing.length > 0) {
+      const refusal = this.takeoverRefusal(record, id, existing);
+      if (refusal) return { ok: false, error: refusal };
     }
     record.deviceId = id;
     delete record.expiresAt;
     log("mesh", `Credential ${record.id} bound to device ${id}`);
-    this.persistSoon();
+    if (existing.length > 0) {
+      logWarn(
+        "mesh",
+        `Credential ${record.id} (${record.origin}) re-paired device ${id}; revoking ${existing.map((r) => r.id).join(", ")}`,
+      );
+      // Mark revoked synchronously (authenticate must reject them from this
+      // instant); revokeRecords drops their sessions and persists.
+      void this.revokeRecords(existing, `re-paired by ${record.id}`).catch(
+        (err: unknown) =>
+          logWarn("mesh", `Could not persist re-pair revocation: ${err}`),
+      );
+    } else {
+      this.persistSoon();
+    }
     return { ok: true, credential: publicView(record) };
+  }
+
+  /** Why `record` may not take over `deviceId` from `existing`, if it may not. */
+  private takeoverRefusal(
+    record: DeviceCredentialRecord,
+    deviceId: string,
+    existing: readonly DeviceCredentialRecord[],
+  ): string | null {
+    const revokeHint = `revoke it first (talon mesh revoke ${deviceId})`;
+    if (!REPAIR_ORIGINS.has(record.origin)) {
+      return `Device ${deviceId} already has a credential — ${revokeHint}`;
+    }
+    const held = new Set(record.scopes);
+    const wider = existing.flatMap((r) => r.scopes).filter((s) => !held.has(s));
+    if (wider.length > 0) {
+      return (
+        `Device ${deviceId} already has a credential with scopes this link does not carry ` +
+        `(${[...new Set(wider)].join(", ")}) — ${revokeHint}`
+      );
+    }
+    return null;
   }
 
   /** True when the operator asked for this credential to be replaced. */
@@ -453,6 +504,14 @@ export class DeviceCredentialStore {
       const endedAt = record.revokedAt ?? record.expiresAt;
       if (endedAt !== undefined && endedAt < cutoff) this.records.delete(id);
     }
+  }
+
+  /**
+   * Wait for every background write queued so far (mintNow, bind, re-pair
+   * revocation, lastUsedAt touches) to reach disk or fail.
+   */
+  flush(): Promise<void> {
+    return writesSettled(this.file);
   }
 
   private persistSoon(): void {

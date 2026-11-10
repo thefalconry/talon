@@ -1,12 +1,12 @@
 /**
  * MCP server specs — the stdio command for every plugin that exposes an MCP
  * server (via `mcpServer` command/args or `mcpServerPath`), plus the
- * standalone MCP entries from config. The hub spawns its children from these.
+ * standalone MCP entries from config. The hub spawns its children from these
+ * raw specs and applies orphan protection itself (mcp-hub/child-guard.ts).
  */
 
 import { resolve } from "node:path";
 import { logWarn } from "../../util/log.js";
-import { wrapMcpServer } from "../mcp-hub/launcher.js";
 import { isBunRuntime } from "../../util/runtime.js";
 import { registry, reloadState } from "./registry.js";
 import type { McpServerConfig } from "./types.js";
@@ -71,14 +71,14 @@ export function getPluginMcpServers(
 
     if (plugin.mcpServer) {
       // Custom command/args (Python, Go, etc.) — no tsx wrapper
-      servers[`${plugin.name}-tools`] = wrapMcpServer({
+      servers[`${plugin.name}-tools`] = {
         command: plugin.mcpServer.command,
         args: [...plugin.mcpServer.args],
         env: baseEnv,
-      });
+      };
     } else if (plugin.mcpServerPath) {
       // TS server entry: bun runs it directly; node needs the tsx loader.
-      servers[`${plugin.name}-tools`] = wrapMcpServer({
+      servers[`${plugin.name}-tools`] = {
         command: isBunRuntime()
           ? process.execPath
           : process.platform === "win32"
@@ -90,17 +90,17 @@ export function getPluginMcpServers(
             ? ["tsx", plugin.mcpServerPath]
             : ["--import", tsxPath, plugin.mcpServerPath],
         env: baseEnv,
-      });
+      };
     }
   }
 
   for (const entry of registry.mcpEntries) {
     if (only !== undefined && !only.includes(entry.name)) continue;
-    servers[`${entry.name}-tools`] = wrapMcpServer({
+    servers[`${entry.name}-tools`] = {
       command: entry.command,
       args: [...(entry.args ?? [])],
       env: buildBridgeEnv(bridgeUrl, chatId, entry.env),
-    });
+    };
   }
 
   return servers;

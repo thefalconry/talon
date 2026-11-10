@@ -293,10 +293,39 @@ export function detectCodexAuth(
  * `"not supported when using Codex with a ChatGPT account"`. Match on
  * that substring (case-insensitive, generous on whitespace) so a
  * future wording shift still trips a soft-match.
+ *
+ * Also matches the 404 "model … does not exist or you do not have
+ * access" shape ({@link isCodexModelNotFoundError}): a model retired for
+ * the account is the same situation from the caller's point of view.
  */
 export function isChatGptModelMismatchError(message: string): boolean {
-  return /not\s+supported\s+when\s+using\s+codex\s+with\s+a\s+chatgpt\s+account/i.test(
-    message,
+  if (
+    /not\s+supported\s+when\s+using\s+codex\s+with\s+a\s+chatgpt\s+account/i.test(
+      message,
+    )
+  ) {
+    return true;
+  }
+  return isCodexModelNotFoundError(message);
+}
+
+/**
+ * Detect the "model retired / not granted" 404 the ChatGPT Codex endpoint
+ * returns once a model is withdrawn from an account:
+ *
+ *   `unexpected status 404 Not Found: The model \`gpt-5.5\` does not exist
+ *    or you do not have access to it.`
+ *
+ * Every Codex cron run hit exactly this from 2026-09-24 onward. It is as
+ * definitive as the 400 mismatch — the server names the model and says
+ * the account can't use it — so it takes the same fallback/learning path.
+ * Requires both the 404 status and the "model … does not exist" wording
+ * so an unrelated 404 (a missing MCP resource, a bad URL) can't trip it.
+ */
+export function isCodexModelNotFoundError(message: string): boolean {
+  return (
+    /\b404\b/.test(message) &&
+    /\bmodel\b[^\n]{0,120}?\bdoes\s+not\s+exist\b/i.test(message)
   );
 }
 

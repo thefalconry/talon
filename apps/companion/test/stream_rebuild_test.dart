@@ -94,7 +94,9 @@ void main() {
     // The finished first block is the very same widget instance: Flutter
     // skips it outright — no re-parse, no re-layout.
     expect(identical(tester.widget<MarkdownBody>(bodies.first), first), isTrue);
-    expect(tester.widget<MarkdownBody>(bodies.last).data, 'Third');
+    // The live tail carries the inline caret (see appendStreamingCaret).
+    expect(tester.widget<MarkdownBody>(bodies.last).data,
+        withInlineCaret('Third'));
   });
 
   testWidgets('the chat list builds only the tiles on screen', (tester) async {

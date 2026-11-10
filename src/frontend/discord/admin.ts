@@ -12,7 +12,7 @@ import { tailFile } from "../../util/tail-file.js";
 import type { TalonConfig } from "../../core/config/index.js";
 import type { Gateway } from "../../core/engine/gateway.js";
 import { resetSession, getAllSessions } from "../../storage/sessions.js";
-import { clearHistory } from "../../storage/history.js";
+import { markContextCleared } from "../../storage/history.js";
 import { todayLogDate } from "../../storage/daily-log.js";
 import { getChatSettings } from "../../storage/chat-settings.js";
 import {
@@ -87,7 +87,7 @@ export async function handleAdminSubcommand(
       const target = rest[0];
       if (!target) return send("Usage: /admin kill <chatId>");
       resetSession(target);
-      clearHistory(target);
+      markContextCleared(target); // soft reset: history rows are kept
       gateway?.backend?.sessions?.resetChat?.(target);
       return send(`Session ${target} reset.`);
     }

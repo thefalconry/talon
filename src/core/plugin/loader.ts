@@ -98,6 +98,15 @@ function registerPluginInstance(
   return loaded;
 }
 
+/**
+ * Run a plugin's init, waiting at most `timeoutMs` for it before boot moves
+ * on. The deadline bounds how long boot waits, not the init itself: a
+ * plugin stays registered either way (its tools are served from
+ * `mcpServer` whether or not init finished), so an init that outlives the
+ * deadline keeps running and, when it does finish, clears the alert the
+ * timeout raised — a slow handshake on a busy boot is a delay, not a
+ * failure that lingers until the next restart.
+ */
 export async function initPluginWithTimeout(
   plugin: TalonPlugin,
   config: Record<string, unknown>,
@@ -108,28 +117,54 @@ export async function initPluginWithTimeout(
   if (!plugin.init) return;
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-
   const alertKey = `plugin.${plugin.name}`;
+  const startedAt = Date.now();
+  // Started (and timed) only here, when this plugin's own init begins.
+  const init = Promise.resolve().then(() => plugin.init!(config));
+  const TIMED_OUT = Symbol("timed out");
+
   try {
-    await Promise.race([
-      Promise.resolve(plugin.init(config)),
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
-          reject(
-            new Error(`${timeoutLabel} timed out after ${timeoutMs / 1000}s`),
-          );
-        }, timeoutMs);
+    const outcome = await Promise.race([
+      init,
+      new Promise<typeof TIMED_OUT>((settle) => {
+        timer = setTimeout(() => settle(TIMED_OUT), timeoutMs);
         timer.unref?.();
       }),
     ]);
-    resolveAlert(alertKey, `Plugin "${plugin.name}" initialised normally.`);
+    if (outcome !== TIMED_OUT) {
+      resolveAlert(alertKey, `Plugin "${plugin.name}" initialised normally.`);
+      return;
+    }
+    const message = `${timeoutLabel} timed out after ${timeoutMs / 1000}s`;
+    logError("plugin", `${errorPrefix}: ${message}; still waiting for it`);
+    raiseAlert(
+      alertKey,
+      `Plugin "${plugin.name}" failed to initialise: ${message}. Its tools stay registered; this clears itself if init finishes late.`,
+    );
+    void init.then(
+      () => {
+        // Reloaded or unloaded meanwhile: this instance's verdict is moot.
+        if (registry.getByName(plugin.name)?.plugin !== plugin) return;
+        const took = Math.round((Date.now() - startedAt) / 1000);
+        log("plugin", `${plugin.name} init finished late (${took}s)`);
+        resolveAlert(
+          alertKey,
+          `Plugin "${plugin.name}" finished initialising late (${took}s).`,
+        );
+      },
+      (err: unknown) =>
+        logError(
+          "plugin",
+          `${errorPrefix} (after timing out): ${err instanceof Error ? err.message : err}`,
+        ),
+    );
   } catch (err) {
     logError(
       "plugin",
       `${errorPrefix}: ${err instanceof Error ? err.message : err}`,
     );
-    // Init runs once per boot or reload: a plugin that failed it stays
-    // half-loaded until someone fixes it, so this needs no threshold.
+    // An init that threw won't retry on its own: it needs a reload or
+    // restart, so this needs no threshold.
     raiseAlert(
       alertKey,
       `Plugin "${plugin.name}" failed to initialise: ${faultText(err)}. Its tools may not work until the next reload or restart.`,
