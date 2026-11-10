@@ -201,7 +201,78 @@ export interface ModelCatalog {
 export interface SessionBackend {
   resetChat?(chatId: string): void | Promise<void>;
   warmSession?(chatId: string): Promise<void>;
+  /**
+   * Compact the chat's resumable session — in place, or (`fork: true`) on a
+   * forked copy whose id comes back as `sessionId` while the chat's own
+   * session is left untouched. Used by the Weaver's idle compaction
+   * (`core/weaver/idle-compact.ts`, docs/cache-economics.md PR C). A
+   * backend without native compaction omits the slot; one that finds the
+   * feature missing at runtime answers `unsupported`. Either way nothing
+   * is compacted. Must never throw — a failure is a `failed` result.
+   */
+  compactChat?(
+    chatId: string,
+    opts?: SessionCompactOptions,
+  ): Promise<SessionCompactResult>;
+  /**
+   * Delete a session a forked `compactChat` produced and nobody resumed
+   * (a precomputed compaction that was discarded). Best-effort.
+   */
+  discardSession?(sessionId: string): Promise<void>;
 }
+
+export interface SessionCompactOptions {
+  /** Model to compact on — the model the chat's last request ran on (same cache). */
+  modelId?: string;
+  /** Hard cap on the compaction pass; the backend aborts it past this. */
+  timeoutMs?: number;
+  /**
+   * Compact a fork of the session instead of the session itself
+   * (precompute). The result's `sessionId` is the fork's.
+   */
+  fork?: boolean;
+  /**
+   * Aborts the pass (a turn arrived). Before the compaction landed the
+   * session is unchanged and the result is `aborted`.
+   */
+  signal?: AbortSignal;
+  /** Called once when the compaction has landed (the boundary arrived). */
+  onBoundary?: () => void;
+  /**
+   * Called once when the compaction request has been sent — the end of the
+   * pre-request phase (process spawn, MCP wait, command check). From here
+   * the pass's input is billed whether or not it is aborted.
+   */
+  onRequestSent?: () => void;
+}
+
+/** What a `compactChat` call did. */
+export type SessionCompactResult =
+  | {
+      status: "compacted";
+      /** Context size before compaction, as the backend measured it. */
+      preTokens: number;
+      /** Context size after, when the backend reported it. */
+      postTokens?: number;
+      /** The compacted session's resume handle, when reported. */
+      sessionId?: string;
+      /** What the compaction pass billed, when reported. */
+      usage?: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheRead: number;
+        cacheWrite: number;
+        costUsd?: number;
+      };
+    }
+  /** The backend can't compact this session (feature absent). */
+  | { status: "unsupported"; reason: string }
+  /** Nothing to compact (no resumable session yet). */
+  | { status: "skipped"; reason: string }
+  /** `signal` aborted the pass before it landed; the session is unchanged. */
+  | { status: "aborted" }
+  /** Compaction was attempted and did not land; the session is unchanged. */
+  | { status: "failed"; error: string };
 
 /**
  * Hot-reloadable tool surface. Used when a plugin is added or

@@ -89,6 +89,7 @@ const ALL_TOOLS_ORDER = [
   "ring_device",
   "remove_device",
   "get_device_status",
+  "wait_for_device",
   "device_exec",
   "device_computer",
   "device_list_dir",
