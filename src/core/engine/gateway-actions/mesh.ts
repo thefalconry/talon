@@ -24,6 +24,8 @@ export const meshHandlers: SharedActionHandlers = {
   // explicit target — a destructive action must never default-pick a device.
   remove_device: (body) =>
     getMeshService().removeDevice(body.device ?? body.deviceId),
+  set_device_tags: (body) =>
+    getMeshService().setDeviceTags(body.device ?? body.deviceId, body.tags),
   get_device_status: (body) =>
     getMeshService().getDeviceStatus(body.device ?? body.deviceId),
   wait_for_device: (body) =>
@@ -126,6 +128,7 @@ export const chatFreeActions: ReadonlySet<string> = new Set([
   "get_device_history",
   "ring_device",
   "remove_device",
+  "set_device_tags",
   "get_device_status",
   "wait_for_device",
   "device_exec",
