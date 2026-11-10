@@ -238,14 +238,16 @@ export const meshTools: ToolDefinition[] = [
   {
     name: "device_pull_file",
     description:
-      "Copy a file FROM a Talon companion device to the daemon host (workspace). Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds). Lands in workspace/mesh-pull/ unless a local path is given.",
+      "Copy a file FROM a Talon companion device to the daemon host. Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds). Lands in workspace/mesh-pull/ unless a local path is given.",
     schema: {
       device: deviceParam,
       remote_path: z.string().describe("Absolute source path on the device."),
       local_path: z
         .string()
         .optional()
-        .describe("Destination under the workspace (optional)."),
+        .describe(
+          "Destination on the daemon host: absolute, or relative to the workspace (optional).",
+        ),
     },
     execute: (params, bridge) => bridge("device_pull_file", params),
     tag: "mesh",
@@ -253,10 +255,14 @@ export const meshTools: ToolDefinition[] = [
   {
     name: "device_push_file",
     description:
-      "Copy a file FROM the daemon host (workspace) TO a Talon companion device. Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds).",
+      "Copy a file FROM the daemon host TO a Talon companion device. Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds).",
     schema: {
       device: deviceParam,
-      local_path: z.string().describe("Source path under the workspace."),
+      local_path: z
+        .string()
+        .describe(
+          "Source path on the daemon host: absolute, or relative to the workspace.",
+        ),
       remote_path: z
         .string()
         .describe("Absolute destination path on the device."),
