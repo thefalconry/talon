@@ -138,6 +138,121 @@ export function getLiveTurn(chatId: string): LiveTurnUsage | undefined {
   return liveTurns.get(chatId);
 }
 
+// ── Prompt-cache overlay ───────────────────────────────────────────────────
+//
+// What the chat's last main-session API request said about its prompt
+// cache: when it was sent, the TTL its cache write carried, the model it
+// ran on and the plan's rate-limit status. The idle-compaction timer
+// (core/weaver/idle-compact.ts) is anchored on it; `getSessionInfo`
+// carries it next to the session usage. Written by the turn handler like
+// the live-turn overlay above. In-memory only, like that timer: after a
+// restart nothing is known until the next turn, and nothing is armed.
+
+type PromptCacheTtlMs = 300_000 | 3_600_000;
+
+export type PromptCacheObservation = {
+  /** When the last main-session API request was sent (ms epoch). */
+  lastRequestAt: number;
+  /**
+   * TTL observed from that request's usage: 5 min when its cache write
+   * carried any `ephemeral_5m_input_tokens`, else 1 h when it carried
+   * `ephemeral_1h_input_tokens`. Inherited from the previous request when
+   * this one wrote nothing (a pure read keeps the TTL it was written
+   * with); undefined until a write has been seen.
+   */
+  ttlMs?: PromptCacheTtlMs;
+  /** The request read or wrote the cache (an uncached one arms nothing). */
+  cached: boolean;
+  /** Model id the request ran on (the id the turn was built with). */
+  modelId?: string;
+  /** True when the request ran under a guest scope (a different tool prefix). */
+  guest?: boolean;
+  /** Plan rate-limit status from the last `rate_limit_event`, when seen. */
+  rateLimitStatus?: "allowed" | "allowed_warning" | "rejected";
+};
+
+const promptCaches = new Map<
+  string,
+  Omit<PromptCacheObservation, "rateLimitStatus">
+>();
+/** Kept apart: a `rate_limit_event` can land before the turn's first request. */
+const rateLimitStatuses = new Map<
+  string,
+  NonNullable<PromptCacheObservation["rateLimitStatus"]>
+>();
+
+const HOUR_MS = 3_600_000;
+const FIVE_MIN_MS = 300_000;
+
+/**
+ * Record one main-session API request, with Claude Code's own TTL rule:
+ * a request that wrote to the cache carries the TTL of that write — 5 min
+ * when any `cache_creation.ephemeral_5m_input_tokens` were written (that
+ * part expires first), else 1 h when `ephemeral_1h_input_tokens` were —
+ * and a request that wrote nothing inherits the previous one's. A write
+ * without the breakdown (an older CLI) leaves the TTL unknown, so nothing
+ * is armed on it (Claude Code falls back to the TTL it requested, else
+ * 5 min; Talon does not see the request, so it does not guess). A request
+ * that neither read nor wrote the cache leaves nothing cached to expire
+ * (`cached: false`), so nothing is armed on it.
+ */
+export function notePromptCacheRequest(
+  chatId: string,
+  request: {
+    at: number;
+    modelId?: string;
+    guest?: boolean;
+    /** `cache_read_input_tokens`. */
+    cacheRead?: number;
+    /** `cache_creation_input_tokens`. */
+    cacheWrite?: number;
+    /** `cache_creation.ephemeral_1h_input_tokens`, when reported. */
+    cacheWrite1h?: number;
+    /** `cache_creation.ephemeral_5m_input_tokens`, when reported. */
+    cacheWrite5m?: number;
+  },
+): void {
+  const prev = promptCaches.get(chatId);
+  const write = request.cacheWrite ?? 0;
+  let ttlMs = prev?.ttlMs;
+  if (write > 0) {
+    if ((request.cacheWrite5m ?? 0) > 0) ttlMs = FIVE_MIN_MS;
+    else if ((request.cacheWrite1h ?? 0) > 0) ttlMs = HOUR_MS;
+    else ttlMs = undefined;
+  }
+  promptCaches.set(chatId, {
+    lastRequestAt: request.at,
+    cached: (request.cacheRead ?? 0) + write > 0,
+    ...(ttlMs !== undefined ? { ttlMs } : {}),
+    ...(request.modelId ? { modelId: request.modelId } : {}),
+    ...(request.guest ? { guest: true } : {}),
+  });
+}
+
+/** Record the plan's rate-limit status from an SDK `rate_limit_event`. */
+export function notePromptCacheRateLimit(
+  chatId: string,
+  status: PromptCacheObservation["rateLimitStatus"],
+): void {
+  if (status) rateLimitStatuses.set(chatId, status);
+}
+
+/** The chat's prompt-cache observation, if any request was seen. */
+export function getPromptCache(
+  chatId: string,
+): PromptCacheObservation | undefined {
+  const obs = promptCaches.get(chatId);
+  if (!obs) return undefined;
+  const status = rateLimitStatuses.get(chatId);
+  return { ...obs, ...(status ? { rateLimitStatus: status } : {}) };
+}
+
+/** Forget the observation (session reset, or the session was compacted). */
+export function clearPromptCache(chatId: string): void {
+  promptCaches.delete(chatId);
+  rateLimitStatuses.delete(chatId);
+}
+
 /**
  * Project the persisted cumulative usage through the live overlay: token
  * totals gain the in-progress turn's so-far counts; context fill, window
@@ -502,6 +617,44 @@ export function recordUsage(
   persist(chatId, session);
 }
 
+/**
+ * Record a compaction pass that ran outside a turn (the idle-compaction
+ * policy, docs/cache-economics.md PR C): the context fill drops to what the
+ * backend reported after compaction, and whatever the pass billed joins the
+ * session totals. Deliberately NOT `recordUsage` — a compaction is not a
+ * turn, so `lastTurnEndedAt`, the turn counters and the response-time
+ * figures stay where the last real turn left them.
+ */
+export function recordSessionCompaction(
+  chatId: string,
+  pass: {
+    /** Context fill after compaction; omitted = unknown, left unchanged. */
+    contextTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    costUsd?: number;
+  },
+): void {
+  const session = getSession(chatId);
+  const add = (n: number | undefined): number =>
+    typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+  session.usage.totalInputTokens += add(pass.inputTokens);
+  session.usage.totalOutputTokens += add(pass.outputTokens);
+  session.usage.totalCacheRead += add(pass.cacheRead);
+  session.usage.totalCacheWrite += add(pass.cacheWrite);
+  session.usage.estimatedCostUsd += add(pass.costUsd);
+  if (
+    typeof pass.contextTokens === "number" &&
+    Number.isFinite(pass.contextTokens) &&
+    pass.contextTokens >= 0
+  ) {
+    session.usage.contextTokens = pass.contextTokens;
+  }
+  persist(chatId, session);
+}
+
 export function setSessionName(chatId: string, name: string): void {
   const session = getSession(chatId);
   session.sessionName = name;
@@ -521,6 +674,7 @@ export function getLastBotMessageId(chatId: string): number | undefined {
 function removeSessionRow(chatId: string): void {
   cache.delete(chatId);
   clearLiveTurn(chatId);
+  clearPromptCache(chatId);
   try {
     repo.remove(chatId);
   } catch (err) {
@@ -658,6 +812,8 @@ export type SessionInfo = {
    * because any session write moves that.
    */
   lastTurnEndedAt?: number;
+  /** The last main-session request's prompt-cache facts (in-memory). */
+  promptCache?: PromptCacheObservation;
 };
 
 export function getSessionInfo(chatId: string): SessionInfo {
@@ -673,6 +829,7 @@ export function getSessionInfo(chatId: string): SessionInfo {
     lastModel: session?.lastModel,
     turnInProgress: liveTurns.has(chatId),
     lastTurnEndedAt: session?.lastTurnEndedAt,
+    promptCache: getPromptCache(chatId),
   };
 }
 
@@ -695,6 +852,7 @@ export function getAllSessions(): Array<{ chatId: string; info: SessionInfo }> {
       lastModel: session.lastModel,
       turnInProgress: liveTurns.has(chatId),
       lastTurnEndedAt: session.lastTurnEndedAt,
+      promptCache: getPromptCache(chatId),
     },
   }));
 }

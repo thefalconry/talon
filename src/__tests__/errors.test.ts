@@ -511,3 +511,25 @@ describe("TalonError", () => {
     expect(err.cause).toBe(cause);
   });
 });
+
+describe("content filter refusals", () => {
+  it.each([
+    "400 The response was filtered due to the prompt triggering Azure OpenAI's content management policy.",
+    '400 {"error":{"code":"content_filter","message":"blocked"}}',
+    "400 Your request was flagged by our safety system.",
+    "Your prompt may violate our usage policies.",
+  ])("classifies %s", (msg) => {
+    const err = classify(new Error(msg));
+    expect(err.reason).toBe("content_filter");
+    expect(err.retryable).toBe(false);
+    expect(friendlyMessage(err)).toContain("content filter");
+  });
+
+  it.each([
+    "400 invalid parameter: retry policy",
+    "403 blocked by CORS policy",
+    "400 safety_settings is not a valid field",
+  ])("leaves %s alone", (msg) => {
+    expect(classify(new Error(msg)).reason).not.toBe("content_filter");
+  });
+});
