@@ -77,3 +77,20 @@ func TestRequireOwnedPathsIgnoresMissingPaths(t *testing.T) {
 		t.Fatalf("missing path refused: %v", err)
 	}
 }
+
+func TestRequireFileOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uid := uint32(os.Getuid())
+	if err := requireFileOwner(path, uid); err != nil {
+		t.Fatalf("own file refused: %v", err)
+	}
+	if err := requireFileOwner(path, uid+1); err == nil {
+		t.Fatal("file owned by another uid accepted")
+	}
+	if err := requireFileOwner(path+".missing", uid); err == nil {
+		t.Fatal("missing file accepted")
+	}
+}
