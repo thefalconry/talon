@@ -15,74 +15,8 @@ import {
 import { runJobNow } from "../../background/cron/scheduler.js";
 import { parseCronSpec } from "../../background/cron/spec.js";
 import { log } from "../../../util/log.js";
-import type { Backend } from "../../agent-runtime/capabilities.js";
-import {
-  getBackendForChat,
-  getBackendIdForChat,
-  acquireBackendInstance,
-  isModelValidForBackend,
-} from "../backend-controller/index.js";
-import { validateJobModelOverride } from "./validation.js";
+import { validateIsolatedJobTarget } from "./validation.js";
 import type { SharedActionHandlers } from "./types.js";
-
-/**
- * Validate a cron `query` job's model + optional provider override. Cron runs
- * isolated, so unlike triggers it may target a different provider — the backend
- * just has to exist, support isolated (background) runs, and have the model as a
- * selectable id. Same backend (no provider) validates against the chat backend.
- * Returns an error string, or null when valid.
- */
-async function validateCronModelOverride(
-  chatKey: string,
-  model?: string,
-  provider?: string,
-): Promise<string | null> {
-  const chatBackendId = getBackendIdForChat(chatKey);
-  if (!provider || provider === chatBackendId) {
-    const capabilityErr = validateCronBackgroundCapability(
-      chatBackendId,
-      getBackendForChat(chatKey),
-    );
-    if (capabilityErr) return capabilityErr;
-    if (!model) return null;
-    return validateJobModelOverride(chatKey, model);
-  }
-
-  let acquired: Awaited<ReturnType<typeof acquireBackendInstance>> | null =
-    null;
-  try {
-    acquired = await acquireBackendInstance(provider);
-  } catch {
-    return `Unknown or unavailable provider "${provider}".`;
-  }
-
-  try {
-    const capabilityErr = validateCronBackgroundCapability(
-      provider,
-      acquired.backend,
-    );
-    if (capabilityErr) return capabilityErr;
-    if (!model) {
-      return `A 'provider' override also requires a 'model'.`;
-    }
-    if (!(await isModelValidForBackend(acquired.backend, model))) {
-      return `Model "${model}" is not a selectable model on provider "${provider}".`;
-    }
-    return null;
-  } catch (err) {
-    return `Could not validate provider override: ${err instanceof Error ? err.message : String(err)}`;
-  } finally {
-    await acquired.release();
-  }
-}
-
-function validateCronBackgroundCapability(
-  provider: string,
-  backend: Backend,
-): string | null {
-  if (backend.background) return null;
-  return `Provider "${provider}" can't run isolated jobs (no background capability).`;
-}
 
 export const cronHandlers: SharedActionHandlers = {
   create_cron_job: async (body, chatId, _backend, chatKey) => {
@@ -102,7 +36,7 @@ export const cronHandlers: SharedActionHandlers = {
     // Validate the target backend/model up front so a bad id or unsupported
     // backend is rejected here instead of silently failing at fire time.
     if (jobType === "query") {
-      const modelErr = await validateCronModelOverride(
+      const modelErr = await validateIsolatedJobTarget(
         chatKey,
         spec.model,
         spec.provider,
@@ -214,7 +148,7 @@ export const cronHandlers: SharedActionHandlers = {
       effective.type === "query" &&
       ("model" in updates || "provider" in updates || "type" in updates)
     ) {
-      const modelErr = await validateCronModelOverride(
+      const modelErr = await validateIsolatedJobTarget(
         chatKey,
         effective.model,
         effective.provider,
