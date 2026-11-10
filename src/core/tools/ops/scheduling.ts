@@ -3,7 +3,20 @@
  */
 
 import { z } from "zod";
+import { chatIdSchema } from "../schemas.js";
 import type { ToolDefinition } from "../types.js";
+
+/**
+ * Heartbeat-mode routing, as on the goal tools: a background run has no
+ * ambient chat, so managing an existing job needs an explicit `chat_id`. The
+ * handlers still check the job belongs to that chat. Creating and force-running
+ * jobs stay chat-only; neither has been needed from the background.
+ */
+const cronChatId = chatIdSchema
+  .optional()
+  .describe(
+    "Chat the job belongs to. Omit in chat mode (current chat). Required from heartbeat/background mode, where there is no ambient chat.",
+  );
 
 export const schedulingTools: ToolDefinition[] = [
   {
@@ -133,8 +146,8 @@ Model: leave "model"/"provider" unset to use this chat's model. Set "model" for 
     name: "list_cron_jobs",
     description:
       "List all cron jobs in the current chat: status, schedule (cron or interval), run count, last-run outcome, next run time, and any bounds (run cap, start/end window, catch-up policy, model).",
-    schema: {},
-    execute: (_params, bridge) => bridge("list_cron_jobs", {}),
+    schema: { chat_id: cronChatId },
+    execute: (params, bridge) => bridge("list_cron_jobs", params),
     tag: "scheduling",
   },
 
@@ -195,6 +208,7 @@ Model: leave "model"/"provider" unset to use this chat's model. Set "model" for 
         .describe(
           "New per-run time limit for a 'query' job, in seconds (60–14400).",
         ),
+      chat_id: cronChatId,
     },
     execute: (params, bridge) => bridge("edit_cron_job", params),
     tag: "scheduling",
@@ -216,6 +230,7 @@ Model: leave "model"/"provider" unset to use this chat's model. Set "model" for 
     description: "Delete a cron job permanently.",
     schema: {
       job_id: z.string().describe("Job ID to delete"),
+      chat_id: cronChatId,
     },
     execute: (params, bridge) => bridge("delete_cron_job", params),
     tag: "scheduling",

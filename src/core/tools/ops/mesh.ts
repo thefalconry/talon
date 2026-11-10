@@ -83,6 +83,26 @@ export const meshTools: ToolDefinition[] = [
     tag: "mesh",
   },
   {
+    name: "wait_for_device",
+    description:
+      "Wait until a mesh device comes online or goes offline, e.g. after an OS update or reboot, instead of polling list_devices. Returns as soon as it holds, or an error with the current state when the time runs out. Presence comes from heartbeats, so offline is reported up to a grace period late, and online doesn't prove a command will be answered. This holds the turn while it waits.",
+    schema: {
+      device: z
+        .string()
+        .describe("Device id, exact name, or unique name fragment."),
+      state: z
+        .enum(["online", "offline"])
+        .optional()
+        .describe("State to wait for (default online)."),
+      timeout_sec: z
+        .number()
+        .optional()
+        .describe("Max seconds to wait (default 60, max 300)."),
+    },
+    execute: (params, bridge) => bridge("wait_for_device", params),
+    tag: "mesh",
+  },
+  {
     name: "device_exec",
     description:
       "Run a shell command ON a Talon companion device (e.g. the phone) and return its stdout/stderr/exit code. The device executes it at the highest privilege it has (Android: root if the device grants it, else Shizuku's shell UID, else the app UID; the result's `via` says which). Use for on-device tasks like tidying a folder. Prefer `teleport` for a sustained session. For persistent streams (log tailing, watchers), background with output redirected to a file — `cmd > /tmp/out.log 2>&1 &` returns immediately; poll the file with device_read_file.",
@@ -218,14 +238,16 @@ export const meshTools: ToolDefinition[] = [
   {
     name: "device_pull_file",
     description:
-      "Copy a file FROM a Talon companion device to the daemon host (workspace). Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds). Lands in workspace/mesh-pull/ unless a local path is given.",
+      "Copy a file FROM a Talon companion device to the daemon host. Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds). Lands in workspace/mesh-pull/ unless a local path is given.",
     schema: {
       device: deviceParam,
       remote_path: z.string().describe("Absolute source path on the device."),
       local_path: z
         .string()
         .optional()
-        .describe("Destination under the workspace (optional)."),
+        .describe(
+          "Destination on the daemon host: absolute, or relative to the workspace (optional).",
+        ),
     },
     execute: (params, bridge) => bridge("device_pull_file", params),
     tag: "mesh",
@@ -233,10 +255,14 @@ export const meshTools: ToolDefinition[] = [
   {
     name: "device_push_file",
     description:
-      "Copy a file FROM the daemon host (workspace) TO a Talon companion device. Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds).",
+      "Copy a file FROM the daemon host TO a Talon companion device. Streams disk-to-disk in a single HTTP request at full throughput (no size cap; chunked fallback for old app builds).",
     schema: {
       device: deviceParam,
-      local_path: z.string().describe("Source path under the workspace."),
+      local_path: z
+        .string()
+        .describe(
+          "Source path on the daemon host: absolute, or relative to the workspace.",
+        ),
       remote_path: z
         .string()
         .describe("Absolute destination path on the device."),

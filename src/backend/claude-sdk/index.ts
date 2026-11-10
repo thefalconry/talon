@@ -6,7 +6,7 @@
  */
 
 export { initAgent, updateSystemPrompt } from "./state.js";
-export { warmSession } from "./warm.js";
+export { warmSession } from "./session/warm.js";
 export { getActiveQuery } from "./handler.js";
 export { buildMcpServers, buildPluginMcpServers } from "./options.js";
 export { runOneShotAgent, evictOrphanSubprocesses } from "./one-shot.js";
