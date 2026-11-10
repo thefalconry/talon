@@ -566,6 +566,59 @@ describe("spawnAgent settlement", () => {
     expect(record?.usage?.inputTokens).toBe(10);
   });
 
+  it("ends a run that keeps going after it reported, and settles it done", async () => {
+    initAgents({ execute, caps: { reportGraceMs: 20 } });
+    await withBackend(
+      (params) =>
+        new Promise((_, reject) => {
+          const id = params.contextLabel.slice("agent:".length);
+          params.abortController.signal.addEventListener("abort", () =>
+            reject(new Error("aborted by signal")),
+          );
+          agentRegistry.report(id, { summary: "found it" });
+        }),
+    );
+    const outcome = await spawn();
+    if (!outcome.ok) return;
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("done");
+    expect(record?.result).toEqual({ summary: "found it" });
+    expect(record?.error).toBeUndefined();
+  });
+
+  it("does not end a run that has not reported", async () => {
+    initAgents({ execute, caps: { reportGraceMs: 1 } });
+    let aborted = false;
+    await withBackend(async (params) => {
+      await new Promise((r) => setTimeout(r, 30));
+      aborted = params.abortController.signal.aborted;
+      params.onAssistantText?.("answer");
+    });
+    const outcome = await spawn();
+    if (!outcome.ok) return;
+    await settled(outcome.agentId);
+    expect(aborted).toBe(false);
+  });
+
+  it("still settles killed when a kill lands during the wind-down", async () => {
+    initAgents({ execute, caps: { reportGraceMs: 10_000 } });
+    await withBackend(
+      (params) =>
+        new Promise((_, reject) => {
+          const id = params.contextLabel.slice("agent:".length);
+          params.abortController.signal.addEventListener("abort", () =>
+            reject(new Error("aborted by signal")),
+          );
+          agentRegistry.report(id, { summary: "found it" });
+          agentRegistry.requestKill(id);
+        }),
+    );
+    const outcome = await spawn();
+    if (!outcome.ok) return;
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("killed");
+  });
+
   it("falls back to the last assistant text when nothing was reported", async () => {
     await withBackend(async (params) => {
       params.onAssistantText?.("first pass");
