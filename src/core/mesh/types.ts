@@ -36,6 +36,12 @@ export type DeviceInfo = {
    * empty.
    */
   capabilities?: string[];
+  /**
+   * Operator-assigned labels (e.g. "gpu", "build"), addressable as
+   * "tag:<name>". Set only through set_device_tags: a device's own
+   * registration can neither set nor clear them.
+   */
+  tags?: string[];
 };
 
 /**
@@ -101,6 +107,7 @@ export function toDeviceInfo(
     ...(value.capabilities?.length
       ? { capabilities: [...value.capabilities] }
       : {}),
+    ...(value.tags?.length ? { tags: [...value.tags] } : {}),
   };
 }
 
