@@ -202,6 +202,21 @@ describe("buildSdkOptions", () => {
     });
   });
 
+  it("pins the prompt-cache TTL only when cache.promptCacheTtl is set", async () => {
+    mockGetConfig.mockReturnValue({
+      ...mockGetConfig(),
+      cache: { promptCacheTtl: "1h" },
+    });
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-ttl");
+
+    expect(options.settings).toEqual({
+      cleanupPeriodDays: 100_000,
+      promptCacheTtl: "1h",
+    });
+  });
+
   describe("systemPrompt cache boundary", () => {
     it("falls back to the plain string when config has no parts", async () => {
       const { buildSdkOptions } =
