@@ -224,6 +224,19 @@ function idleTtlMs(): number {
 const REAP_INTERVAL_MS = 60_000;
 
 /**
+ * Soft ceiling on live children. The idle TTL alone doesn't bound the fleet:
+ * many chats active inside one TTL each hold a full plugin set, which is how
+ * a 16-plugin deployment reached 111 processes and filled swap. Past this,
+ * the least recently used idle children close early. A spawn is never
+ * refused and a busy child is never closed, so the count can still exceed
+ * the ceiling while every child has a call in flight.
+ */
+function maxChildren(): number {
+  const raw = Number(process.env.TALON_MCP_HUB_MAX_CHILDREN);
+  return Number.isInteger(raw) && raw > 0 ? raw : 64;
+}
+
+/**
  * Backstop for one forwarded tool call. The SDK's default (60s) would cut
  * any longer plugin call, though the upstream client allows far more —
  * its own timeout or cancel reaches the child through the forwarded
@@ -307,6 +320,7 @@ async function spawnChild(key: string, spec: ChildSpec): Promise<ChildHandle> {
   };
 
   children.set(key, entry);
+  evictOverCap(key);
   log(
     "gateway",
     `hub child started: ${describeKey(key)} (pid ${transport.pid ?? "?"})`,
@@ -437,6 +451,23 @@ export function retireAllChildren(): void {
   }
   if (entries.length > 0) {
     log("gateway", `hub: retired ${entries.length} MCP child(ren)`);
+  }
+}
+
+/** Close least recently used idle children until back under the ceiling. */
+function evictOverCap(justSpawned: string): void {
+  const excess = children.size - maxChildren();
+  if (excess <= 0) return;
+  const idle = [...children.entries()]
+    .filter(([key, entry]) => key !== justSpawned && entry.pending === 0)
+    .sort(([, a], [, b]) => a.lastActivity - b.lastActivity)
+    .slice(0, excess);
+  for (const [key, entry] of idle) {
+    children.delete(key);
+    entry.close().catch((err) => {
+      logError("gateway", `hub eviction of ${describeKey(key)} failed`, err);
+    });
+    log("gateway", `hub child evicted (over cap): ${describeKey(key)}`);
   }
 }
 
