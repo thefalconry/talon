@@ -83,6 +83,46 @@ export const meshTools: ToolDefinition[] = [
     tag: "mesh",
   },
   {
+    name: "wait_for_device",
+    description:
+      "Wait until a mesh device comes online or goes offline, e.g. after an OS update or reboot, instead of polling list_devices. Returns as soon as it holds, or an error with the current state when the time runs out. Presence comes from heartbeats, so offline is reported up to a grace period late, and online doesn't prove a command will be answered. This holds the turn while it waits.",
+    schema: {
+      device: z
+        .string()
+        .describe("Device id, exact name, or unique name fragment."),
+      state: z
+        .enum(["online", "offline"])
+        .optional()
+        .describe("State to wait for (default online)."),
+      timeout_sec: z
+        .number()
+        .optional()
+        .describe("Max seconds to wait (default 60, max 300)."),
+    },
+    execute: (params, bridge) => bridge("wait_for_device", params),
+    tag: "mesh",
+  },
+  {
+    name: "watch_device",
+    description:
+      "Return now and wake this chat when a mesh device comes online or goes offline, is removed, or the time runs out. Use it instead of wait_for_device for waits that shouldn't hold the turn, like an OS update. Presence comes from heartbeats, so offline is reported up to a grace period late. Watches are lost if the daemon restarts, with no wake.",
+    schema: {
+      device: z
+        .string()
+        .describe("Device id, exact name, or unique name fragment."),
+      state: z
+        .enum(["online", "offline"])
+        .optional()
+        .describe("State to watch for (default online)."),
+      timeout_sec: z
+        .number()
+        .optional()
+        .describe("Give up after this many seconds (default 6 h, max 24 h)."),
+    },
+    execute: (params, bridge) => bridge("watch_device", params),
+    tag: "mesh",
+  },
+  {
     name: "device_exec",
     description:
       "Run a shell command ON a Talon companion device (e.g. the phone) and return its stdout/stderr/exit code. The device executes it at the highest privilege it has (Android: root if the device grants it, else Shizuku's shell UID, else the app UID; the result's `via` says which). Use for on-device tasks like tidying a folder. Prefer `teleport` for a sustained session. For persistent streams (log tailing, watchers), background with output redirected to a file — `cmd > /tmp/out.log 2>&1 &` returns immediately; poll the file with device_read_file.",
