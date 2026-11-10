@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:talon_companion/src/services/device_exec.dart';
+import 'package:talon_companion/src/services/mesh_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -31,102 +32,121 @@ void main() {
     expect(r.data!['exitCode'], 7);
   });
 
-  test('a backgrounded child does not pin the exec open (pipe-drain grace)',
-      () async {
-    // The shell exits immediately; the orphaned `sleep` inherits stdout and
-    // holds the pipe open for 30s. Before the drain grace, this call hung
-    // until the mesh transport gave up — persistent streams (adb logcat &)
-    // were impossible to launch.
-    final sw = Stopwatch()..start();
-    final r = await exec.exec('sleep 30 > /dev/null 2>&1 & echo bg-started');
-    sw.stop();
-    expect(r.ok, isTrue);
-    expect(r.data!['stdout'], contains('bg-started'));
-    expect(r.data!['exitCode'], 0);
-    // Well under the old hang (bounded by exit + the 2s drain grace).
-    expect(sw.elapsed, lessThan(const Duration(seconds: 10)));
-  });
+  test(
+    'a backgrounded child does not pin the exec open (pipe-drain grace)',
+    () async {
+      // The shell exits immediately; the orphaned `sleep` inherits stdout and
+      // holds the pipe open for 30s. Before the drain grace, this call hung
+      // until the mesh transport gave up — persistent streams (adb logcat &)
+      // were impossible to launch.
+      final sw = Stopwatch()..start();
+      final r = await exec.exec('sleep 30 > /dev/null 2>&1 & echo bg-started');
+      sw.stop();
+      expect(r.ok, isTrue);
+      expect(r.data!['stdout'], contains('bg-started'));
+      expect(r.data!['exitCode'], 0);
+      // Well under the old hang (bounded by exit + the 2s drain grace).
+      expect(sw.elapsed, lessThan(const Duration(seconds: 10)));
+    },
+  );
 
   test('shell invocation matches the platform terminal', () {
-    expect(
-      DeviceExec.shellInvocation('echo x', os: 'windows'),
-      ['cmd', '/c', 'echo x'],
-    );
+    expect(DeviceExec.shellInvocation('echo x', os: 'windows'), [
+      'cmd',
+      '/c',
+      'echo x',
+    ]);
     // macOS is a *login* zsh so the user's real PATH (Homebrew etc.) applies.
-    expect(
-      DeviceExec.shellInvocation('echo x', os: 'macos'),
-      ['/bin/zsh', '-l', '-c', 'echo x'],
-    );
-    expect(
-      DeviceExec.shellInvocation('echo x', os: 'linux'),
-      ['sh', '-c', 'echo x'],
-    );
-    expect(
-      DeviceExec.shellInvocation('echo x', os: 'android'),
-      ['sh', '-c', 'echo x'],
-    );
+    expect(DeviceExec.shellInvocation('echo x', os: 'macos'), [
+      '/bin/zsh',
+      '-l',
+      '-c',
+      'echo x',
+    ]);
+    expect(DeviceExec.shellInvocation('echo x', os: 'linux'), [
+      'sh',
+      '-c',
+      'echo x',
+    ]);
+    expect(DeviceExec.shellInvocation('echo x', os: 'android'), [
+      'sh',
+      '-c',
+      'echo x',
+    ]);
   });
 
-  test('uses Shizuku only after the permission callback verifies readiness',
-      () async {
-    const channel = MethodChannel('talon/shizuku-test-ready');
-    var ready = false;
-    var permissionRequests = 0;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-      switch (call.method) {
-        case 'getStatus':
-          return {
-            'ready': ready,
-            'state': ready ? 'ready' : 'permission-needed'
-          };
-        case 'requestPermission':
-          permissionRequests++;
-          ready = true;
-          return true;
-        case 'exec':
-          return {'stdout': 'shell', 'stderr': '', 'exitCode': 0};
-      }
-      return null;
-    });
-    addTearDown(() => TestDefaultBinaryMessengerBinding
-        .instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, null));
+  test(
+    'uses Shizuku only after the permission callback verifies readiness',
+    () async {
+      const channel = MethodChannel('talon/shizuku-test-ready');
+      var ready = false;
+      var permissionRequests = 0;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            switch (call.method) {
+              case 'getStatus':
+                return {
+                  'ready': ready,
+                  'state': ready ? 'ready' : 'permission-needed',
+                };
+              case 'requestPermission':
+                permissionRequests++;
+                ready = true;
+                return true;
+              case 'exec':
+                return {'stdout': 'shell', 'stderr': '', 'exitCode': 0};
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
 
-    final elevated = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
-    final result = await elevated.exec('id');
+      final elevated = DeviceExec(
+        shizukuChannel: channel,
+        isAndroid: () => true,
+      );
+      final result = await elevated.exec('id');
 
-    expect(permissionRequests, 1);
-    expect(result.ok, isTrue);
-    expect(result.data!['via'], 'shizuku');
-    expect(result.data!['stdout'], 'shell');
-  });
+      expect(permissionRequests, 1);
+      expect(result.ok, isTrue);
+      expect(result.data!['via'], 'shizuku');
+      expect(result.data!['stdout'], 'shell');
+    },
+  );
 
-  test('marks app-UID results as limited when Shizuku is unavailable',
-      () async {
-    const channel = MethodChannel('talon/shizuku-test-unavailable');
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-      if (call.method == 'getStatus') {
-        return {'ready': false, 'state': 'not-running'};
-      }
-      if (call.method == 'requestPermission') return false;
-      return null;
-    });
-    addTearDown(() => TestDefaultBinaryMessengerBinding
-        .instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, null));
+  test(
+    'marks app-UID results as limited when Shizuku is unavailable',
+    () async {
+      const channel = MethodChannel('talon/shizuku-test-unavailable');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            if (call.method == 'getStatus') {
+              return {'ready': false, 'state': 'not-running'};
+            }
+            if (call.method == 'requestPermission') return false;
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
 
-    final limited = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
-    final result = await limited.exec('printf app');
+      final limited = DeviceExec(
+        shizukuChannel: channel,
+        isAndroid: () => true,
+      );
+      final result = await limited.exec('printf app');
 
-    expect(result.ok, isTrue);
-    expect(result.data!['via'], 'app');
-    // The fallback warning surfaces the actual Shizuku state (why it wasn't
-    // used) so a remote caller can diagnose without adb.
-    expect(result.data!['privilegeWarning'], contains('shizuku=not-running'));
-    expect(result.data!['privilegeWarning'], contains('app UID'));
-  });
+      expect(result.ok, isTrue);
+      expect(result.data!['via'], 'app');
+      // The fallback warning surfaces the actual Shizuku state (why it wasn't
+      // used) so a remote caller can diagnose without adb.
+      expect(result.data!['privilegeWarning'], contains('shizuku=not-running'));
+      expect(result.data!['privilegeWarning'], contains('app UID'));
+    },
+  );
 
   test('root outranks Shizuku and never falls through to it', () async {
     const root = MethodChannel('talon/root-test-ready');
@@ -134,24 +154,29 @@ void main() {
     var shizukuCalls = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(root, (call) async {
-      switch (call.method) {
-        case 'getStatus':
-          return {'tier': 'root', 'method': 'su', 'state': 'root via su', 'uid': 10123};
-        case 'exec':
-          return {
-            'stdout': 'uid=0',
-            'stderr': '',
-            'exitCode': 0,
-            'via': 'su',
-          };
-      }
-      return null;
-    });
+          switch (call.method) {
+            case 'getStatus':
+              return {
+                'tier': 'root',
+                'method': 'su',
+                'state': 'root via su',
+                'uid': 10123,
+              };
+            case 'exec':
+              return {
+                'stdout': 'uid=0',
+                'stderr': '',
+                'exitCode': 0,
+                'via': 'su',
+              };
+          }
+          return null;
+        });
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(shizuku, (call) async {
-      shizukuCalls++;
-      return null;
-    });
+          shizukuCalls++;
+          return null;
+        });
     addTearDown(() {
       final messenger =
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -175,114 +200,125 @@ void main() {
     expect(result.data!['stdout'], 'uid=0');
   });
 
-  test('a failing root path degrades to Shizuku for the same command',
-      () async {
-    const root = MethodChannel('talon/root-test-broken');
-    const shizuku = MethodChannel('talon/shizuku-test-rescue');
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(root, (call) async {
-      if (call.method == 'getStatus') {
-        return {'tier': 'root', 'method': 'agent', 'state': 'root via the adb agent'};
-      }
-      // The agent died between the probe and the command.
-      throw PlatformException(code: 'root_unavailable');
-    });
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(shizuku, (call) async {
-      switch (call.method) {
-        case 'getStatus':
-          return {'ready': true, 'state': 'ready', 'uid': 2000};
-        case 'exec':
-          return {'stdout': 'shell', 'stderr': '', 'exitCode': 0};
-      }
-      return null;
-    });
-    addTearDown(() {
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(root, null);
-      messenger.setMockMethodCallHandler(shizuku, null);
-    });
+  test(
+    'a failing root path degrades to Shizuku for the same command',
+    () async {
+      const root = MethodChannel('talon/root-test-broken');
+      const shizuku = MethodChannel('talon/shizuku-test-rescue');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(root, (call) async {
+            if (call.method == 'getStatus') {
+              return {
+                'tier': 'root',
+                'method': 'agent',
+                'state': 'root via the adb agent',
+              };
+            }
+            // The agent died between the probe and the command.
+            throw PlatformException(code: 'root_unavailable');
+          });
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(shizuku, (call) async {
+            switch (call.method) {
+              case 'getStatus':
+                return {'ready': true, 'state': 'ready', 'uid': 2000};
+              case 'exec':
+                return {'stdout': 'shell', 'stderr': '', 'exitCode': 0};
+            }
+            return null;
+          });
+      addTearDown(() {
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(root, null);
+        messenger.setMockMethodCallHandler(shizuku, null);
+      });
 
-    final dev = DeviceExec(
-      rootChannel: root,
-      shizukuChannel: shizuku,
-      isAndroid: () => true,
-    );
-    final result = await dev.exec('id -u');
+      final dev = DeviceExec(
+        rootChannel: root,
+        shizukuChannel: shizuku,
+        isAndroid: () => true,
+      );
+      final result = await dev.exec('id -u');
 
-    expect(result.ok, isTrue);
-    expect(result.data!['via'], 'shizuku');
-    // Root was demoted, so the tier reported afterwards matches what actually
-    // ran rather than the stale probe.
-    expect((await dev.privilegeStatus())['execPrivilege'], 'shizuku');
-  });
+      expect(result.ok, isTrue);
+      expect(result.data!['via'], 'shizuku');
+      // Root was demoted, so the tier reported afterwards matches what actually
+      // ran rather than the stale probe.
+      expect((await dev.privilegeStatus())['execPrivilege'], 'shizuku');
+    },
+  );
 
-  test('a Shizuku server started as root is reported as root, not shell',
-      () async {
-    const root = MethodChannel('talon/root-test-absent');
-    const shizuku = MethodChannel('talon/shizuku-test-uid0');
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(root, (call) async {
-      if (call.method == 'getStatus') {
-        return {'tier': 'app', 'method': 'none', 'state': 'no root'};
-      }
-      return null;
-    });
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(shizuku, (call) async {
-      if (call.method == 'getStatus') {
-        // uid 0 = Shizuku's own server was started from a root adb shell.
-        return {'ready': true, 'state': 'ready', 'uid': 0};
-      }
-      return null;
-    });
-    addTearDown(() {
-      final messenger =
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-      messenger.setMockMethodCallHandler(root, null);
-      messenger.setMockMethodCallHandler(shizuku, null);
-    });
+  test(
+    'a Shizuku server started as root is reported as root, not shell',
+    () async {
+      const root = MethodChannel('talon/root-test-absent');
+      const shizuku = MethodChannel('talon/shizuku-test-uid0');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(root, (call) async {
+            if (call.method == 'getStatus') {
+              return {'tier': 'app', 'method': 'none', 'state': 'no root'};
+            }
+            return null;
+          });
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(shizuku, (call) async {
+            if (call.method == 'getStatus') {
+              // uid 0 = Shizuku's own server was started from a root adb shell.
+              return {'ready': true, 'state': 'ready', 'uid': 0};
+            }
+            return null;
+          });
+      addTearDown(() {
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(root, null);
+        messenger.setMockMethodCallHandler(shizuku, null);
+      });
 
-    final dev = DeviceExec(
-      rootChannel: root,
-      shizukuChannel: shizuku,
-      isAndroid: () => true,
-    );
-    final privilege = await dev.privilegeStatus();
+      final dev = DeviceExec(
+        rootChannel: root,
+        shizukuChannel: shizuku,
+        isAndroid: () => true,
+      );
+      final privilege = await dev.privilegeStatus();
 
-    expect(privilege['execPrivilege'], 'root');
-    expect(privilege['execVia'], 'shizuku');
-    expect(privilege['shizuku'], contains('uid 0'));
-  });
+      expect(privilege['execPrivilege'], 'root');
+      expect(privilege['execVia'], 'shizuku');
+      expect(privilege['shizuku'], contains('uid 0'));
+    },
+  );
 
-  test('caps runaway exec output but keeps the tail (cwd marker survives)',
-      () async {
-    // 400KB of noise then a trailing marker — like the teleport wrapper's
-    // cwd marker, which is always the LAST bytes of stdout. The cap must
-    // elide the middle, never the tail.
-    final r = await exec.exec(
-      "dd if=/dev/zero bs=1024 count=400 2>/dev/null | tr '\\0' x; "
-      'printf TALON_TAIL_MARKER',
-    );
-    expect(r.ok, isTrue);
-    final stdout = r.data!['stdout'] as String;
-    expect(stdout.length, lessThan(300 * 1024));
-    expect(stdout, contains('chars truncated'));
-    expect(stdout, endsWith('TALON_TAIL_MARKER'));
-  });
+  test(
+    'caps runaway exec output but keeps the tail (cwd marker survives)',
+    () async {
+      // 400KB of noise then a trailing marker — like the teleport wrapper's
+      // cwd marker, which is always the LAST bytes of stdout. The cap must
+      // elide the middle, never the tail.
+      final r = await exec.exec(
+        "dd if=/dev/zero bs=1024 count=400 2>/dev/null | tr '\\0' x; "
+        'printf TALON_TAIL_MARKER',
+      );
+      expect(r.ok, isTrue);
+      final stdout = r.data!['stdout'] as String;
+      expect(stdout.length, lessThan(300 * 1024));
+      expect(stdout, contains('chars truncated'));
+      expect(stdout, endsWith('TALON_TAIL_MARKER'));
+    },
+  );
 
   test('desktop exec never consults Shizuku and stays unannotated', () async {
     const channel = MethodChannel('talon/shizuku-test-desktop');
     var channelCalls = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
-      channelCalls++;
-      return null;
-    });
-    addTearDown(() => TestDefaultBinaryMessengerBinding
-        .instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, null));
+          channelCalls++;
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
 
     final desktop = DeviceExec(shizukuChannel: channel, isAndroid: () => false);
     final result = await desktop.exec('echo desktop');
@@ -300,11 +336,19 @@ void main() {
     // First chunk truncates, second appends.
     final first = utf8.encode(content.substring(0, 256 * 1024));
     final second = utf8.encode(content.substring(256 * 1024));
-    final w1 =
-        await exec.writeFile(f, base64Encode(first), offset: 0, truncate: true);
+    final w1 = await exec.writeFile(
+      f,
+      base64Encode(first),
+      offset: 0,
+      truncate: true,
+    );
     expect(w1.ok, isTrue);
-    final w2 = await exec.writeFile(f, base64Encode(second),
-        offset: first.length, truncate: false);
+    final w2 = await exec.writeFile(
+      f,
+      base64Encode(second),
+      offset: first.length,
+      truncate: false,
+    );
     expect(w2.ok, isTrue);
 
     // Read back the first chunk and confirm eof=false, then final chunk.
@@ -316,30 +360,48 @@ void main() {
     expect(await File(f).length(), content.length);
   });
 
-  test('rejects an out-of-order or duplicate chunk instead of appending',
-      () async {
-    final f = '${tmp.path}/ordered.txt';
-    final w1 = await exec.writeFile(f, base64Encode(utf8.encode('hello ')),
-        offset: 0, truncate: true);
-    expect(w1.ok, isTrue);
+  test(
+    'rejects an out-of-order or duplicate chunk instead of appending',
+    () async {
+      final f = '${tmp.path}/ordered.txt';
+      final w1 = await exec.writeFile(
+        f,
+        base64Encode(utf8.encode('hello ')),
+        offset: 0,
+        truncate: true,
+      );
+      expect(w1.ok, isTrue);
 
-    // Duplicate retry of the first chunk (offset 0 again) must not append.
-    final dup = await exec.writeFile(f, base64Encode(utf8.encode('hello ')),
-        offset: 0, truncate: false);
-    expect(dup.ok, isFalse);
-    expect(dup.message, contains('out-of-order'));
+      // Duplicate retry of the first chunk (offset 0 again) must not append.
+      final dup = await exec.writeFile(
+        f,
+        base64Encode(utf8.encode('hello ')),
+        offset: 0,
+        truncate: false,
+      );
+      expect(dup.ok, isFalse);
+      expect(dup.message, contains('out-of-order'));
 
-    // A gap (offset beyond current size) must be rejected too.
-    final gap = await exec.writeFile(f, base64Encode(utf8.encode('!')),
-        offset: 100, truncate: false);
-    expect(gap.ok, isFalse);
+      // A gap (offset beyond current size) must be rejected too.
+      final gap = await exec.writeFile(
+        f,
+        base64Encode(utf8.encode('!')),
+        offset: 100,
+        truncate: false,
+      );
+      expect(gap.ok, isFalse);
 
-    // The correctly-ordered chunk still lands.
-    final w2 = await exec.writeFile(f, base64Encode(utf8.encode('world')),
-        offset: 6, truncate: false);
-    expect(w2.ok, isTrue);
-    expect(await File(f).readAsString(), 'hello world');
-  });
+      // The correctly-ordered chunk still lands.
+      final w2 = await exec.writeFile(
+        f,
+        base64Encode(utf8.encode('world')),
+        offset: 6,
+        truncate: false,
+      );
+      expect(w2.ok, isTrue);
+      expect(await File(f).readAsString(), 'hello world');
+    },
+  );
 
   test('lists a directory and stats a file', () async {
     await File('${tmp.path}/a.txt').writeAsString('hi');
@@ -375,15 +437,16 @@ void main() {
       const channel = MethodChannel('talon/shizuku-install-noshizuku');
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'getStatus') {
-          return {'ready': false, 'state': 'not-running'};
-        }
-        if (call.method == 'requestPermission') return false;
-        return null;
-      });
-      addTearDown(() => TestDefaultBinaryMessengerBinding
-          .instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, null));
+            if (call.method == 'getStatus') {
+              return {'ready': false, 'state': 'not-running'};
+            }
+            if (call.method == 'requestPermission') return false;
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
 
       final apk = File('${tmp.path}/app.apk')..writeAsStringSync('fake-apk');
       final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
@@ -397,27 +460,25 @@ void main() {
 
     /// A Shizuku bridge whose exec answers the staging step with [stage] and
     /// records every command it was asked to run.
-    List<String> mockShizuku(
-      MethodChannel channel,
-      Map<String, Object> stage,
-    ) {
+    List<String> mockShizuku(MethodChannel channel, Map<String, Object> stage) {
       final execCmds = <String>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {
-        if (call.method == 'getStatus') {
-          return {'ready': true, 'state': 'ready'};
-        }
-        if (call.method == 'exec') {
-          final cmd = (call.arguments as Map)['cmd'] as String;
-          execCmds.add(cmd);
-          if (cmd.contains('mktemp')) return stage;
-          return {'stdout': '', 'stderr': '', 'exitCode': 0};
-        }
-        return null;
-      });
-      addTearDown(() => TestDefaultBinaryMessengerBinding
-          .instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, null));
+            if (call.method == 'getStatus') {
+              return {'ready': true, 'state': 'ready'};
+            }
+            if (call.method == 'exec') {
+              final cmd = (call.arguments as Map)['cmd'] as String;
+              execCmds.add(cmd);
+              if (cmd.contains('mktemp')) return stage;
+              return {'stdout': '', 'stderr': '', 'exitCode': 0};
+            }
+            return null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
       return execCmds;
     }
 
@@ -429,7 +490,10 @@ void main() {
         'exitCode': 6,
       });
       final dev = DeviceExec(shizukuChannel: channel, isAndroid: () => true);
-      final r = await dev.installApk('/sdcard/Download/app.apk', sha256: goodSha);
+      final r = await dev.installApk(
+        '/sdcard/Download/app.apk',
+        sha256: goodSha,
+      );
       expect(r.ok, isFalse);
       expect(r.message, contains('integrity check failed'));
       expect(r.message, contains('deadbeef'));
@@ -533,18 +597,17 @@ void main() {
         final sum = await Process.run('sha256sum', [apk.path]);
         apkSha = (sum.stdout as String).split(' ').first;
         // A stand-in pm that records its arguments.
-        final pm = File('${bin.path}/pm')
-          ..writeAsStringSync('#!/bin/sh\necho "\$@" > "${tmp.path}/pm-args"\n');
+        final pm = File(
+          '${bin.path}/pm',
+        )..writeAsStringSync('#!/bin/sh\necho "\$@" > "${tmp.path}/pm-args"\n');
         await Process.run('chmod', ['+x', pm.path]);
       });
 
       Future<ProcessResult> sh(String script) => Process.run(
-            'sh',
-            ['-c', script],
-            environment: {
-              'PATH': '${bin.path}:${Platform.environment['PATH']}',
-            },
-          );
+        'sh',
+        ['-c', script],
+        environment: {'PATH': '${bin.path}:${Platform.environment['PATH']}'},
+      );
 
       test('stages into a fresh private directory', () async {
         final r = await sh(
@@ -569,7 +632,11 @@ void main() {
 
       test('a missing source exits 3', () async {
         final r = await sh(
-          DeviceExec.stageApkScript('${tmp.path}/nope.apk', '', root: root.path),
+          DeviceExec.stageApkScript(
+            '${tmp.path}/nope.apk',
+            '',
+            root: root.path,
+          ),
         );
         expect(r.exitCode, 3);
       });
@@ -585,8 +652,10 @@ void main() {
         File('$dir/update.apk').writeAsStringSync('evil-apk');
         await sh(DeviceExec.installApkWorker(dir, apkSha, 0));
         expect(args.existsSync(), isFalse);
-        expect(File('$dir/install.log').readAsStringSync(),
-            contains('integrity check failed'));
+        expect(
+          File('$dir/install.log').readAsStringSync(),
+          contains('integrity check failed'),
+        );
         expect(File('$dir/update.apk').existsSync(), isFalse);
 
         // Intact: pm installs it with -r and without -d.
@@ -596,7 +665,10 @@ void main() {
         final dir2 = (again.stdout as String).trim();
         await sh(DeviceExec.installApkWorker(dir2, apkSha, 0));
         expect(args.readAsStringSync().trim(), 'install -r $dir2/update.apk');
-        expect(File('$dir2/install.log').readAsStringSync(), contains('exit=0'));
+        expect(
+          File('$dir2/install.log').readAsStringSync(),
+          contains('exit=0'),
+        );
         expect(File('$dir2/update.apk').existsSync(), isFalse);
 
         // Opted in: the same pipeline adds -d for a deliberate rollback.
@@ -605,9 +677,12 @@ void main() {
         );
         final dir3 = (third.stdout as String).trim();
         await sh(
-            DeviceExec.installApkWorker(dir3, apkSha, 0, allowDowngrade: true));
+          DeviceExec.installApkWorker(dir3, apkSha, 0, allowDowngrade: true),
+        );
         expect(
-            args.readAsStringSync().trim(), 'install -r -d $dir3/update.apk');
+          args.readAsStringSync().trim(),
+          'install -r -d $dir3/update.apk',
+        );
       });
     }, skip: !Platform.isLinux);
 
@@ -617,5 +692,79 @@ void main() {
       expect(r, isNotNull);
       expect(r!.ok, isFalse); // non-Android → refused, but dispatched
     });
+  });
+
+  group('exec detach', () {
+    Future<Map<String, dynamic>> untilDone(DeviceExec e, String id) async {
+      for (var i = 0; i < 100; i++) {
+        final r = await e.execJob(id);
+        if (r.data!['running'] != true) return r.data!;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      fail('job never finished');
+    }
+
+    DeviceExec desktop() =>
+        DeviceExec(isAndroid: () => false)..allowElevation = () => false;
+
+    test(
+      'a command past its budget keeps running and reports its exit',
+      () async {
+        final e = desktop();
+        final r = await e.exec(
+          'echo early; sleep 2; echo late; exit 3',
+          timeoutMs: 1000,
+          detachOnTimeout: true,
+        );
+        expect(r.ok, isTrue);
+        expect(r.data!['detached'], isTrue);
+        expect(r.data!['stdout'], contains('early'));
+        final done = await untilDone(e, r.data!['jobId'] as String);
+        expect(done['exitCode'], 3);
+        expect(done['stdout'], contains('late'));
+      },
+      testOn: 'linux || mac-os',
+    );
+
+    test('a command inside its budget answers normally', () async {
+      final r = await desktop().exec(
+        'echo hi',
+        timeoutMs: 5000,
+        detachOnTimeout: true,
+      );
+      expect(r.data!['detached'], isNull);
+      expect(r.data!['exitCode'], 0);
+      expect(r.data!['stdout'], contains('hi'));
+    }, testOn: 'linux || mac-os');
+
+    test('without the flag a timeout still kills', () async {
+      final r = await desktop().exec('sleep 30', timeoutMs: 1000);
+      expect(r.ok, isFalse);
+      expect(r.data!['stderr'], contains('[killed: timeout]'));
+    }, testOn: 'linux || mac-os');
+
+    test('kill stops a job', () async {
+      final e = desktop();
+      final r = await e.exec(
+        'exec sleep 30',
+        timeoutMs: 1000,
+        detachOnTimeout: true,
+      );
+      final id = r.data!['jobId'] as String;
+      final killed = await e.execJob(id, action: 'kill');
+      expect(killed.data!['running'], isFalse);
+      expect(killed.data!['exitCode'], isNot(0));
+    }, testOn: 'linux || mac-os');
+
+    test('an unknown job fails with a reason', () async {
+      final r = await desktop().execJob('job_nope');
+      expect(r.ok, isFalse);
+      expect(r.message, contains('No such job'));
+    });
+  });
+
+  test('exec_job is advertised but not approval-gated; exec stays gated', () {
+    expect(MeshService.needsApproval('exec'), isTrue);
+    expect(MeshService.needsApproval(MeshService.execJobCapability), isFalse);
   });
 }

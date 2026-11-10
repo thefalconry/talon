@@ -8,10 +8,18 @@
  */
 
 import { describe, it, expect, afterEach, beforeAll } from "vitest";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  getMeshService,
   MeshRegistry,
   MeshService,
   setMeshService,
@@ -163,6 +171,7 @@ describe("native tools — local execution", () => {
         action: "native_bash",
         command: "echo streaming-head; sleep 30",
         timeout_sec: 1,
+        on_timeout: "kill",
       },
       1,
       undefined,
@@ -173,6 +182,83 @@ describe("native tools — local execution", () => {
     expect(res.text).toContain("streaming-head"); // partial output survives
     expect(res.text).toContain("background:true"); // self-correction hint
   }, 15_000);
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a command running past its budget and logs all its output",
+    async () => {
+      // Chat "1" has a wake wired, so detaching is the default.
+      getMeshService().execJobs.setWake(() => {});
+      const marker = join(tmpdir(), `detach-${process.pid}-${Date.now()}`);
+      const res = await nativeHandlers.native_bash(
+        {
+          action: "native_bash",
+          command: `echo before; sleep 2; echo after; touch ${marker}`,
+          timeout_sec: 1,
+        },
+        1,
+        undefined,
+        "1",
+      );
+      expect(res.ok).toBe(true);
+      expect(res.text).toContain("not killed");
+      const logPath = (res.text ?? "").match(/→ (\S+\.log)/)?.[1] as string;
+      let logged = "";
+      for (let i = 0; i < 40 && !logged.includes("after"); i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        logged = await readFile(logPath, "utf8").catch(() => "");
+      }
+      expect(logged).toContain("before");
+      expect(logged).toContain("after");
+      // The command really ran to its end, not just its output. `touch` runs
+      // after the final echo, so the log can show "after" before the marker exists.
+      let marked: string | undefined;
+      for (let i = 0; i < 40 && marked === undefined; i++) {
+        marked = await readFile(marker, "utf8").catch(() => undefined);
+        if (marked === undefined) await new Promise((r) => setTimeout(r, 100));
+      }
+      expect(marked).toBe("");
+      await rm(marker, { force: true });
+      // The log is private to this user.
+      expect((await stat(logPath)).mode & 0o077).toBe(0);
+    },
+    20_000,
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "kills at the budget when the run has no chat to wake, unless told to detach",
+    async () => {
+      getMeshService().execJobs.setWake(null);
+      const killed = await nativeHandlers.native_bash(
+        {
+          action: "native_bash",
+          command: "echo head; sleep 30",
+          timeout_sec: 1,
+        },
+        1,
+        undefined,
+        "heartbeat",
+      );
+      expect(killed.ok).toBe(false);
+      expect(killed.text).toContain("timed out after 1s");
+      expect(killed.text).toContain("head");
+
+      const kept = await nativeHandlers.native_bash(
+        {
+          action: "native_bash",
+          command: "sleep 3",
+          timeout_sec: 1,
+          on_timeout: "detach",
+        },
+        1,
+        undefined,
+        "heartbeat",
+      );
+      expect(kept.ok).toBe(true);
+      expect(kept.text).toContain("not killed");
+      expect(kept.text).toContain("No chat to wake");
+    },
+    20_000,
+  );
 
   // Background mode is POSIX-only (process groups, group kill, restart
   // survival) — the handler refuses on win32, so these run on POSIX legs.
@@ -596,6 +682,82 @@ describe("native tools — local execution", () => {
 });
 
 describe("native tools — teleport routing", () => {
+  it("detaches a teleported run only when the device can and the caller allows it", async () => {
+    const service = freshMesh();
+    setMeshService(service);
+    await service.register({
+      id: "phone",
+      name: "Pixel 9",
+      platform: "android",
+      appVersion: "1.0.0",
+      capabilities: ["exec", "exec_job"],
+    });
+    const sent: Array<Record<string, unknown>> = [];
+    service.registerTransport({
+      locate: () => {},
+      command: (cmd) =>
+        queueMicrotask(() => {
+          sent.push(cmd.params);
+          const detach = cmd.params.detachOnTimeout === true;
+          service.completeCommand({
+            commandId: cmd.id,
+            deviceId: cmd.deviceId,
+            ok: true,
+            data: detach
+              ? {
+                  detached: true,
+                  jobId: "job-1",
+                  stdout: "partial\n__TALON_CWD__/x__TALON_CWD_END__",
+                  stderr: "",
+                }
+              : {
+                  stdout: "done\n__TALON_CWD__/x__TALON_CWD_END__",
+                  stderr: "",
+                  exitCode: 0,
+                },
+          });
+        }),
+    });
+    await nativeHandlers.teleport(
+      { action: "teleport", device: "phone" },
+      1,
+      undefined,
+      "1",
+    );
+    // Chat "1" has a wake wired, so detaching is the default.
+    service.execJobs.setWake(() => {});
+
+    const res = await nativeHandlers.native_bash(
+      { action: "native_bash", command: "sleep 999" },
+      1,
+      undefined,
+      "1",
+    );
+    expect(sent[0]?.detachOnTimeout).toBe(true);
+    expect(res.ok).toBe(true);
+    expect(res.text).toContain("job-1");
+    expect(res.text).toContain("partial");
+    expect(res.text).not.toContain("__TALON_CWD__");
+
+    const killed = await nativeHandlers.native_bash(
+      { action: "native_bash", command: "sleep 999", on_timeout: "kill" },
+      1,
+      undefined,
+      "1",
+    );
+    expect(sent[1]?.detachOnTimeout).toBeUndefined();
+    expect(killed.text).toContain("exit 0");
+
+    // glob/search parse the output inline, so they never detach.
+    await nativeHandlers.native_glob(
+      { action: "native_glob", pattern: "*.txt" },
+      1,
+      undefined,
+      "1",
+    );
+    expect(sent[2]?.detachOnTimeout).toBeUndefined();
+  });
+
   it("teleports onto a device, routes bash through the mesh, and tracks cwd", async () => {
     const service = freshMesh();
     setMeshService(service);

@@ -7,16 +7,13 @@
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { closeSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { openBashLog } from "./bash-log.js";
 import { renderExec, type Result } from "./results.js";
 
 /** How long a background launch waits to catch fast failures. */
 const BACKGROUND_SETTLE_MS = 1_200;
-/** Where background job output lands (one log file per job). */
-const BACKGROUND_LOG_DIR = join(tmpdir(), "talon-bash");
 
 /**
  * Launch a command detached from the request cycle: its own process group,
@@ -47,27 +44,15 @@ export async function bashBackground(
         "or start it yourself: `powershell Start-Process -WindowStyle Hidden` with output redirected to a file.",
     };
   }
-  try {
-    await mkdir(BACKGROUND_LOG_DIR, { recursive: true });
-  } catch (err) {
-    return {
-      ok: false,
-      text: `Cannot create log dir ${BACKGROUND_LOG_DIR}: ${(err as Error).message}`,
-    };
-  }
-  const slug =
-    cmd
-      .replace(/[^a-zA-Z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 40) || "job";
-  const logPath = join(BACKGROUND_LOG_DIR, `${Date.now()}-${slug}.log`);
+  // A private, fresh log file: see bash-log.ts for why.
   let fd: number;
+  let logPath: string;
   try {
-    fd = openSync(logPath, "a");
+    ({ fd, path: logPath } = openBashLog(cmd));
   } catch (err) {
     return {
       ok: false,
-      text: `Cannot open log file ${logPath}: ${(err as Error).message}`,
+      text: `Cannot create a log file for the job: ${(err as Error).message}`,
     };
   }
   // Always detached: the win32 guard above returned already, so this only

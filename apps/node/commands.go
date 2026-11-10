@@ -61,6 +61,8 @@ func dispatch(ctx context.Context, n *Node, name string, params map[string]any) 
 		return cmdStatus(n)
 	case "exec":
 		return cmdExec(ctx, params)
+	case "exec_job":
+		return cmdExecJob(params)
 	case "read_file":
 		return cmdReadFile(params)
 	case "write_file":
@@ -197,6 +199,9 @@ func cmdExec(ctx context.Context, params map[string]any) commandResult {
 		timeoutMs = 300_000
 	}
 	budget := time.Duration(timeoutMs) * time.Millisecond
+	if detach, _ := params["detachOnTimeout"].(bool); detach {
+		return execDetachable(ctx, cmdline, cwd, budget)
+	}
 
 	var stdout, stderr cappedOutput
 	exitCode, timedOut, err := runShell(ctx, cmdline, cwd, budget, &stdout, &stderr)

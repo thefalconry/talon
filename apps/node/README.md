@@ -142,7 +142,11 @@ with `disableExec`, because a shell can reach any file.
 ### Command audit
 
 Every mesh command the node runs is logged to `audit.jsonl` next to
-`config.json` (0600, the newest 500–999 entries). One JSON line per command:
+`config.json` (0600, the newest 500–999 entries). The one exception is the
+daemon's `exec_job` status poll of a detached job, which repeats for as long as
+the job runs and would otherwise push real commands out of the ring; the `exec`
+that started the job and any `exec_job` kill are logged. One JSON line per
+command:
 
 ```json
 {
@@ -243,6 +247,23 @@ changes.
 
 On Unix, `SIGHUP` also reloads the node into whatever binary is on disk —
 handy for `systemctl reload`-style restarts after an out-of-band swap.
+
+## Long-running commands (`detachOnTimeout`, `exec_job`)
+
+`exec` with `detachOnTimeout: true` is not killed when `timeoutMs` lapses. It
+answers with `detached: true`, a `jobId` and the output so far, and keeps
+running. `exec_job` with that `jobId` returns its state and output (`action:
+"status"`, the default) or stops it (`action: "kill"`). Without the flag `exec`
+still kills at its budget.
+
+Jobs are held in memory: stopping the node kills them, and a job's result stays
+readable for an hour after it ends. At most 16 run at once (past that, a timeout
+kills as usual) and each stops after 24 hours. Output keeps the same head and
+tail cap as `exec`. A `disableExec` policy covers `exec_job` too. A self-update
+stops every running job before it restarts into the new binary (waiting at most
+5 seconds for them): the new process could not see them, report them, kill them
+or enforce their lifetime limit. A job killed at its 24-hour limit reports
+`timedOut: true` and ends its stderr with `[killed: timeout]`.
 
 ## Capabilities vs. the companion app
 

@@ -2,9 +2,10 @@ package main
 
 // On-device command audit (#1057 §5).
 //
-// Every mesh command this node runs leaves one JSON line in audit.jsonl next
-// to config.json: when, which command, what it touched, how it ended, how
-// long it took and which credential the node was using. The host owner reads
+// Every mesh command this node runs (bar the daemon's exec_job status polls,
+// see auditable) leaves one JSON line in audit.jsonl next to config.json:
+// when, which command, what it touched, how it ended, how long it took and
+// which credential the node was using. The host owner reads
 // it with `talon-node audit` (or the tail in `talon-node status`) without
 // having to trust the daemon's own account of what it asked for.
 //
@@ -198,6 +199,20 @@ func countLines(path string) int {
 	return len(splitLines(raw))
 }
 
+// auditable reports whether a command gets an audit line. Everything does,
+// except an exec_job status read: the daemon polls each detached job every
+// few seconds for as long as it runs (up to a day), and in a ring of
+// auditKeep entries those reads would push out the record of what the
+// daemon actually did. The exec that started the job and an exec_job kill
+// are both still recorded.
+func auditable(name string, params map[string]any) bool {
+	if name != "exec_job" {
+		return true
+	}
+	action, _ := params["action"].(string)
+	return action != "" && action != "status"
+}
+
 // newAuditEntry builds the record for one finished command.
 func newAuditEntry(
 	id, name string,
@@ -241,6 +256,8 @@ func auditTarget(name string, params map[string]any) string {
 		}
 		sum := sha256.Sum256([]byte(cmd))
 		return "sha256:" + hex.EncodeToString(sum[:])
+	case "exec_job":
+		return str("jobId")
 	case "computer":
 		// The action only: typed text and key presses can be secrets, and
 		// coordinates mean nothing without the screen they were aimed at.

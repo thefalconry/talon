@@ -9,6 +9,11 @@
  */
 
 import { getMeshService } from "../../../mesh/index.js";
+import {
+  CWD_CLOSE,
+  CWD_OPEN,
+  stripCwdMarker,
+} from "../../../mesh/devices/cwd-marker.js";
 import { getTeleport, setTeleportCwd } from "../../../mesh/devices/teleport.js";
 import { renderExec, type Result } from "./results.js";
 import { shellQuote } from "./shell.js";
@@ -18,16 +23,19 @@ const TELEPORT_TIMEOUT_HINT =
   "(Streaming/never-ending commands can't ride a teleported foreground call — " +
   "background it in-shell instead: `cmd > /tmp/out.log 2>&1 &`, then poll the log " +
   "with read, or bound the command itself: `logcat -d`, `timeout 30 …`, `head -n 200`.)";
-/** Markers used to recover the post-command working dir from a teleport shell. */
-const CWD_OPEN = "__TALON_CWD__";
-const CWD_CLOSE = "__TALON_CWD_END__";
 
 export async function bashTeleported(
   chatId: number,
   deviceId: string,
   cmd: string,
   timeoutMs: number,
+  /** Keep the command running past its budget, on devices that can. */
+  detachAtBudget = false,
+  /** The chat to wake when a detached job ends. */
+  chatKey = String(chatId),
 ): Promise<Result> {
+  const mesh = getMeshService();
+  const detach = detachAtBudget && (await mesh.canDetachExec(deviceId));
   const active = await getTeleport(chatId);
   const cwd = active?.cwd;
   // Wrap so the resulting working dir is reported back and persists across
@@ -37,14 +45,28 @@ export async function bashTeleported(
     `${cwd ? `cd ${shellQuote(cwd)} 2>/dev/null; ` : ""}` +
     `{ ${cmd}\n}; __talon_rc=$?; ` +
     `printf '${CWD_OPEN}%s${CWD_CLOSE}' "$(pwd 2>/dev/null)"; exit $__talon_rc`;
-  const dispatched = await getMeshService().dispatchCommand(
+  const dispatched = await mesh.dispatchCommand(
     deviceId,
     "exec",
-    { cmd: wrapped, timeoutMs },
+    { cmd: wrapped, timeoutMs, ...(detach ? { detachOnTimeout: true } : {}) },
     timeoutMs + 5_000,
   );
   if ("error" in dispatched) return { ok: false, text: dispatched.error };
   const { target, result } = dispatched;
+  const detached = mesh.adoptDetachedExec(
+    target,
+    result,
+    cmd,
+    timeoutMs,
+    chatKey,
+    stripCwdMarker,
+  );
+  if (detached !== null) {
+    return {
+      ok: true,
+      text: `${detached}\nA cd inside this command won't carry over to later calls.`,
+    };
+  }
   const data = result.data ?? {};
   let stdout = typeof data.stdout === "string" ? data.stdout : "";
   const stderr = typeof data.stderr === "string" ? data.stderr : "";

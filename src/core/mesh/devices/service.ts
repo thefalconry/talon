@@ -33,6 +33,8 @@
  * {@link BridgeLinks} (node provisioning, companion pairing, reachability).
  */
 
+import { stripCwdMarker } from "./cwd-marker.js";
+import { ExecJobTracker } from "./exec-jobs.js";
 import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import { clampExecOutput } from "../../../util/exec-output.js";
@@ -204,6 +206,8 @@ export class MeshService {
   private readonly audit: MeshAuditLog | null;
   /** `native.legacySharedToken` as the bridge last reported it. */
   private legacySharedToken = true;
+  /** Commands that outlived their exec budget and are being watched. */
+  readonly execJobs = new ExecJobTracker();
 
   constructor(
     private readonly registry = new MeshRegistry(),
@@ -797,12 +801,20 @@ export class MeshService {
     cmd: unknown,
     cwd?: unknown,
     timeoutSec?: unknown,
+    wakeChatKey?: unknown,
+    onTimeout?: unknown,
   ): Promise<MeshToolResult> {
     const command = typeof cmd === "string" ? cmd : "";
     if (!command.trim()) {
       return { ok: false, text: "No command given to run on the device." };
     }
     const budgetMs = clampExecTimeout(timeoutSec);
+    // Only a device that can answer exec_job may be asked to detach; anything
+    // else keeps the old kill-at-budget behaviour. A run with no chat to wake
+    // kills too, unless the caller asked for on_timeout:"detach".
+    const canDetach =
+      this.execJobs.shouldDetach(onTimeout, wakeChatKey) &&
+      (await this.canDetachExec(query));
     const dispatched = await this.dispatchCommand(
       query,
       "exec",
@@ -810,14 +822,117 @@ export class MeshService {
         cmd: command,
         ...(typeof cwd === "string" && cwd.trim() ? { cwd: cwd.trim() } : {}),
         timeoutMs: budgetMs,
+        ...(canDetach ? { detachOnTimeout: true } : {}),
       },
       budgetMs + 5_000, // let the device's own timeout fire first
     );
     if ("error" in dispatched) return { ok: false, text: dispatched.error };
+    const detached = this.adoptDetachedExec(
+      dispatched.target,
+      dispatched.result,
+      command,
+      budgetMs,
+      wakeChatKey,
+    );
+    if (detached !== null) return { ok: true, text: detached };
     return {
       ok: dispatched.result.ok,
       text: formatExecResult(dispatched.target, dispatched.result),
     };
+  }
+
+  /** Whether this device can keep a command running past its exec budget. */
+  async canDetachExec(query: unknown): Promise<boolean> {
+    await this.load();
+    const resolved = this.resolveDevice(query);
+    return (
+      !("error" in resolved) &&
+      resolved.target.capabilities?.includes("exec_job") === true
+    );
+  }
+
+  /**
+   * If the device moved a command to a background job, watch that job and
+   * return the text to show the caller. Null means it ran to its end as usual.
+   */
+  adoptDetachedExec(
+    target: DeviceInfo,
+    result: DeviceCommandResult,
+    cmd: string,
+    budgetMs: number,
+    wakeChatKey: unknown,
+    cleanOutput: (text: string) => string = (text) => text,
+  ): string | null {
+    const jobId = result.data?.jobId;
+    if (result.data?.detached !== true || typeof jobId !== "string") {
+      return null;
+    }
+    const wakes = this.execJobs.track({
+      jobId,
+      deviceId: target.id,
+      deviceName: target.name,
+      cmd,
+      wakeChatKey,
+      cleanOutput,
+      poll: (params) =>
+        this.sendCommand(target, "exec_job", params, FS_COMMAND_TIMEOUT_MS),
+    });
+    return formatDetachedExec(
+      target.name,
+      jobId,
+      budgetMs,
+      wakes,
+      cleanOutput(String(result.data?.stdout ?? "")),
+      String(result.data?.stderr ?? ""),
+    );
+  }
+
+  /** `device_exec_job`: read or kill a command that outlived its budget. */
+  async execJobOnDevice(
+    query: unknown,
+    jobId: unknown,
+    action?: unknown,
+  ): Promise<MeshToolResult> {
+    if (typeof jobId !== "string" || !jobId.trim()) {
+      return { ok: false, text: "A job_id is required." };
+    }
+    const verb = action === "kill" ? "kill" : "status";
+    const dispatched = await this.dispatchCommand(
+      query,
+      "exec_job",
+      { jobId: jobId.trim(), action: verb },
+      FS_COMMAND_TIMEOUT_MS,
+    );
+    if ("error" in dispatched) return { ok: false, text: dispatched.error };
+    const { target } = dispatched;
+    // A job started from a teleported bash ends with its cwd marker. Strip it
+    // here rather than per watch, so this still works after a daemon restart.
+    const result =
+      typeof dispatched.result.data?.stdout === "string"
+        ? {
+            ...dispatched.result,
+            data: {
+              ...dispatched.result.data,
+              stdout: stripCwdMarker(dispatched.result.data.stdout),
+            },
+          }
+        : dispatched.result;
+    if (!result.ok && !result.data) {
+      return {
+        ok: false,
+        text: result.message ?? `${target.name} could not read that job.`,
+      };
+    }
+    if (result.data?.running === true) {
+      const out = formatExecResult(target, result).split("\n").slice(1);
+      return {
+        ok: true,
+        text: [`[${target.name}] job ${jobId} still running`, ...out].join(
+          "\n",
+        ),
+      };
+    }
+    return { ok: result.ok, text: formatExecResult(target, result) };
   }
 
   /**
@@ -1402,6 +1517,28 @@ function clampExecTimeout(value: unknown): number {
     MAX_EXEC_TIMEOUT_MS,
     Math.max(1_000, Math.round(sec * 1_000)),
   );
+}
+
+/** Render a command that outlived its budget and became a device job. */
+function formatDetachedExec(
+  deviceName: string,
+  jobId: string,
+  budgetMs: number,
+  wakes: boolean,
+  stdout: string,
+  stderr: string,
+): string {
+  const parts = [
+    `[${deviceName}] still running after ${Math.round(budgetMs / 1000)}s, now background job ${jobId}.`,
+    wakes
+      ? "This chat gets a wake-up when it finishes. Use device_exec_job to read or kill it."
+      : "No chat to wake from this run. Poll it with device_exec_job, which can also kill it.",
+  ];
+  if (stdout.trim())
+    parts.push(`--- stdout so far ---\n${clampExecOutput(stdout.trimEnd())}`);
+  if (stderr.trim())
+    parts.push(`--- stderr so far ---\n${clampExecOutput(stderr.trimEnd())}`);
+  return parts.join("\n");
 }
 
 /** Render an exec result: exit code headline + stdout/stderr blocks. */

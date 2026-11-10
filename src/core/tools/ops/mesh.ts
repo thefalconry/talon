@@ -96,9 +96,33 @@ export const meshTools: ToolDefinition[] = [
       timeout_sec: z
         .number()
         .optional()
-        .describe("Max seconds to allow (default 60, max 300)."),
+        .describe(
+          "Seconds to wait for a result (default 60, max 300). A device that supports jobs keeps the command running past this as a background job; others kill it.",
+        ),
+      on_timeout: z
+        .enum(["detach", "kill"])
+        .optional()
+        .describe(
+          "What happens to the command at timeout_sec on a device that supports jobs. detach keeps it running as a background job; kill ends it and returns the partial output. Default: detach when this run has a chat to wake, kill otherwise (cron, heartbeat, sub-agents).",
+        ),
     },
     execute: (params, bridge) => bridge("device_exec", params),
+    tag: "mesh",
+  },
+  {
+    name: "device_exec_job",
+    description:
+      "Read or kill a device_exec command that outlived its timeout. On a device that supports it, device_exec no longer kills the command at timeout_sec: it returns a job id, the command keeps running on the device, and the chat that started it gets a wake-up with the exit code and output tail when it finishes. A node restart forgets its jobs.",
+    schema: {
+      device: deviceParam,
+      job_id: z.string().describe("Job id returned by device_exec."),
+      action: z
+        .enum(["status", "kill"])
+        .optional()
+        .describe("status (default) reads output so far; kill stops the job."),
+    },
+    execute: ({ action, ...params }, bridge) =>
+      bridge("device_exec_job", { ...params, job_action: action }),
     tag: "mesh",
   },
   {

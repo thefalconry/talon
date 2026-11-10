@@ -24,9 +24,14 @@ export interface ContextRegistry {
   numericForStringId(stringId: string): number | null;
   /** Resolve a numeric id to the string chat id of its active context. */
   stringIdForNumeric(numericChatId: number): string | null;
+  /** The same, also answering after the chat's turn ended. Not for routing. */
+  lastStringIdForNumeric(numericChatId: number): string | null;
   /** Number of live Threads in the registry. */
   size(): number;
 }
+
+/** Bound on remembered chat ids; the oldest is dropped first. */
+const MAX_LAST_KEYS = 1024;
 
 /**
  * Loom — the single registry of live chat Threads.
@@ -40,6 +45,8 @@ export interface ContextRegistry {
 export class Loom implements ContextRegistry {
   private readonly threads = new Map<string, Thread>();
   private readonly byNumeric = new Map<number, Thread>();
+  /** Numeric to string id of chats seen since start, kept after their turn. */
+  private readonly lastKeys = new Map<number, string>();
 
   /** Get the Thread for a chat, creating it on first reference. */
   thread(chatId: string): Thread {
@@ -103,6 +110,12 @@ export class Loom implements ContextRegistry {
     const thread = this.thread(key);
     thread.acquireContext(numericChatId);
     this.byNumeric.set(numericChatId, thread);
+    this.lastKeys.delete(numericChatId);
+    this.lastKeys.set(numericChatId, key);
+    if (this.lastKeys.size > MAX_LAST_KEYS) {
+      const oldest = this.lastKeys.keys().next().value;
+      if (oldest !== undefined) this.lastKeys.delete(oldest);
+    }
     return thread;
   }
 
@@ -155,6 +168,19 @@ export class Loom implements ContextRegistry {
    */
   stringIdForNumeric(numericChatId: number): string | null {
     return this.byNumeric.get(numericChatId)?.chatId ?? null;
+  }
+
+  /**
+   * Like `stringIdForNumeric`, but also answers after the turn ended, for
+   * calls that outlive it. Not for routing: it says who a chat was, not that
+   * it has a live context. Forgotten on restart.
+   */
+  lastStringIdForNumeric(numericChatId: number): string | null {
+    return (
+      this.stringIdForNumeric(numericChatId) ??
+      this.lastKeys.get(numericChatId) ??
+      null
+    );
   }
 
   private resolve(id: number | string): Thread | undefined {
