@@ -315,7 +315,14 @@ CREATE TABLE IF NOT EXISTS triggers (
   last_fire_payload TEXT,
   last_error        TEXT,
   persistent        INTEGER NOT NULL DEFAULT 0,
-  model             TEXT
+  model             TEXT,
+  -- Wake routing: NULL/'chat' resumes the chat session; 'isolated' runs
+  -- each wake as a one-shot job (own session, no chat history) with the
+  -- optional brief/provider/timeout below. See background/triggers/isolated.ts.
+  wake_mode         TEXT,
+  wake_instructions TEXT,
+  wake_provider     TEXT,
+  wake_timeout_ms   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_triggers_chat ON triggers(chat_id, status);
 
