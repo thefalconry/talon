@@ -320,7 +320,14 @@ CREATE TABLE IF NOT EXISTS triggers (
   last_fire_payload TEXT,
   last_error        TEXT,
   persistent        INTEGER NOT NULL DEFAULT 0,
-  model             TEXT
+  model             TEXT,
+  -- Wake routing: NULL/'chat' resumes the chat session; 'isolated' runs
+  -- each wake as a one-shot job (own session, no chat history) with the
+  -- optional brief/provider/timeout below. See background/triggers/isolated.ts.
+  wake_mode         TEXT,
+  wake_instructions TEXT,
+  wake_provider     TEXT,
+  wake_timeout_ms   INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_triggers_chat ON triggers(chat_id, status);
 
@@ -577,6 +584,13 @@ ALTER TABLE sessions ADD COLUMN last_turn_ended_at INTEGER`,
   addCronTimeoutMsColumn: `-- Column reconciliation for databases that shipped before a cron job could
 -- carry its own run timeout. Fresh databases get the column via schema.sql.
 ALTER TABLE cron_jobs ADD COLUMN timeout_ms INTEGER`,
+  addTriggerWakeModeColumn: `-- Column reconciliation for databases that shipped before a trigger could
+-- wake an isolated one-shot instead of the chat session. Fresh databases get
+-- the wake_* columns via schema.sql.
+ALTER TABLE triggers ADD COLUMN wake_mode TEXT`,
+  addTriggerWakeInstructionsColumn: `ALTER TABLE triggers ADD COLUMN wake_instructions TEXT`,
+  addTriggerWakeProviderColumn: `ALTER TABLE triggers ADD COLUMN wake_provider TEXT`,
+  addTriggerWakeTimeoutMsColumn: `ALTER TABLE triggers ADD COLUMN wake_timeout_ms INTEGER`,
   vacuumInto: `-- Transactionally consistent copy of the whole database into a new file,
 -- produced by SQLite itself (storage/db.ts snapshotDatabase). A backup
 -- must never copy a live .db byte-wise: the WAL holds committed pages the
@@ -875,27 +889,33 @@ export const triggersSql = {
   (id, chat_id, numeric_chat_id, name, language, script_path, log_path,
    description, status, created_at, started_at, ended_at, pid,
    pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-   last_fire_payload, last_error, persistent, model)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   last_fire_payload, last_error, persistent, model, wake_mode,
+   wake_instructions, wake_provider, wake_timeout_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?)`,
   get: `SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers WHERE id = ?`,
   getByName: `SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers WHERE chat_id = ? AND name = ? LIMIT 1`,
   listByChat: `SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers WHERE chat_id = ? ORDER BY created_at`,
   listAll: `SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers ORDER BY created_at`,
   remove: `DELETE FROM triggers WHERE id = ?`,
   count: `SELECT COUNT(*) AS n FROM triggers`,

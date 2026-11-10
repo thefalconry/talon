@@ -29,7 +29,7 @@ import {
 } from "./core/weaver/index.js";
 import { appendToJournal } from "./storage/journal.js";
 import { initPulse, resetPulseTimer } from "./core/background/pulse/pulse.js";
-import { initCron } from "./core/background/cron/scheduler.js";
+import { initCron, runIsolatedJob } from "./core/background/cron/scheduler.js";
 import { initPlanAlerts } from "./core/background/pulse/plan-alerts.js";
 import { setAdminNotifier } from "./core/frontend-runtime/admin-notify.js";
 import { askInlineChoice } from "./core/engine/inline-choice.js";
@@ -619,7 +619,7 @@ export async function initBackendAndDispatcher(
       model: config.heartbeatModel ?? config.model ?? null,
     }),
   });
-  initWakeSubsystems(config);
+  initWakeSubsystems(config, frontends);
   resumeTriggersAfterRestart().catch((err) =>
     log("triggers", `resumeAfterRestart failed: ${err}`),
   );
@@ -752,9 +752,20 @@ function initRecurringAgents(
  * scripts firing, and sub-agents reporting. Same dependency (the dispatcher),
  * same delivery shape, so they are wired together.
  */
-function initWakeSubsystems(config: TalonConfig): void {
+function initWakeSubsystems(
+  config: TalonConfig,
+  frontends: Parameters<typeof resolveFrontendByNumericId>[2],
+): void {
   initTriggers({
     execute: dispatcherExecute,
+    // Isolated-mode triggers run each wake through the cron `query` executor
+    // (own session, no chat history) and post a plain notice on failure.
+    runIsolated: runIsolatedJob,
+    notify: async (chatId: number, text: string, stringId?: string) =>
+      resolveFrontendByNumericId(chatId, stringId, frontends).sendMessage(
+        chatId,
+        text,
+      ),
     ...(config.triggers ? { caps: config.triggers } : {}),
   });
   initAgents({
