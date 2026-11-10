@@ -46,6 +46,9 @@ func platformTelemetry() map[string]string {
 			}
 		}
 	}
+	for k, v := range pendingUpdateTelemetry(rebootRequiredFile, rebootPkgsFile, updatesNoticeFile) {
+		out[k] = v
+	}
 	if raw, err := os.ReadFile("/etc/os-release"); err == nil {
 		for _, line := range strings.Split(string(raw), "\n") {
 			if name, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
