@@ -26,6 +26,12 @@ export const meshHandlers: SharedActionHandlers = {
     getMeshService().removeDevice(body.device ?? body.deviceId),
   get_device_status: (body) =>
     getMeshService().getDeviceStatus(body.device ?? body.deviceId),
+  wait_for_device: (body) =>
+    getMeshService().waitForDevice(
+      body.device ?? body.deviceId,
+      body.state,
+      body.timeout_sec,
+    ),
   // Exec + filesystem surface — the substrate teleport routes through.
   device_exec: (body) =>
     getMeshService().execOnDevice(
@@ -121,6 +127,7 @@ export const chatFreeActions: ReadonlySet<string> = new Set([
   "ring_device",
   "remove_device",
   "get_device_status",
+  "wait_for_device",
   "device_exec",
   "device_computer",
   "device_list_dir",
