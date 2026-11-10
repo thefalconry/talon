@@ -664,6 +664,55 @@ describe("canonical chat key", () => {
     expect(keyedView?.text).toContain("Native job");
   });
 
+  it("edit and delete accept chat_id, and it is not stored on the job", async () => {
+    const created = await handleSharedAction(
+      {
+        action: "create_cron_job",
+        name: "Bg",
+        schedule: "0 9 * * *",
+        type: "message",
+        content: "x",
+      },
+      CHAT_ID,
+    );
+    const id = idFromCreate(created as ActionResult);
+    const edited = await handleSharedAction(
+      { action: "edit_cron_job", job_id: id, enabled: false, chat_id: CHAT_ID },
+      CHAT_ID,
+    );
+    expect(edited?.ok).toBe(true);
+    expect(getCronJob(id)?.enabled).toBe(false);
+    expect(getCronJob(id)).not.toHaveProperty("chat_id");
+    const deleted = await handleSharedAction(
+      { action: "delete_cron_job", job_id: id, chat_id: CHAT_ID },
+      CHAT_ID,
+    );
+    expect(deleted?.ok).toBe(true);
+    expect(getCronJob(id)).toBeUndefined();
+  });
+
+  it("refuses to edit or delete another chat's job through chat_id", async () => {
+    const created = await handleSharedAction(
+      {
+        action: "create_cron_job",
+        name: "Other",
+        schedule: "0 9 * * *",
+        type: "message",
+        content: "x",
+      },
+      CHAT_ID,
+    );
+    const id = idFromCreate(created as ActionResult);
+    for (const action of ["edit_cron_job", "delete_cron_job"]) {
+      const res = await handleSharedAction(
+        { action, job_id: id, enabled: false, chat_id: CHAT_ID + 1 },
+        CHAT_ID + 1,
+      );
+      expect(res?.ok).toBe(false);
+    }
+    expect(getCronJob(id)?.enabled).toBe(true);
+  });
+
   it("trigger_create keys the trigger by the string id and keeps the numeric id for routing", async () => {
     const res = await handleSharedAction(
       {

@@ -14,6 +14,7 @@ type ErrorReason =
   | "network"
   | "auth"
   | "context_length"
+  | "content_filter"
   | "session_expired"
   | "bad_request"
   | "forbidden"
@@ -36,6 +37,17 @@ type ErrorReason =
  */
 const USAGE_LIMIT_RE =
   /you['’]ve hit your .{0,40}limit|you['’]re out of extra usage|claude ai usage limit reached|usage limit reached/i;
+
+/**
+ * A provider refused the content itself: Azure's `content_filter` code and
+ * "content management policy", OpenAI's "flagged by our safety system" and
+ * "usage policies" refusals. The same input gets the same answer, so it never
+ * retries, and /reset only helps once the offending content is out of the
+ * conversation. Deliberately narrow: "policy" or "safety" alone turn up in
+ * plenty of unrelated errors (CORS, sandbox, retry policies).
+ */
+const CONTENT_FILTER_RE =
+  /content[ _-]?filter|content management policy|flagged (?:by|as) .{0,40}(?:safety|moderation|policy)|violat\w* .{0,30}usage polic/i;
 
 /**
  * Ceiling on how long a failed attempt may have run and still earn the
@@ -151,6 +163,36 @@ const SESSION_EXPIRED_RE =
   /session.*expired|expired.*session|invalid.*resume|no conversation found/i;
 
 /**
+ * Refusals recognised by their text alone, checked before the generic
+ * branches. A usage limit ("usage limit reached", "You've hit your…") carries
+ * no 429 or rate-limit marker; a content refusal arrives as a plain 400 and
+ * would otherwise read as a broken request.
+ */
+function classifyRefusal(
+  msg: string,
+  status: number | undefined,
+  cause: Error | undefined,
+): TalonError | undefined {
+  if (USAGE_LIMIT_RE.test(msg)) {
+    return new TalonError(msg, {
+      reason: "usage_limit",
+      retryable: false,
+      status: status ?? 429,
+      cause,
+    });
+  }
+  if (CONTENT_FILTER_RE.test(msg)) {
+    return new TalonError(msg, {
+      reason: "content_filter",
+      retryable: false,
+      status,
+      cause,
+    });
+  }
+  return undefined;
+}
+
+/**
  * Wrap or classify any thrown value into a TalonError.
  * Call this at module boundaries (backend catch, bridge catch) to convert
  * raw errors into typed ones that callers can switch on.
@@ -176,17 +218,8 @@ export function classify(err: unknown): TalonError {
   const statusMatch = msg.match(/\b([45]\d{2})\b/);
   const status = statusMatch ? parseInt(statusMatch[1], 10) : undefined;
 
-  // Subscription usage limit — checked before the generic rate-limit
-  // branch ("usage limit reached" would otherwise never be reached, and
-  // "You've hit your…" carries no 429/rate-limit marker at all).
-  if (USAGE_LIMIT_RE.test(msg)) {
-    return new TalonError(msg, {
-      reason: "usage_limit",
-      retryable: false,
-      status: status ?? 429,
-      cause,
-    });
-  }
+  const refusal = classifyRefusal(msg, status, cause);
+  if (refusal) return refusal;
 
   // Rate limit
   if (/rate.?limit|429|too many requests/i.test(msg)) {
@@ -353,6 +386,8 @@ const FRIENDLY_MESSAGES: Record<ErrorReason, string> = {
   auth: "API key error. Bot operator: check the backend's credentials (admins: /auth to sign in again).",
   context_length:
     "Conversation too long for the context window. Use /reset to start fresh.",
+  content_filter:
+    "The provider's content filter refused this. Rephrase it, or remove the content that tripped it (/reset if it's earlier in the conversation).",
   session_expired: "Session expired. Retrying automatically...",
   bad_request: "Something went wrong. Try /reset if this keeps happening.",
   forbidden: "Permission denied for this action.",
@@ -370,6 +405,7 @@ const FRIENDLY_MESSAGES: Record<ErrorReason, string> = {
 const DETAIL_REASONS: ReadonlySet<ErrorReason> = new Set([
   "auth",
   "bad_request",
+  "content_filter",
   "forbidden",
   "unknown",
 ]);
