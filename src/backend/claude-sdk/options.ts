@@ -16,6 +16,12 @@ import type {
   HookJSONOutput,
 } from "@anthropic-ai/claude-agent-sdk";
 import type { PreparedSystemPrompt } from "../runtime/prompt/system-prompt.js";
+// Through the barrel, like the turn handler always has, so a test that
+// stubs the prompt assembly at the barrel stubs it here too.
+import {
+  buildDeliveryContract,
+  prepareSystemPrompt,
+} from "../runtime/index.js";
 import { getSession } from "../../storage/sessions.js";
 import { getChatSettings } from "../../storage/chat-settings.js";
 import { resolveModelId } from "../../core/models/catalog.js";
@@ -83,6 +89,8 @@ export type BuildSdkOptionsResult = {
   options: Options;
   activeModel: string;
   session: ReturnType<typeof getSession>;
+  /** The options were built for a guest turn (no built-ins, scoped plugins). */
+  guest: boolean;
 };
 
 // ── MCP server construction ─────────────────────────────────────────────────
@@ -101,6 +109,31 @@ export type BuildSdkOptionsResult = {
  */
 export function getActiveFrontends(): readonly string[] {
   return nonTerminalFrontends(getConfig().frontend);
+}
+
+/**
+ * The chat's frozen per-session system prompt, byte-for-byte what a chat
+ * turn sends: keyed by the session epoch (so it survives other chats'
+ * resets) with the frontend's delivery contract as the backend suffix.
+ * Shared by the turn handler and the idle-compaction pass (session/compact.ts),
+ * which must resume the session under the same prompt the turns use.
+ * `frontend` is the chat's owning messaging frontend, undefined in
+ * terminal mode (no delivery contract there).
+ */
+export function prepareChatSystemPrompt(
+  chatId: string,
+  frontend: string | undefined,
+): PreparedSystemPrompt {
+  const session = getSession(chatId);
+  return prepareSystemPrompt({
+    config: getConfig(),
+    previousTurns: session.turns,
+    chatId,
+    sessionEpoch: session.createdAt,
+    backendSuffix: frontend
+      ? buildDeliveryContract("tool-only", frontend)
+      : undefined,
+  });
 }
 
 /** Hub-backed MCP server entry — the SDK's `type: "http"` config. */
@@ -504,8 +537,14 @@ export function buildSdkOptions(
       ? { pathToClaudeCodeExecutable: config.claudeBinary }
       : {}),
     ...(env ? { env } : {}),
-    // Keep session transcripts: Talon resumes chats from them.
-    settings: { ...CLAUDE_RETENTION_SETTINGS },
+    // Keep session transcripts: Talon resumes chats from them. The cache
+    // TTL is the CLI's automatic choice unless `cache.promptCacheTtl` pins it.
+    settings: {
+      ...CLAUDE_RETENTION_SETTINGS,
+      ...(config.cache?.promptCacheTtl
+        ? { promptCacheTtl: config.cache.promptCacheTtl }
+        : {}),
+    },
     // Whitelist of SDK built-in tools. Anything not listed (e.g. WebSearch,
     // WebFetch, Monitor, PushNotification, RemoteTrigger, Plan/Worktree/Todo
     // helpers, AskUserQuestion, ScheduleWakeup) is unavailable to the model.
@@ -531,5 +570,5 @@ export function buildSdkOptions(
     ...(session.sessionId ? { resume: session.sessionId } : {}),
   };
 
-  return { options, activeModel, session };
+  return { options, activeModel, session, guest };
 }
