@@ -20,24 +20,25 @@ import asset6 from "../../../prompts/mem0.md" with { type: "file" };
 import asset7 from "../../../prompts/mempalace.md" with { type: "file" };
 import asset8 from "../../../prompts/native.md" with { type: "file" };
 import asset9 from "../../../prompts/system/agent-brief.md" with { type: "file" };
-import asset10 from "../../../prompts/system/contract-text-or-tools.md" with { type: "file" };
-import asset11 from "../../../prompts/system/contract-text-preferred.md" with { type: "file" };
-import asset12 from "../../../prompts/system/contract-tool-only.md" with { type: "file" };
-import asset13 from "../../../prompts/system/cron.md" with { type: "file" };
-import asset14 from "../../../prompts/system/daily-memory.md" with { type: "file" };
-import asset15 from "../../../prompts/system/goals.md" with { type: "file" };
-import asset16 from "../../../prompts/system/heartbeat-agent.md" with { type: "file" };
-import asset17 from "../../../prompts/system/live-state.md" with { type: "file" };
-import asset18 from "../../../prompts/system/memory-core-view.md" with { type: "file" };
-import asset19 from "../../../prompts/system/memory-recall.md" with { type: "file" };
-import asset20 from "../../../prompts/system/persistent-memory.md" with { type: "file" };
-import asset21 from "../../../prompts/system/skills.md" with { type: "file" };
-import asset22 from "../../../prompts/system/triggers.md" with { type: "file" };
-import asset23 from "../../../prompts/system/workspace.md" with { type: "file" };
-import asset24 from "../../../prompts/teams.md" with { type: "file" };
-import asset25 from "../../../prompts/telegram.md" with { type: "file" };
-import asset26 from "../../../prompts/terminal.md" with { type: "file" };
-import asset27 from "../../../prompts/whatsapp.md" with { type: "file" };
+import asset10 from "../../../prompts/system/contract-text-only.md" with { type: "file" };
+import asset11 from "../../../prompts/system/contract-text-or-tools.md" with { type: "file" };
+import asset12 from "../../../prompts/system/contract-text-preferred.md" with { type: "file" };
+import asset13 from "../../../prompts/system/contract-tool-only.md" with { type: "file" };
+import asset14 from "../../../prompts/system/cron.md" with { type: "file" };
+import asset15 from "../../../prompts/system/daily-memory.md" with { type: "file" };
+import asset16 from "../../../prompts/system/goals.md" with { type: "file" };
+import asset17 from "../../../prompts/system/heartbeat-agent.md" with { type: "file" };
+import asset18 from "../../../prompts/system/live-state.md" with { type: "file" };
+import asset19 from "../../../prompts/system/memory-core-view.md" with { type: "file" };
+import asset20 from "../../../prompts/system/memory-recall.md" with { type: "file" };
+import asset21 from "../../../prompts/system/persistent-memory.md" with { type: "file" };
+import asset22 from "../../../prompts/system/skills.md" with { type: "file" };
+import asset23 from "../../../prompts/system/triggers.md" with { type: "file" };
+import asset24 from "../../../prompts/system/workspace.md" with { type: "file" };
+import asset25 from "../../../prompts/teams.md" with { type: "file" };
+import asset26 from "../../../prompts/telegram.md" with { type: "file" };
+import asset27 from "../../../prompts/terminal.md" with { type: "file" };
+import asset28 from "../../../prompts/whatsapp.md" with { type: "file" };
 
 /** rel path (posix, under prompts/) → embedded file path (/$bunfs/… when compiled). */
 const ASSETS: Record<string, string> = {
@@ -51,24 +52,25 @@ const ASSETS: Record<string, string> = {
   "mempalace.md": asset7,
   "native.md": asset8,
   "system/agent-brief.md": asset9,
-  "system/contract-text-or-tools.md": asset10,
-  "system/contract-text-preferred.md": asset11,
-  "system/contract-tool-only.md": asset12,
-  "system/cron.md": asset13,
-  "system/daily-memory.md": asset14,
-  "system/goals.md": asset15,
-  "system/heartbeat-agent.md": asset16,
-  "system/live-state.md": asset17,
-  "system/memory-core-view.md": asset18,
-  "system/memory-recall.md": asset19,
-  "system/persistent-memory.md": asset20,
-  "system/skills.md": asset21,
-  "system/triggers.md": asset22,
-  "system/workspace.md": asset23,
-  "teams.md": asset24,
-  "telegram.md": asset25,
-  "terminal.md": asset26,
-  "whatsapp.md": asset27,
+  "system/contract-text-only.md": asset10,
+  "system/contract-text-or-tools.md": asset11,
+  "system/contract-text-preferred.md": asset12,
+  "system/contract-tool-only.md": asset13,
+  "system/cron.md": asset14,
+  "system/daily-memory.md": asset15,
+  "system/goals.md": asset16,
+  "system/heartbeat-agent.md": asset17,
+  "system/live-state.md": asset18,
+  "system/memory-core-view.md": asset19,
+  "system/memory-recall.md": asset20,
+  "system/persistent-memory.md": asset21,
+  "system/skills.md": asset22,
+  "system/triggers.md": asset23,
+  "system/workspace.md": asset24,
+  "teams.md": asset25,
+  "telegram.md": asset26,
+  "terminal.md": asset27,
+  "whatsapp.md": asset28,
 };
 
 /** Read an embedded prompt by its rel path (e.g. "system/cron.md"). */

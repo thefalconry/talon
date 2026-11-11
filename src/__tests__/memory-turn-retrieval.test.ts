@@ -306,9 +306,9 @@ describe("the prompt seam / no backend forgets the field", () => {
         at = source.indexOf("formatUserPrompt({", at + 1);
       }
     }
-    // The five production backends: claude-sdk, codex, agy,
+    // The six production backends: claude-sdk, codex, agy, kimi,
     // openai-agents, remote-server (kilo + opencode share it).
-    expect(callSites).toHaveLength(5);
+    expect(callSites).toHaveLength(6);
   });
 });
 

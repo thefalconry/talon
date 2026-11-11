@@ -43,6 +43,7 @@ const LABELS: Record<string, string> = {
   opencode: "OpenCode sessions",
   kilo: "Kilo sessions",
   agy: "Antigravity sign-in and conversations",
+  kimi: "Kimi sessions and provider config",
 };
 
 /** Every path whose loss costs the operator something, with what it holds. */

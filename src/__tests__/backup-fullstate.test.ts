@@ -32,6 +32,7 @@ import { createDecompressor } from "../core/backup/archive/zstd.js";
 import { resolveBackupSettings, excludeForRoot } from "../core/backup/plan.js";
 import { partPath } from "../core/backup/store.js";
 import {
+  backendStoreDirs,
   claudeProjectSlug,
   discoverSessionRoots,
 } from "../core/backup/sources/sessions.js";
@@ -261,6 +262,46 @@ describe("full-state snapshot contents", () => {
     expect(roots.every((r) => r.root.startsWith("sessions/claude/"))).toBe(
       true,
     );
+  });
+
+  it("captures kimi sessions from KIMI_CODE_HOME or ~/.kimi-code when kimi is enabled", async () => {
+    const m = machine();
+    mkdirSync(join(m.userHome, ".kimi-code", "sessions", "wd_ws_1", "s1"), {
+      recursive: true,
+    });
+    const custom = join(m.userHome, "kimi-home");
+    mkdirSync(join(custom, "sessions"), { recursive: true });
+    const config = { backend: "claude", enabledBackends: ["kimi"] };
+
+    const byDefault = await discoverSessionRoots({
+      home: m.home,
+      userHome: m.userHome,
+      env: {},
+      config,
+    });
+    expect(byDefault).toContainEqual({
+      root: "sessions/kimi/sessions",
+      source: join(m.userHome, ".kimi-code", "sessions"),
+      kind: "session-store",
+    });
+
+    const moved = await discoverSessionRoots({
+      home: m.home,
+      userHome: m.userHome,
+      env: { KIMI_CODE_HOME: custom },
+      config,
+    });
+    expect(moved).toContainEqual({
+      root: "sessions/kimi/sessions",
+      source: join(custom, "sessions"),
+      kind: "session-store",
+    });
+
+    // The persistence check watches the whole kimi home (keys + sessions).
+    expect(backendStoreDirs(m.userHome, {}, config)).toContainEqual({
+      backend: "kimi",
+      path: join(m.userHome, ".kimi-code"),
+    });
   });
 
   it("never looks outside a scratch Talon home unless told which user home to use", async () => {

@@ -577,6 +577,7 @@ const configSchema = z.object({
    */
   codexBinary: z.string().optional(),
   agyBinary: z.string().optional(),
+  kimiBinary: z.string().optional(),
   model: z.string().default("default"),
   /**
    * Per-backend default model overrides. Keyed by backend id

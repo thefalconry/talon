@@ -34,6 +34,7 @@ const ALL_BACKENDS = [
   "codex",
   "agy",
   "openai-agents",
+  "kimi",
 ] as const;
 
 beforeAll(async () => {
@@ -48,10 +49,11 @@ beforeAll(async () => {
   await import("../backend/codex/factory.js");
   await import("../backend/agy/factory.js");
   await import("../backend/openai-agents/factory.js");
+  await import("../backend/kimi/factory.js");
 }, 30_000);
 
 describe("backend registry parity — all built-in backends present", () => {
-  it("registers Claude, Kilo, OpenCode, Codex, Antigravity and OpenAI Agents", () => {
+  it("registers Claude, Kilo, OpenCode, Codex, Antigravity, OpenAI Agents and Kimi", () => {
     for (const id of ALL_BACKENDS) {
       expect(hasBackend(id), `expected backend "${id}" registered`).toBe(true);
     }
@@ -63,6 +65,7 @@ describe("backend registry parity — all built-in backends present", () => {
     expect(ids).toContain("claude");
     expect(ids).toContain("codex");
     expect(ids).toContain("kilo");
+    expect(ids).toContain("kimi");
     expect(ids).toContain("opencode");
     expect(ids).toContain("openai-agents");
     // Sorted property: ids should equal their sorted-copy
@@ -92,6 +95,7 @@ describe("backend registry parity — all built-in backends present", () => {
     expect(getBackend("codex")?.label).toBe("Codex");
     expect(getBackend("agy")?.label).toBe("Antigravity");
     expect(getBackend("openai-agents")?.label).toBe("OpenAI Agents");
+    expect(getBackend("kimi")?.label).toBe("Kimi");
   });
 
   it("gives OpenCode and Kilo live tool-refresh and prompt-control slots", async () => {
