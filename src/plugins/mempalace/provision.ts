@@ -52,6 +52,13 @@ export const MEMPALACE_PINNED_VERSION = "3.10.0";
 /** Minimum python for the managed venv (matches mempalace's supported floor). */
 const PYTHON_MIN = { major: 3, minor: 10 };
 
+/**
+ * Newest python the venv may use. chromadb needs onnxruntime, which publishes
+ * no cp315 wheels yet, so 3.15 fails with pip's ResolutionImpossible. Raise
+ * this once onnxruntime ships them.
+ */
+const PYTHON_MAX = { major: 3, minor: 14 };
+
 /** One-time palace migration ledger key (mempalace >= 3.4 wing renames). */
 const WING_MIGRATION = "wing-names";
 /** First mempalace release that ships `migrate-wings`. */
@@ -412,9 +419,9 @@ async function reconcile(ctx: ReconcileContext): Promise<ProvisionOutcome> {
 
   const recreateVenv = async (): Promise<string | undefined> => {
     const existedBefore = pathExists(venvDir);
-    const base = await findBasePython(exec, platform, PYTHON_MIN);
+    const base = await findBasePython(exec, platform, PYTHON_MIN, PYTHON_MAX);
     if (!base) {
-      return `no python >=${PYTHON_MIN.major}.${PYTHON_MIN.minor} found on PATH — install one, or point mempalace.pythonPath at an environment you manage`;
+      return `no python ${PYTHON_MIN.major}.${PYTHON_MIN.minor}-${PYTHON_MAX.major}.${PYTHON_MAX.minor} found on PATH — install one, or point mempalace.pythonPath at an environment you manage`;
     }
     // --clear empties a broken venv in place; no recursive delete needed.
     const created = await exec(

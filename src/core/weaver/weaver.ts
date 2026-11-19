@@ -42,6 +42,11 @@ import { startTurnCpu } from "./turn-cpu.js";
 import { startTypingLoop } from "./typing-loop.js";
 import { resolveWarp } from "./warp-resolver.js";
 import {
+  IdleCompactor,
+  type IdleCompactorDeps,
+  type IdleCompactSettings,
+} from "./idle-compact.js";
+import {
   createTurnTrace,
   logTurnEnd,
   logTurnFailure,
@@ -73,19 +78,52 @@ export type WeaverDeps = {
   ) => Promise<ModelRef | null>;
   context: ContextManager;
   sendTyping: (chatId: number, stringId?: string) => Promise<void>;
+  /**
+   * Idle-compaction policy (`cache` config block). Absent or disabled =
+   * no compaction, today's behaviour.
+   */
+  idleCompact?: IdleCompactSettings;
+  /**
+   * How idle compaction reaches the chat while a turn waits for a pass: a
+   * status message, and the `"ask"` buttons. Absent = silent wait.
+   */
+  idleCompactChat?: Pick<IdleCompactorDeps, "notify" | "ask">;
 };
 
 export class Weaver {
   readonly loom: Loom;
   private readonly deps: WeaverDeps;
   private activeCount = 0;
+  /** Idle compaction: timers, running passes and precomputes per chat. */
+  private readonly idleCompactor: IdleCompactor | undefined;
 
   constructor(deps: WeaverDeps, loom = new Loom()) {
     this.deps = deps;
+    this.idleCompactor = deps.idleCompact?.enabled
+      ? new IdleCompactor({
+          settings: deps.idleCompact,
+          getBackend: (chatId) => deps.getBackend(chatId),
+          resolveModelId: async (chatId) =>
+            (await deps.resolveActiveModel(chatId)).ref?.id,
+          // Queued like a turn, so a pass never overlaps one.
+          enqueue: (chatId, task) => {
+            void this.loom.thread(chatId).enqueue(task);
+          },
+          ...deps.idleCompactChat,
+        })
+      : undefined;
     this.loom = loom;
   }
 
   runTurn(params: ExecuteParams): Promise<ExecuteResult> {
+    // A turn is coming: the chat is no longer idle (cancels the timer,
+    // aborts a compaction pass not yet sent, or applies `idleCompactOnTurn`
+    // to one in flight).
+    this.idleCompactor?.onTurnQueued(
+      params.chatId,
+      { chatId: params.chatId, numericChatId: params.numericChatId },
+      params.source,
+    );
     const thread = this.loom.thread(params.chatId);
     // A turn is killable when its backend can interrupt an in-flight
     // chat turn. The abort hook tracks lifecycle through this closure:
@@ -122,7 +160,10 @@ export class Weaver {
     return thread.enqueue(() =>
       runInTurnScope(scope, () =>
         this.run(thread, params, task, lifecycle, trace),
-      ).finally(() => closeTurnScope(scope)),
+      ).finally(() => {
+        closeTurnScope(scope);
+        this.idleCompactor?.onTurnSettled(params.chatId);
+      }),
     );
   }
 
@@ -294,6 +335,8 @@ export class Weaver {
         );
       }
 
+      // A precomputed idle compaction is switched in (or discarded) here.
+      await this.idleCompactor?.beforeTurn(params.chatId, warp.ref.id);
       const memory = resolveTurnMemory(params, phases);
       const stream = backend.chat.runChatTurn({
         chatId: params.chatId,

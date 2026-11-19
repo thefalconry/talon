@@ -13,8 +13,7 @@
       "package-name": "talon-agent",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        { "type": "generic", "path": "apps/node/version.txt" },
-        { "type": "generic", "path": "apps/companion/pubspec.yaml" }
+        { "type": "generic", "path": "apps/node/version.txt" }
       ],
       "changelog-sections": [
         { "type": "feat", "section": "Features" },

@@ -10,3 +10,4 @@ export {
   initWeaver,
   type WeaverDeps,
 } from "./weaver.js";
+export { resolveIdleCompactSettings } from "./idle-compact.js";

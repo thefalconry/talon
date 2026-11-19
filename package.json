@@ -103,7 +103,7 @@
     "build:fusefs": "node native/talon-fusefs/build.mjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.284",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.321",
     "@anthropic-ai/sdk": "^0.104.1",
     "@brave/brave-search-mcp-server": "^2.0.75",
     "@clack/prompts": "^1.2.0",
@@ -111,8 +111,8 @@
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@kilocode/sdk": "^7.2.22",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openai/agents": "^0.20.0",
-    "@openai/codex-sdk": "^0.162.0",
+    "@openai/agents": "^0.21.0",
+    "@openai/codex-sdk": "^0.167.1",
     "@opencode-ai/sdk": "^1.17.4",
     "@playwright/mcp": "0.0.56",
     "@types/cross-spawn": "^6.0.6",
@@ -120,7 +120,7 @@
     "baileys": "^7.0.0-rc14",
     "big-integer": "^1.6.52",
     "cheerio": "^1.2.0",
-    "croner": "^10.0.1",
+    "croner": "^11.0.0",
     "cross-spawn": "^7.0.6",
     "discord.js": "^14.16.3",
     "file-type": "^22.0.1",

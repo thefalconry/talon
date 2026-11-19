@@ -9,7 +9,7 @@ name: CI
 # portability. Heavier tiers join only when the change touches what they
 # guard (native/** → the drift guards and the native addon/warden suites
 # on ubuntu; Docker files → Docker Build; package.json → Tarball Check).
-# Docs-only / companion-only changes run just the PR title + secret scan.
+# Docs-only changes run just the PR title + secret scan.
 #
 # The FULL matrix — all three OSes, backend-live, fuzz, docker, tarball —
 # runs on every push to main, nightly at 03:00 UTC, on workflow_dispatch,
@@ -58,7 +58,7 @@ jobs:
   # Path-aware at the job level. Outputs (strings "true"/"false"):
   #   full     — push / schedule / dispatch, or the PR (also a queued PR)
   #              carries the `full-ci` label: run everything
-  #   daemon   — anything beyond docs/**, apps/companion/** and loose
+  #   daemon   — anything beyond docs/** and loose
   #              *.md. prompts/** and src/** always count, *.md included
   #              (they ship in the binary); apps/node/** and protocol/**
   #              count too (src tests read them). Gates the light set.
@@ -66,7 +66,6 @@ jobs:
   #   docker   — Dockerfile, .dockerignore, docker/**, docker-compose*.yml
   #   package  — package.json / .npmignore / tarball checker (Tarball Check)
   #   Informational (their own workflows gate on them):
-  #   companion — apps/companion/** or protocol/**   (companion.yml)
   #   node      — apps/node/** or protocol/**        (node.yml)
   #   native_provision — provisioner paths           (native-provision.yml)
   #   packaging — packaging/**, nfpm.yaml             (publish.yml)
@@ -87,7 +86,6 @@ jobs:
       native: ${{ steps.scope.outputs.native }}
       docker: ${{ steps.scope.outputs.docker }}
       package: ${{ steps.scope.outputs.package }}
-      companion: ${{ steps.scope.outputs.companion }}
       node: ${{ steps.scope.outputs.node }}
       native_provision: ${{ steps.scope.outputs.native_provision }}
       packaging: ${{ steps.scope.outputs.packaging }}
@@ -107,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           full=false daemon=false native=false docker=false package=false
-          companion=false node=false native_provision=false packaging=false docs=false
+          node=false native_provision=false packaging=false docs=false
           files=""
           case "$EVENT" in
             pull_request)
@@ -146,12 +144,10 @@ jobs:
             [[ -z "$f" ]] && continue
             case "$f" in
               docs/*) docs=true ;;
-              apps/companion/*) ;;
               prompts/*|src/*) daemon=true ;;
               *.md) docs=true ;;
               *) daemon=true ;;
             esac
-            case "$f" in apps/companion/*|protocol/*) companion=true ;; esac
             case "$f" in apps/node/*|protocol/*) node=true ;; esac
             case "$f" in native/*|src/native/*) native=true ;; esac
             case "$f" in Dockerfile|.dockerignore|docker/*|docker-compose*.yml) docker=true ;; esac
@@ -166,7 +162,7 @@ jobs:
           done <<<"$files"
           if [[ "$full" == true ]]; then
             daemon=true native=true docker=true package=true
-            companion=true node=true native_provision=true packaging=true docs=true
+            node=true native_provision=true packaging=true docs=true
             os='["ubuntu-latest","macos-latest","windows-latest"]'
           else
             os='["ubuntu-latest"]'
@@ -176,7 +172,6 @@ jobs:
           native=$native
           docker=$docker
           package=$package
-          companion=$companion
           node=$node
           native_provision=$native_provision
           packaging=$packaging
@@ -695,7 +690,7 @@ jobs:
           toolchain: stable
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             native/blake3-wasm
@@ -751,7 +746,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/talon-warden
 
@@ -812,7 +807,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/blake3-napi
 
@@ -872,7 +867,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: native/talon-fusefs
 
@@ -958,6 +953,31 @@ jobs:
             src/__tests__/vfs-rewrite.test.ts \
             src/__tests__/vfs-nsdir.test.ts \
             src/__tests__/native-vfs-address.test.ts
+
+  # Boots the daemon and drives it with a scripted device (see
+  # scripts/e2e-daemon.mjs). Not in `CI Status` yet: it reports without
+  # blocking a merge until it has a track record.
+  e2e-daemon:
+    name: E2E daemon
+    # Heavy tier: main / dispatch / `full-ci` only.
+    needs: changes
+    if: needs.changes.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: node scripts/e2e-daemon.mjs
+        env:
+          E2E_LOG: ${{ runner.temp }}/daemon.log
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: daemon-log
+          path: ${{ runner.temp }}/daemon.log
 
   # ── Real backend live integration tier ───────────────────────
   # Installs the real backend CLI, then exercises the deployed backend surface
@@ -1328,7 +1348,7 @@ jobs:
 
       # Publish the daemon tarball from main as a workflow artifact — the
       # exact `npm pack` output the checker just validated. Anything that
-      # needs a built daemon (manual smoke tests, a companion/node job that
+      # needs a built daemon (manual smoke tests, a node job that
       # wants to drive a real daemon) can `actions/download-artifact` it
       # from the latest main run instead of rebuilding from source.
       - name: Pack daemon tarball (main)

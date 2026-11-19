@@ -84,8 +84,9 @@ describe("buildSdkOptions", () => {
     const { activeModel, options } = buildSdkOptions("chat-1");
 
     expect(activeModel).toBe("claude-sonnet-4-6");
-    // Model is passed through as resolved — SDK handles context window
-    expect(options.model).toBe("default");
+    // "default" is pinned to its concrete id so the account's settings.json
+    // `model` can't silently swap in a different model.
+    expect(options.model).toBe("claude-sonnet-4-6");
   }, 10_000);
 
   it("passes model through unchanged when no alias resolution needed", async () => {
@@ -199,6 +200,21 @@ describe("buildSdkOptions", () => {
         await import("../backend/claude-sdk/options.js");
       const { options } = buildSdkOptions("chat-subagents-native");
       expect(options.tools).not.toContain("Agent");
+    });
+  });
+
+  it("pins the prompt-cache TTL only when cache.promptCacheTtl is set", async () => {
+    mockGetConfig.mockReturnValue({
+      ...mockGetConfig(),
+      cache: { promptCacheTtl: "1h" },
+    });
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-ttl");
+
+    expect(options.settings).toEqual({
+      cleanupPeriodDays: 100_000,
+      promptCacheTtl: "1h",
     });
   });
 

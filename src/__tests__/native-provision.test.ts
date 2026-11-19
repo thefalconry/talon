@@ -137,6 +137,54 @@ describe("provision seam", () => {
     expect(exec.calls[0].cmd).toBe("py");
   });
 
+  it("skips a default python above the cap for a versioned one", async () => {
+    const exec = fakeExec([
+      {
+        match: (c, a) => c === "py" && a[0] === "-3",
+        result: { ok: true, stdout: "3.15\n" },
+      },
+      {
+        match: (c, a) => c === "py" && a[0] === "-3.14",
+        result: { ok: false, code: 1, stdout: "", stderr: "not installed" },
+      },
+      {
+        match: (c, a) => c === "py" && a[0] === "-3.13",
+        result: { ok: true, stdout: "3.13\n" },
+      },
+    ]);
+    const found = await findBasePython(
+      exec,
+      "win32",
+      { major: 3, minor: 10 },
+      { major: 3, minor: 14 },
+    );
+    expect(found).toMatchObject({
+      command: "py",
+      args: ["-3.13"],
+      version: "3.13",
+    });
+  });
+
+  it("finds a versioned posix python when python3 is above the cap", async () => {
+    const exec = fakeExec([
+      {
+        match: (c) => c === "python3",
+        result: { ok: true, stdout: "3.15\n" },
+      },
+      {
+        match: (c) => c === "python3.14",
+        result: { ok: true, stdout: "3.14\n" },
+      },
+    ]);
+    const found = await findBasePython(
+      exec,
+      "linux",
+      { major: 3, minor: 10 },
+      { major: 3, minor: 14 },
+    );
+    expect(found).toMatchObject({ command: "python3.14", version: "3.14" });
+  });
+
   it("failDetail prefers spawn error, then stderr tail, then exit code", () => {
     expect(
       failDetail({
@@ -728,9 +776,39 @@ describe("playwright provisioner", () => {
         pathExists: () => true,
         statePath: join(d, "state.json"),
         env: { PLAYWRIGHT_BROWSERS_PATH: "/isolated", DROPPED: undefined },
+        osRelease: "",
       },
     );
     expect(seen[0]).toEqual({ PLAYWRIGHT_BROWSERS_PATH: "/isolated" });
+  });
+
+  it("adds the host-platform override on an Ubuntu the CLI doesn't know", async () => {
+    const d = tmp();
+    const seen: Array<Record<string, string> | undefined> = [];
+    const exec: ExecFn = async (_c, _a, opts) => {
+      seen.push(opts.env);
+      return { ok: true, code: 0, stdout: "", stderr: "" };
+    };
+    await provisionPlaywright(
+      { browser: "chromium" },
+      {
+        exec,
+        registry: REGISTRY,
+        listDir: () => [],
+        cliPath: "/x/cli.js",
+        pathExists: () => true,
+        statePath: join(d, "state.json"),
+        platform: "linux",
+        env: { PLAYWRIGHT_BROWSERS_PATH: "/isolated" },
+        osRelease: 'ID=ubuntu\nVERSION_ID="26.04"\n',
+      },
+    );
+    expect(seen[0]).toMatchObject({
+      PLAYWRIGHT_BROWSERS_PATH: "/isolated",
+      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: expect.stringMatching(
+        /^ubuntu24\.04-(x64|arm64)$/,
+      ),
+    });
   });
 
   it("downloads a missing build via the bundled CLI", async () => {

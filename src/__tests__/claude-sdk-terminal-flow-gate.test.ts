@@ -54,6 +54,8 @@ type SdkMsg = SystemInit | AssistantTextMsg | ResultMsg;
 let activeFrontends: string[] = [];
 let mockMessages: SdkMsg[] = [];
 
+const notePromptCacheRequest = vi.fn();
+const notePromptCacheRateLimit = vi.fn();
 const detectFlowViolationSpy = vi.fn(() => ({ violated: false }) as const);
 
 const mockSdkScript = (messages: SdkMsg[]): void => {
@@ -100,6 +102,8 @@ vi.mock("../storage/sessions.js", () => ({
   setSessionId: vi.fn(),
   setSessionName: vi.fn(),
   updateLiveTurn: vi.fn(),
+  notePromptCacheRequest: (...a: unknown[]) => notePromptCacheRequest(...a),
+  notePromptCacheRateLimit: (...a: unknown[]) => notePromptCacheRateLimit(...a),
   clearLiveTurn: vi.fn(),
   recordSessionMetrics: vi.fn(),
   recordSessionMetricEvent: vi.fn(),
@@ -260,5 +264,92 @@ describe("Claude SDK terminal flow-violation gate", () => {
 
     expect(events.some((e) => e.type === "completed")).toBe(true);
     expect(detectFlowViolationSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Idle compaction (core/weaver/idle-compact.ts) is anchored on what the
+// turn's main-session requests said about the prompt cache. Lives here for
+// the turn-handler harness above; the TTL rule itself is pinned in
+// prompt-cache.test.ts against the real store.
+describe("Claude SDK prompt-cache observation", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    activeFrontends = [];
+    notePromptCacheRequest.mockClear();
+    notePromptCacheRateLimit.mockClear();
+  });
+
+  const withUsage = (
+    usage: Record<string, unknown>,
+    parent: string | null = null,
+  ) =>
+    ({
+      type: "assistant",
+      parent_tool_use_id: parent,
+      message: { content: [{ type: "text", text: "x" }], usage },
+    }) as unknown as AssistantTextMsg;
+
+  it("notes each main-thread request with its send time, write breakdown and model; skips sidechains", async () => {
+    const started = Date.now();
+    mockSdkScript([
+      { type: "system", subtype: "init", session_id: "sess-1" },
+      {
+        type: "rate_limit_event",
+        rate_limit_info: { status: "allowed_warning" },
+      } as unknown as SdkMsg,
+      withUsage({
+        input_tokens: 5,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 250_000,
+        cache_creation: {
+          ephemeral_1h_input_tokens: 250_000,
+          ephemeral_5m_input_tokens: 0,
+        },
+      }),
+      {
+        type: "user",
+        parent_tool_use_id: null,
+        message: { role: "user", content: [] },
+      } as unknown as SdkMsg,
+      withUsage({
+        input_tokens: 5,
+        cache_read_input_tokens: 250_000,
+        cache_creation_input_tokens: 0,
+      }),
+      // A sub-agent's request is not the main session's cache.
+      withUsage(
+        {
+          input_tokens: 5,
+          cache_creation_input_tokens: 9_000,
+          cache_creation: { ephemeral_1h_input_tokens: 0 },
+        },
+        "toolu_1",
+      ),
+      stdResult,
+    ]);
+
+    await drainChatTurn("cache-chat", "hello");
+
+    expect(notePromptCacheRateLimit).toHaveBeenCalledWith(
+      "cache-chat",
+      "allowed_warning",
+    );
+    expect(notePromptCacheRequest).toHaveBeenCalledTimes(2);
+    const [first, second] = notePromptCacheRequest.mock.calls.map(
+      (c) => c[1] as { at: number },
+    );
+    expect(first).toMatchObject({
+      modelId: "default",
+      guest: false,
+      cacheRead: 0,
+      cacheWrite: 250_000,
+      cacheWrite1h: 250_000,
+      cacheWrite5m: 0,
+    });
+    expect(first!.at).toBeGreaterThanOrEqual(started);
+    // The second request went out after the tool result, not at turn start.
+    expect(second).toMatchObject({ cacheRead: 250_000, cacheWrite: 0 });
+    expect(second).not.toHaveProperty("cacheWrite1h");
+    expect(second!.at).toBeGreaterThanOrEqual(first!.at);
   });
 });

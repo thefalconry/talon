@@ -192,11 +192,16 @@ export interface BasePython {
  * Find a base interpreter able to seed a venv. Order matters per OS: the
  * `py` launcher is the canonical entry on Windows (PATH pythons there are
  * often the Store stub), python3 the canonical one elsewhere.
+ *
+ * `max` caps the version for packages whose native wheels lag new Python
+ * releases. When the default interpreter is newer than the cap, versioned
+ * commands (`py -3.14`, `python3.14`) are tried from the cap down to the floor.
  */
 export async function findBasePython(
   exec: ExecFn,
   platform: NodeJS.Platform,
   min: { major: number; minor: number },
+  max?: { major: number; minor: number },
 ): Promise<BasePython | undefined> {
   const candidates: Array<[string, string[]]> =
     platform === "win32"
@@ -209,6 +214,15 @@ export async function findBasePython(
           ["python3", []],
           ["python", []],
         ];
+  if (max && max.major === min.major) {
+    for (let minor = max.minor; minor >= min.minor; minor--) {
+      candidates.push(
+        platform === "win32"
+          ? ["py", [`-${max.major}.${minor}`]]
+          : [`python${max.major}.${minor}`, []],
+      );
+    }
+  }
   for (const [command, args] of candidates) {
     const probe = await exec(
       command,
@@ -218,10 +232,13 @@ export async function findBasePython(
     if (!probe.ok) continue;
     const version = probe.stdout.trim();
     const [major, minor] = version.split(".").map((s) => parseInt(s, 10));
-    if (
-      Number.isFinite(major) &&
-      (major > min.major || (major === min.major && (minor ?? 0) >= min.minor))
-    ) {
+    if (!Number.isFinite(major)) continue;
+    const m = minor ?? 0;
+    const aboveFloor =
+      major > min.major || (major === min.major && m >= min.minor);
+    const belowCap =
+      !max || major < max.major || (major === max.major && m <= max.minor);
+    if (aboveFloor && belowCap) {
       return { command, args, version };
     }
   }

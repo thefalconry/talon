@@ -47,7 +47,7 @@ import { openBreaker } from "./breaker.js";
 export const HEADROOM_CACHE_MS = 60_000;
 
 /** Where a headroom figure came from. Also its ranking priority. */
-export type HeadroomSource = "plan" | "ledger" | "none";
+type HeadroomSource = "plan" | "ledger" | "none";
 
 /** The window that is closest to its limit — what the ceiling is judged on. */
 export interface LimitingWindow {
