@@ -36,6 +36,10 @@ import type { TalonPlugin } from "../../core/plugin/types.js";
 import { files } from "../../util/paths.js";
 import { log } from "../../util/log.js";
 import {
+  HOST_PLATFORM_OVERRIDE_ENV,
+  hostPlatformOverride,
+} from "./host-platform.js";
+import {
   ENDPOINT_PLAYWRIGHT_MINOR,
   bundledPlaywrightVersion,
   couplingError,
@@ -119,6 +123,20 @@ export function createPlaywrightPlugin(config: {
 
     prepareMcpSpawn() {
       writeMcpConfig?.();
+    },
+
+    // The launch resolves the browser executable by host platform, the same
+    // lookup `install` does, so it needs the same override on an Ubuntu the
+    // bundled playwright-core does not know.
+    getEnvVars(): Record<string, string> {
+      if (endpoint) return {};
+      const override = hostPlatformOverride(
+        resolve(
+          import.meta.dirname ?? ".",
+          "../../../node_modules/playwright-core/cli.js",
+        ),
+      );
+      return override ? { [HOST_PLATFORM_OVERRIDE_ENV]: override } : {};
     },
 
     validateConfig() {

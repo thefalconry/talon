@@ -34,6 +34,10 @@ import {
   couplingError,
 } from "./version-coupling.js";
 import { userHome } from "../../util/fs-path.js";
+import {
+  HOST_PLATFORM_OVERRIDE_ENV,
+  hostPlatformOverride,
+} from "./host-platform.js";
 
 /** Engines whose builds Playwright manages (vs system channels). */
 const MANAGED_ENGINES = new Set(["chromium", "firefox", "webkit"]);
@@ -96,7 +100,7 @@ export function browsersRoot(
 }
 
 /** The bundled playwright-core CLI (version-matched to @playwright/mcp). */
-function defaultCliPath(): string {
+export function defaultCliPath(): string {
   return resolve(
     import.meta.dirname ?? ".",
     "../../../node_modules/playwright-core/cli.js",
@@ -194,16 +198,22 @@ function browserPresent(
   );
 }
 
-/** Forward the injected environment (e.g. PLAYWRIGHT_BROWSERS_PATH) to the CLI. */
+/**
+ * Forward the injected environment (e.g. PLAYWRIGHT_BROWSERS_PATH) to the
+ * CLI, plus the host-platform override when this Ubuntu needs one.
+ */
 function execEnv(
   env: Record<string, string | undefined> | undefined,
+  hostPlatform: string | undefined,
 ): Record<string, string> | undefined {
-  if (!env) return undefined;
-  return Object.fromEntries(
-    Object.entries(env).filter(
+  if (!env && !hostPlatform) return undefined;
+  const merged = Object.fromEntries(
+    Object.entries(env ?? process.env).filter(
       (e): e is [string, string] => e[1] !== undefined,
     ),
   );
+  if (hostPlatform) merged[HOST_PLATFORM_OVERRIDE_ENV] = hostPlatform;
+  return merged;
 }
 
 export async function provisionPlaywright(
@@ -264,7 +274,10 @@ export async function provisionPlaywright(
 
   const installed = await exec(process.execPath, [cli, "install", browser], {
     timeoutMs: INSTALL_TIMEOUT_MS,
-    env: execEnv(deps.env),
+    env: execEnv(
+      deps.env,
+      hostPlatformOverride(cli, { platform: deps.platform, env: deps.env }),
+    ),
   });
   if (!installed.ok) {
     const detail = failDetail(installed);
