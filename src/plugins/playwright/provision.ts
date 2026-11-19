@@ -100,7 +100,7 @@ export function browsersRoot(
 }
 
 /** The bundled playwright-core CLI (version-matched to @playwright/mcp). */
-export function defaultCliPath(): string {
+function defaultCliPath(): string {
   return resolve(
     import.meta.dirname ?? ".",
     "../../../node_modules/playwright-core/cli.js",

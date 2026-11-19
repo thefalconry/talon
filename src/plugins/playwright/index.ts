@@ -46,6 +46,21 @@ import {
   probeEndpoint,
 } from "./version-coupling.js";
 
+/**
+ * The launch resolves the browser executable by host platform, the same
+ * lookup `install` does, so it needs the same override on an Ubuntu the
+ * bundled playwright-core does not know.
+ */
+function launchEnv(): Record<string, string> {
+  const override = hostPlatformOverride(
+    resolve(
+      import.meta.dirname ?? ".",
+      "../../../node_modules/playwright-core/cli.js",
+    ),
+  );
+  return override ? { [HOST_PLATFORM_OVERRIDE_ENV]: override } : {};
+}
+
 export function createPlaywrightPlugin(config: {
   browser?: string;
   headless?: boolean;
@@ -125,19 +140,7 @@ export function createPlaywrightPlugin(config: {
       writeMcpConfig?.();
     },
 
-    // The launch resolves the browser executable by host platform, the same
-    // lookup `install` does, so it needs the same override on an Ubuntu the
-    // bundled playwright-core does not know.
-    getEnvVars(): Record<string, string> {
-      if (endpoint) return {};
-      const override = hostPlatformOverride(
-        resolve(
-          import.meta.dirname ?? ".",
-          "../../../node_modules/playwright-core/cli.js",
-        ),
-      );
-      return override ? { [HOST_PLATFORM_OVERRIDE_ENV]: override } : {};
-    },
+    getEnvVars: () => (endpoint ? {} : launchEnv()),
 
     validateConfig() {
       const errors: string[] = [];
