@@ -110,6 +110,11 @@ export function trackBackgroundProvision<T>(task: Promise<T>): Promise<T> {
   });
 }
 
+/**
+ * Background reconcile tasks still running. Read by tests through a
+ * dynamic import, which knip cannot follow.
+ * @public
+ */
 export function backgroundProvisionInFlight(): number {
   return backgroundInFlight;
 }

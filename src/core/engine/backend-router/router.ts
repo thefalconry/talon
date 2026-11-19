@@ -51,10 +51,10 @@ import {
 } from "./headroom.js";
 
 /** Default for `config.router.ceilingPercent`. */
-export const DEFAULT_CEILING_PERCENT = 85;
+const DEFAULT_CEILING_PERCENT = 85;
 
 /** Which background subsystem is asking. Logged, and nothing else — yet. */
-export type RoutePurpose = "subagent" | "cron" | "heartbeat";
+type RoutePurpose = "subagent" | "cron" | "heartbeat";
 
 /**
  * A coarse shape-of-work hint. It never outranks headroom: a class either
@@ -90,7 +90,7 @@ const SOURCE_RANK: Record<BackendHeadroom["source"], number> = {
   none: 2,
 };
 
-export interface RouteHints {
+interface RouteHints {
   readonly taskClass?: TaskClass;
   readonly effort?: ReasoningEffortLevel;
 }
