@@ -66,6 +66,8 @@ export interface PlaywrightProvisionDeps {
   registry?: BrowserDescriptor[];
   /** Bundled playwright-core version (default: read from node_modules). */
   bundledPlaywrightVersion?: string;
+  /** Contents of /etc/os-release (default: read from disk). */
+  osRelease?: string;
 }
 
 /** One entry of playwright-core's browsers.json. */
@@ -276,7 +278,11 @@ export async function provisionPlaywright(
     timeoutMs: INSTALL_TIMEOUT_MS,
     env: execEnv(
       deps.env,
-      hostPlatformOverride(cli, { platform: deps.platform, env: deps.env }),
+      hostPlatformOverride(cli, {
+        platform: deps.platform,
+        env: deps.env,
+        osRelease: deps.osRelease,
+      }),
     ),
   });
   if (!installed.ok) {
