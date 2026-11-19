@@ -28,6 +28,7 @@ import {
   type ClaudeRunAccount,
 } from "./accounts/account.js";
 import { buildMcpServers, buildPluginMcpServers } from "./options.js";
+import { toSdkModelArg } from "./models/sdk-arg.js";
 import { isBackgroundToolContext } from "../../core/agents/context.js";
 import { warnIfBelowCacheMinimum } from "../runtime/cache/cache-telemetry.js";
 import { emitAssistantText, emitSessionId } from "../runtime/one-shot-hooks.js";
@@ -114,7 +115,7 @@ export async function runOneShotAgent(
   const env = sdkEnvFor(account, params.env);
 
   const options = {
-    model,
+    model: toSdkModelArg(model),
     systemPrompt,
     ...thinkingConfig,
     cwd: workspace,
