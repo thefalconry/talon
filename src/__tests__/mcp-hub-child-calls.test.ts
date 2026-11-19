@@ -80,6 +80,7 @@ afterEach(async () => {
   vi.useRealTimers();
   stopChildReaper();
   delete process.env.TALON_MCP_HUB_IDLE_MS;
+  delete process.env.TALON_MCP_HUB_MAX_CHILDREN;
   await closeAllChildren();
 });
 
@@ -105,6 +106,35 @@ describe("hub child idle reaper", () => {
     await new Promise((r) => setTimeout(r, 20));
     vi.advanceTimersByTime(60_000);
     expect(getActiveChildKeys()).not.toContain(key);
+  }, 20_000);
+});
+
+describe("hub child cap", () => {
+  it("evicts the least recently used idle child, never a busy one", async () => {
+    process.env.TALON_MCP_HUB_MAX_CHILDREN = "2";
+    const busy = await acquireChild("cap-busy chat", () => FAKE_SERVER);
+    const call = busy.callTool("slow", { ms: 500 });
+    await new Promise((r) => setTimeout(r, 5));
+    await acquireChild("cap-idle chat", () => FAKE_SERVER);
+    await new Promise((r) => setTimeout(r, 5));
+
+    await acquireChild("cap-new chat", () => FAKE_SERVER);
+    expect(getActiveChildKeys().sort()).toEqual([
+      "cap-busy chat",
+      "cap-new chat",
+    ]);
+    await expect(call).resolves.toMatchObject({
+      content: [{ type: "text", text: "done" }],
+    });
+  }, 20_000);
+
+  it("spawns past the cap rather than refuse when every child is busy", async () => {
+    process.env.TALON_MCP_HUB_MAX_CHILDREN = "1";
+    const busy = await acquireChild("cap-full-a chat", () => FAKE_SERVER);
+    const call = busy.callTool("slow", { ms: 300 });
+    await acquireChild("cap-full-b chat", () => FAKE_SERVER);
+    expect(getActiveChildKeys()).toHaveLength(2);
+    await call;
   }, 20_000);
 });
 

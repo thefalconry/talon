@@ -756,6 +756,16 @@ async function runAgent(
             trail.snapshot(),
             watch.stalled,
           );
+        } else if (agentRegistry.killRequested(id)) {
+          // The backend swallowed the kill and returned. agy and codex
+          // one-shots do this, so without this branch a killed run reads as
+          // done, or as failed for not reporting.
+          settled = settleFailure(
+            id,
+            task,
+            new Error("killed on request"),
+            trail.snapshot(),
+          );
         } else {
           recordBackendRunSuccess(record.backendId);
           settled = settleSuccess(

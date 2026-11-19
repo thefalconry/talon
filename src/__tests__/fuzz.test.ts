@@ -122,6 +122,7 @@ describe("fuzz: classify()", () => {
       "network",
       "auth",
       "context_length",
+      "content_filter",
       "session_expired",
       "bad_request",
       "forbidden",

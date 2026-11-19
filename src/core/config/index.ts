@@ -784,6 +784,45 @@ const configSchema = z.object({
     })
     .optional(),
   /**
+   * Prompt-cache economics (docs/cache-economics.md, PR C).
+   *
+   *   - `idleCompact` — compact a big, idle chat shortly before its prompt
+   *     cache expires (at 0.9 × the TTL after its last request), while the
+   *     transcript is still cached, as the Claude CLI's own idle
+   *     compaction does. Only when the last request observed a 1 h TTL.
+   *     Off by default.
+   *   - `idleCompactMinContextTokens` — only sessions whose context fill is
+   *     at least this are compacted. Default 200k (the CLI's); a value below
+   *     100k is raised to 100k.
+   *   - `idleCompactMode` — `"precompute"` (default): compact a fork of the
+   *     session and switch to it at the next turn only if the cache has
+   *     expired by then, else discard it. `"in-place"`: compact the session
+   *     itself when the timer fires.
+   *   - `idleCompactOnTurn` — what a user turn does to a pass whose
+   *     `/compact` request is already sent (its input is billed): `"wait"`
+   *     (default) — the turn waits for it, and a precompute is adopted even
+   *     though the cache is still warm; `"abort"` — abort it; `"ask"` — ask
+   *     the chat with two buttons (Telegram), `"wait"` after 30 s or where
+   *     buttons are unsupported. A turn before the request is sent always
+   *     aborts the pass.
+   *   - `promptCacheTtl` — the Claude CLI's prompt-cache TTL for chat turns
+   *     (its `promptCacheTtl` setting), passed through. Unset = the CLI's
+   *     automatic choice (1 h on a subscription within its limits, 5 min
+   *     on an API key / Bedrock / Vertex). Idle compaction arms on the TTL
+   *     it OBSERVES in the response usage, not on this setting.
+   */
+  cache: z
+    .object({
+      idleCompact: z.boolean().default(false),
+      // Any positive count: the resolver clamps it up to the 100k floor
+      // (core/weaver/idle-compact.ts) rather than refusing the config.
+      idleCompactMinContextTokens: z.number().int().positive().default(200_000),
+      idleCompactMode: z.enum(["precompute", "in-place"]).default("precompute"),
+      idleCompactOnTurn: z.enum(["wait", "abort", "ask"]).default("wait"),
+      promptCacheTtl: z.enum(["5m", "1h"]).optional(),
+    })
+    .optional(),
+  /**
    * Backups & checkpoints (docs/backups.md). Talon's only safety net, so
    * it is on by default: every `intervalHours` it writes a snapshot of
    * the identity, state, database and memory under ~/.talon/backups/,

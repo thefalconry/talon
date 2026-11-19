@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import { RunContext } from "@openai/agents";
 
 import { OPENAI_AGENTS_BUILTIN_TOOLS } from "../backend/openai-agents/builtins.js";
@@ -294,7 +294,14 @@ describe.skipIf(isWindows)("openai-agents / builtins / run context", () => {
     expect(text).toContain(basename(workdir));
     expect(text).toContain("scoped-env");
     // Layered over the daemon's environment, not replacing it.
-    expect(text).toContain(process.env.PATH ?? "");
+    // Compare entries, not the whole string: `bash -lc` on macOS runs
+    // path_helper from /etc/profile, which reorders PATH.
+    const shellPath = text.split("\n").find((l) => l.includes(delimiter)) ?? "";
+    const shellEntries = new Set(shellPath.split(delimiter));
+    const missing = (process.env.PATH ?? "")
+      .split(delimiter)
+      .filter((entry) => entry && !shellEntries.has(entry));
+    expect(missing).toEqual([]);
   });
 
   it("defaults Glob to the run context's cwd when no path is given", async () => {

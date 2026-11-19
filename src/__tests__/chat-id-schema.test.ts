@@ -135,6 +135,28 @@ describe("chat_id tool params (wired into send/react)", () => {
   });
 });
 
+describe("cron management tools take an explicit chat_id", () => {
+  for (const name of ["list_cron_jobs", "edit_cron_job", "delete_cron_job"]) {
+    it(`${name} accepts a supergroup id and forwards it`, async () => {
+      expect(getToolField(name, "chat_id").parse(-1009876543210)).toBe(
+        -1009876543210,
+      );
+      const tool = ALL_TOOLS.find((t) => t.name === name)!;
+      const seen: unknown[] = [];
+      await (
+        tool.execute as unknown as (p: unknown, b: unknown) => Promise<unknown>
+      )(
+        { job_id: "j", chat_id: -1009876543210 },
+        async (_a: string, p: unknown) => {
+          seen.push(p);
+          return { ok: true };
+        },
+      );
+      expect(seen[0]).toMatchObject({ chat_id: -1009876543210 });
+    });
+  }
+});
+
 describe("send.execute threads chat_id through to bridge", () => {
   // Second-half of the PR #150 bug surfaced 2026-05-12: even after the
   // schema accepts chat_id, send.execute builds per-case explicit

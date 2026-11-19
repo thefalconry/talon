@@ -16,6 +16,8 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import {
   getSession,
   incrementTurns,
+  notePromptCacheRateLimit,
+  notePromptCacheRequest,
   updateLiveTurn,
 } from "../../storage/sessions.js";
 import { log, logError, logWarn } from "../../util/log.js";
@@ -35,8 +37,11 @@ import {
 import type { ChatRunParams } from "../../core/agent-runtime/capabilities.js";
 import { makeBareModelRef } from "../../core/agent-runtime/model-ref.js";
 import { applyRetryDecisionStream } from "../runtime/turn/handle-retry.js";
-import { getConfig } from "./state.js";
-import { buildSdkOptions, getActiveFrontends } from "./options.js";
+import {
+  buildSdkOptions,
+  getActiveFrontends,
+  prepareChatSystemPrompt,
+} from "./options.js";
 import { waitForMcpServersReady } from "./mcp-ready.js";
 import { invalidatePlanUsage } from "./usage/plan-usage.js";
 import {
@@ -63,10 +68,8 @@ import {
 } from "./stream.js";
 import {
   formatUserPrompt,
-  prepareSystemPrompt,
   captureDeliveredText,
   summarizeUsage,
-  buildDeliveryContract,
   buildFlowViolationReminder,
   buildFirstTurnReminder,
   recordToolCall,
@@ -300,7 +303,58 @@ type StreamContext = {
   /** tool_use id → tool name for calls announced this turn. */
   pendingTools: Map<string, string>;
   account: ClaudeRunAccount;
+  /** Prompt-cache facts for idle compaction (core/weaver/idle-compact.ts). */
+  cacheTrack: PromptCacheTrack;
 };
+
+/**
+ * When the main session's current API request was sent: the turn's
+ * start, then each main-thread tool result (the CLI sends the next
+ * request right after it). Earlier than the server's own clock, never
+ * later, so a timer anchored on it errs towards a still-warm cache.
+ */
+type PromptCacheTrack = {
+  requestStartedAt: number;
+  /** Model id the turn was built with (`buildSdkOptions`' `activeModel`). */
+  modelId: string;
+  guest: boolean;
+};
+
+/** One main-thread assistant message → the chat's prompt-cache observation. */
+function notePromptCache(
+  chatId: string,
+  track: PromptCacheTrack,
+  message: SDKAssistantMessage,
+): void {
+  if (message.parent_tool_use_id) return; // a sub-agent's sidechain
+  // An API error the SDK turned into an assistant message refreshed no cache.
+  if ((message as { error?: unknown }).error) return;
+  const u = message.message.usage as
+    | (NonNullable<SDKAssistantMessage["message"]["usage"]> & {
+        cache_creation?: {
+          ephemeral_1h_input_tokens?: number;
+          ephemeral_5m_input_tokens?: number;
+        } | null;
+      })
+    | undefined;
+  if (!u) return;
+  const prompt =
+    (u.input_tokens ?? 0) +
+    (u.cache_read_input_tokens ?? 0) +
+    (u.cache_creation_input_tokens ?? 0);
+  if (prompt <= 0) return;
+  const oneHour = u.cache_creation?.ephemeral_1h_input_tokens;
+  const fiveMin = u.cache_creation?.ephemeral_5m_input_tokens;
+  notePromptCacheRequest(chatId, {
+    at: track.requestStartedAt,
+    modelId: track.modelId,
+    guest: track.guest,
+    cacheRead: u.cache_read_input_tokens ?? 0,
+    cacheWrite: u.cache_creation_input_tokens ?? 0,
+    ...(typeof oneHour === "number" ? { cacheWrite1h: oneHour } : {}),
+    ...(typeof fiveMin === "number" ? { cacheWrite5m: fiveMin } : {}),
+  });
+}
 
 /**
  * Translate one assistant message: progress text segments BEFORE the tool
@@ -380,10 +434,14 @@ async function* consumeSdkStream(
       continue;
     }
     if (isAssistant(message)) {
+      notePromptCache(ctx.chatId, ctx.cacheTrack, message);
       yield* translateAssistantMessage(ctx, message);
       continue;
     }
     if (isUserMessage(message)) {
+      if (!message.parent_tool_use_id) {
+        ctx.cacheTrack.requestStartedAt = Date.now();
+      }
       yield* translateToolResults(ctx, message);
       continue;
     }
@@ -398,6 +456,11 @@ async function* consumeSdkStream(
     // figures.
     if (isRateLimitEvent(message)) {
       invalidatePlanUsage(ctx.account.configDir);
+      notePromptCacheRateLimit(
+        ctx.chatId,
+        (message as { rate_limit_info?: { status?: "allowed" } })
+          .rate_limit_info?.status,
+      );
       continue;
     }
     if (isResult(message)) {
@@ -616,6 +679,8 @@ async function* runTurnStream(inputs: {
   activeModel: string;
   /** Model string the SDK attributes the result message's usage to. */
   sdkModel: string;
+  /** The turn ran under a guest tool scope. */
+  guest: boolean;
 }): AsyncGenerator<AgentEvent, StreamOutcome, void> {
   const { chatId, active, state, live, watchdog } = inputs;
   try {
@@ -628,6 +693,11 @@ async function* runTurnStream(inputs: {
       model: inputs.sdkModel,
       pendingTools: new Map(),
       account: inputs.internal.account ?? DEFAULT_CLAUDE_ACCOUNT,
+      cacheTrack: {
+        requestStartedAt: Date.now(),
+        modelId: inputs.activeModel,
+        guest: inputs.guest,
+      },
     });
     // The SDK doesn't throw on API errors — it converts them into a
     // synthetic assistant message and finishes the turn with an error-
@@ -707,7 +777,6 @@ export async function* runChatTurn(
   params: ChatRunParams,
   _internal: InternalState = {},
 ): AsyncIterable<AgentEvent> {
-  const config = getConfig();
   const { chatId, text } = params;
   const backendId = internalBackendId(_internal);
   const session = getSession(chatId);
@@ -726,18 +795,10 @@ export async function* runChatTurn(
   // turns so the provider's prompt-cache prefix survives other chats'
   // session resets. The delivery contract joins as the backend suffix —
   // the tail of the static prompt, the highest-salience spot.
-  const preparedPrompt = prepareSystemPrompt({
-    config,
-    previousTurns: session.turns,
-    chatId,
-    sessionEpoch: session.createdAt,
-    backendSuffix: frontend
-      ? buildDeliveryContract("tool-only", frontend)
-      : undefined,
-  });
+  const preparedPrompt = prepareChatSystemPrompt(chatId, frontend);
 
   const abortController = new AbortController();
-  const { options, activeModel } = buildSdkOptions(
+  const { options, activeModel, guest } = buildSdkOptions(
     chatId,
     abortController,
     params.model.id,
@@ -780,6 +841,7 @@ export async function* runChatTurn(
     watchdog,
     activeModel,
     sdkModel: options.model ?? activeModel,
+    guest,
   });
   // The recursive retry stream already yielded its own usage + completed.
   if (outcome.kind === "retried") return;
