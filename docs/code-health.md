@@ -28,7 +28,7 @@ code it was guarding.
 | Files over 1,500 lines (non-test TS/Dart) | 3 of 577; 512 are under 400 |
 
 Tooling used: `tsc`, `oxlint`, `dependency-cruiser`, `knip`, `madge`,
-`npm audit`, `cloc`, `vitest --coverage`, `flutter test --coverage`.
+`npm audit`, `cloc`, `vitest --coverage`.
 
 ## 1. The architecture gate was enforcing nothing — **fixed**
 

@@ -12,7 +12,9 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![CI](https://github.com/thefalconry/talon/actions/workflows/ci.yml/badge.svg)](https://github.com/thefalconry/talon/actions/workflows/ci.yml)
 
-Multi-platform agentic AI harness. Runs on **Telegram**, **WhatsApp**, **Discord**, **Microsoft Teams**, the **Terminal**, and a **cross-platform Desktop/Mobile companion app** (Flutter), with a pluggable backend (**Claude Agent SDK**, **Kilo**, **OpenCode**, **Codex**, **Antigravity**, or **OpenAI Agents**) and full tool access through MCP.
+Multi-platform agentic AI harness. Runs on **Telegram**, **WhatsApp**, **Discord**, **Microsoft Teams**, the **Terminal**, and client applications via the **Native bridge** (such as [Talos](https://github.com/thefalconry/talos)), with a pluggable backend (**Claude Agent SDK**, **Kilo**, **OpenCode**, **Codex**, **Antigravity**, or **OpenAI Agents**) and full tool access through MCP.
+
+> **This repo is the server.** Talon is the daemon only — it ships no GUI client. The desktop and mobile app (Android, macOS, Windows, Linux) is **[Talos](https://github.com/thefalconry/talos)**: download it from [Talos releases](https://github.com/thefalconry/talos/releases) and pair it with your daemon's `native` bridge.
 
 ---
 
@@ -20,7 +22,7 @@ Multi-platform agentic AI harness. Runs on **Telegram**, **WhatsApp**, **Discord
 
 |                       |                                                                                                                                              |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Multi-frontend**    | Telegram (grammY + GramJS userbot), WhatsApp (Baileys multi-device), Discord (discord.js), Microsoft Teams (Bot Framework), Terminal with live tool visibility, and a **Desktop/Mobile app** (Flutter) over a local/remote bridge — one or several at once, see [Frontends](#frontends) |
+| **Multi-frontend**    | Telegram (grammY + GramJS userbot), WhatsApp (Baileys multi-device), Discord (discord.js), Microsoft Teams (Bot Framework), Terminal with live tool visibility, and client applications (such as [Talos](https://github.com/thefalconry/talos)) over a local/remote bridge — one or several at once, see [Frontends](#frontends) |
 | **Pluggable backend** | Claude Agent SDK, Kilo, OpenCode, Codex, Antigravity, OpenAI Agents — selectable per-process via `backend` config. Streaming, model fallback, context-overflow recovery. |
 | **MCP tools**         | Messaging, media, history, search, web fetch, cron jobs, triggers, goals, stickers, file system, admin controls                              |
 | **Plugins**           | Hot-reloadable plugin system with `talon plugin install/enable/disable` (npm, git, or local sources). Built-in: GitHub, MemPalace, Playwright, Brave Search |
@@ -93,7 +95,7 @@ Verify a direct download against the release `SHA256SUMS`:
 [SECURITY.md](SECURITY.md#verifying-a-release)).
 
 **Server only, no Telegram?** Run the daemon with just the client bridge,
-reached by the companion app and talon-node: see
+reached by [Talos](https://github.com/thefalconry/talos) and talon-node: see
 [docs/server-install.md](docs/server-install.md).
 
 > The binary runs the full interactive/agent CLI (`setup`, `start`, `chat`,
@@ -158,7 +160,7 @@ index.ts                    Composition root
   |   +-- discord/          discord.js v14
   |   +-- teams/            Bot Framework + Graph API
   |   +-- terminal/         Readline CLI with tool call visibility
-  |   +-- native/           Client bridge (HTTP + SSE) for the companion app
+  |   +-- native/           Client bridge (HTTP + SSE) for GUI clients (Talos)
   |
   +-- native/               WASM + napi cores (blake3, strsim, textops, sqlguard,
   |                         htmlents, scheduler, fusefs, warden), each with a
@@ -185,7 +187,7 @@ Select via the `frontend` field in `~/.talon/config.json` — one id, or an arra
 | Discord    | `"discord"`      | discord.js v14 gateway                       | Slash commands, guild / channel allowlists, presence text.                                                                                       |
 | Teams      | `"teams"`        | Bot Framework + Graph API                    | Inbound over a Power Automate webhook, outbound over Graph.                                                                                      |
 | Terminal   | `"terminal"`     | Local readline                               | Always available via `talon chat`, even when another frontend is configured. Live tool-call visibility.                                          |
-| Native     | `"native"`       | HTTP + Server-Sent Events bridge             | The protocol the Flutter companion app speaks — see [Desktop & mobile app](#desktop--mobile-app).                                                |
+| Native     | `"native"`       | HTTP + Server-Sent Events bridge             | The protocol GUI clients (such as [Talos](https://github.com/thefalconry/talos)) speak — see [Desktop & mobile app](#desktop--mobile-app). |
 
 Running several is just an array; each chat id keeps its own session and the frontend that owns it answers:
 
@@ -241,7 +243,7 @@ The Kilo and OpenCode backends share infrastructure (`backend/remote-server/`) s
 
 ## Desktop & mobile app
 
-The `native` frontend turns the daemon into a **client bridge** — a versioned HTTP + Server-Sent-Events JSON API (the _Talon Client Bridge Protocol_, `src/frontend/native/protocol.ts`) that any GUI client can speak. The reference client is **[Talon Companion](apps/companion/)**, a single Flutter codebase that runs on **Windows, macOS, Linux, and Android**. The protocol has three independent implementations (daemon, companion, [talon-node](apps/node/)); shared wire fixtures in [protocol/](protocol/) are replayed by all three test suites so a drift on any side fails its CI — see [protocol/README.md](protocol/README.md).
+The `native` frontend turns the daemon into a **client bridge** — a versioned HTTP + Server-Sent-Events JSON API (the _Talon Client Bridge Protocol_, `src/frontend/native/protocol.ts`) that any GUI client can speak. The reference client is **[Talos](https://github.com/thefalconry/talos)** (formerly Talon Companion). The protocol has independent implementations (daemon, Talos, [talon-node](apps/node/)); shared wire fixtures in [protocol/](protocol/) are replayed across test suites so a drift on any side fails its CI — see [protocol/README.md](protocol/README.md).
 
 ```jsonc
 // ~/.talon/config.json
@@ -257,10 +259,10 @@ The `native` frontend turns the daemon into a **client bridge** — a versioned 
 
 - **Local (desktop):** the app connects to a Talon on the same machine and launches one if needed (`TALON_FRONTEND_OVERRIDE=desktop`).
 - **Remote (mobile/LAN):** point the app at `host:port` + token; the bridge requires `Authorization: Bearer …` (or `?token=` on the SSE stream) whenever a token is set.
-- **Encryption:** off-loopback binds serve **HTTPS by default** with a persistent self-signed certificate (`~/.talon/keys/`); the companion pins its SHA-256 fingerprint on first connect and refuses any change afterwards. The daemon logs the fingerprint at startup and `/health` advertises it. Opt out (or in, on loopback) with `"tls": false` / `true` in the `native` section.
-- **From anywhere, certificate-only (Immich-style):** put your reverse proxy (Caddy, nginx, Traefik, Cloudflare Tunnel) in front with client-certificate auth; import the `.p12` in the companion, which also switches to your home-network address whenever it answers. Talon still authenticates with its token — see [docs/mtls.md](docs/mtls.md).
+- **Encryption:** off-loopback binds serve **HTTPS by default** with a persistent self-signed certificate (`~/.talon/keys/`); the client pins its SHA-256 fingerprint on first connect and refuses any change afterwards. The daemon logs the fingerprint at startup and `/health` advertises it. Opt out (or in, on loopback) with `"tls": false` / `true` in the `native` section.
+- **From anywhere, certificate-only (Immich-style):** put your reverse proxy (Caddy, nginx, Traefik, Cloudflare Tunnel) in front with client-certificate auth; import the `.p12` in the client, which also switches to your home-network address whenever it answers. Talon still authenticates with its token — see [docs/mtls.md](docs/mtls.md).
 
-The app **keeps itself up to date** — it watches this repo's releases and installs the next one itself (silently on a rooted/Shizuku phone, swap-and-relaunch on desktop; see [docs/companion-updates.md](docs/companion-updates.md)). It provides multi-chat history, live streaming with reasoning + tool-call visibility, per-chat model/effort/reset, and **settings sync** — read and change the daemon's own config (default model, display name, timezone, pulse/heartbeat/dream) and restart it. See [apps/companion/README.md](apps/companion/README.md).
+The client provides multi-chat history, live streaming with reasoning + tool-call visibility, per-chat model/effort/reset, and **settings sync** — read and change the daemon's own config (default model, display name, timezone, pulse/heartbeat/dream) and restart it. For the client app, see **[Talos](https://github.com/thefalconry/talos)**.
 
 ---
 
