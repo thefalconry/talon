@@ -27,7 +27,7 @@ import { logWarn } from "../../../util/log.js";
 import { writePrivateJson } from "../../mesh/persist.js";
 
 /** Widest window the ledger answers for; everything older is dropped. */
-export const LEDGER_RETENTION_MS = 24 * 60 * 60_000;
+const LEDGER_RETENTION_MS = 24 * 60 * 60_000;
 /** The short window, as `backendBudgets.tokensPer5h` measures it. */
 export const LEDGER_SHORT_WINDOW_MS = 5 * 60 * 60_000;
 
