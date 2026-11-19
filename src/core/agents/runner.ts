@@ -847,6 +847,21 @@ async function runAgent(
     );
   }
 
+  await concludeRun(record, task, settled, model, timeoutMs);
+}
+
+/**
+ * After the run has ended: park it if a daemon shutdown interrupted it,
+ * otherwise clean up, reap its children and deliver the settlement.
+ */
+async function concludeRun(
+  record: AgentRecord,
+  task: TaskHandle,
+  settled: AgentRecord | null,
+  model: string,
+  timeoutMs: number | undefined,
+): Promise<void> {
+  const id = record.id;
   if (agentRegistry.isInterrupted(id)) {
     // Parked by a daemon shutdown: the persisted row stays `running` for
     // the next boot to resume. No settlement, no delivery, no reaping — the
