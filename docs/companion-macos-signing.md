@@ -19,9 +19,9 @@ notarization).
 
 ## CI
 
-`.github/workflows/companion.yml` ("Set up macOS signing identity") imports
-the certificate from two repository secrets into a throwaway keychain, and the
-Package step signs `Talon.app` with the identity named **`Talon Companion`**:
+`.github/workflows/node.yml` ("Set up macOS signing identity") imports
+the certificate from two repository secrets into a throwaway keychain, and
+signs macOS binaries (such as `talon-node`) with the identity named **`Talon Companion`**:
 
 | Secret | Contents |
 | --- | --- |
