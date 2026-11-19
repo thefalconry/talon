@@ -693,6 +693,27 @@ function watchRun(
 }
 
 /**
+ * A run that reported nothing, said nothing and called no tools did not
+ * work, whatever the backend's exit code claims — count it against the
+ * backend so the breaker can open on it. Returns whether it was empty.
+ */
+function recordFinishedRun(
+  backendId: string,
+  id: string,
+  lastText: string,
+  toolCalls: number,
+): boolean {
+  const emptyRun =
+    !agentRegistry.hasReported(id) && lastText.trim() === "" && toolCalls === 0;
+  if (emptyRun) {
+    recordBackendRunFailure(backendId, new Error(EMPTY_RUN_ERROR));
+  } else {
+    recordBackendRunSuccess(backendId);
+  }
+  return emptyRun;
+}
+
+/**
  * Drive one run end to end. Never rejects — it is the tail of a
  * fire-and-forget spawn, so every failure has to end as a settled record
  * their parent is told about.
@@ -790,21 +811,12 @@ async function runAgent(
             trail.snapshot(),
           );
         } else {
-          // A run that reported nothing, said nothing and called no tools
-          // did not work, whatever the backend's exit code claims — count
-          // it against the backend so the breaker can open on it.
-          const emptyRun =
-            !agentRegistry.hasReported(id) &&
-            capture.last.trim() === "" &&
-            trail.toolCalls === 0;
-          if (emptyRun) {
-            recordBackendRunFailure(
-              record.backendId,
-              new Error(EMPTY_RUN_ERROR),
-            );
-          } else {
-            recordBackendRunSuccess(record.backendId);
-          }
+          const emptyRun = recordFinishedRun(
+            record.backendId,
+            id,
+            capture.last,
+            trail.toolCalls,
+          );
           settled = settleSuccess(
             id,
             task,
