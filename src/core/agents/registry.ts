@@ -61,6 +61,8 @@ export interface AgentBinding {
   readonly model: string;
   /** The run's abort handle — `requestKill` pulls this. */
   readonly abort: AbortController;
+  /** Called once when the agent's `report_result` is recorded. */
+  readonly onReported?: () => void;
   /** Task-table id for the run, when one was registered. */
   readonly taskId?: number;
 }
@@ -109,6 +111,7 @@ interface LiveAgent {
   readonly mailbox: AgentMessage[];
   readonly waiters: Set<(record: AgentRecord) => void>;
   abort?: AbortController;
+  onReported?: () => void;
   reported: boolean;
   killRequested: boolean;
   /** Persistence-only facts — see `AgentRegistration` / `PersistedAgent`. */
@@ -497,6 +500,7 @@ export class AgentRegistry {
     const entry = this.live.get(id);
     if (!entry || entry.record.state !== "queued") return;
     entry.abort = binding.abort;
+    entry.onReported = binding.onReported;
     // A kill can arrive while the agent is still `queued` — before any abort
     // handle exists, so requestKill's `entry.abort?.abort()` was a no-op that
     // only set the flag. When the handle finally binds here, honour that
@@ -544,6 +548,7 @@ export class AgentRegistry {
     entry.reported = true;
     entry.record.result = result;
     this.persist(entry);
+    entry.onReported?.();
     return true;
   }
 

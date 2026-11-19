@@ -170,6 +170,8 @@ export interface AgentCaps {
    * its parent after 2N, kill it after 3N. 0 disables the watchdog.
    */
   readonly stallTimeoutMs: number;
+  /** How long a run may continue after `report_result`; default 15 s. */
+  reportGraceMs?: number;
   /**
    * Backends a sub-agent may run on. Unset or empty = any backend with a
    * background capability. Enforced by `spawnAgent` on the final choice.
