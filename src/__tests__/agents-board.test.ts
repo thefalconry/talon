@@ -28,6 +28,7 @@ function live(parent: AgentParent, label: string): AgentRecord {
       maxDepth: 3,
       defaultTimeoutMs: 1000,
       stallTimeoutMs: 0,
+      minHeadroomPct: 0,
     },
   );
   if (!outcome.ok) throw new Error(outcome.error);
