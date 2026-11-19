@@ -8,6 +8,8 @@
 import type { ChildProcess } from "node:child_process";
 import type { WriteStream } from "node:fs";
 import { execute as dispatcherExecute } from "../../engine/dispatcher.js";
+import type { IsolatedJobSpec } from "../cron/scheduler.js";
+import type { JobOneShotResult } from "../cron/job-oneshot.js";
 import { log } from "../../../util/log.js";
 import { getTriggerCaps, setTriggerCaps, type TriggerCaps } from "./caps.js";
 
@@ -18,6 +20,17 @@ export type TriggerDeps = {
   execute: typeof dispatcherExecute;
   /** Per-chat caps from `config.triggers`; defaults apply when absent. */
   caps?: Partial<TriggerCaps>;
+  /**
+   * Runs an isolated-mode wake as a one-shot job (the cron `query` executor:
+   * backend/model resolution, routing, fallback). Unset = isolated wakes are
+   * dropped with an error log.
+   */
+  runIsolated?: (spec: IsolatedJobSpec) => Promise<JobOneShotResult>;
+  /**
+   * Plain-text notice to the chat, no model turn — used when an isolated wake
+   * is skipped or fails, so a broken watcher isn't silent.
+   */
+  notify?: (chatId: number, text: string, stringId?: string) => Promise<void>;
 };
 
 /** Reassignable on a holder object so submodules see the injected deps. */

@@ -378,6 +378,17 @@ describe("gateway HTTP server", () => {
       expect(body.ok).toBe(true);
     });
 
+    // A background run manages a chat's jobs by naming the chat, as with goals.
+    it("routes a cron action by explicit chat_id without an active context", async () => {
+      const { body } = await post({
+        action: "list_cron_jobs",
+        chat_id: 987654,
+        _chatId: "987654",
+      });
+      expect(body.error).not.toBe("No active chat context");
+      expect(body.ok).toBe(true);
+    });
+
     // The bypass is scoped: a non-mesh action still needs a chat.
     it("still requires a chat context for non-mesh actions", async () => {
       const { body } = await post({

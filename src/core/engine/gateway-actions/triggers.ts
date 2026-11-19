@@ -19,6 +19,9 @@ import {
   validateTimeout,
   writeScriptFile,
   DEFAULT_TIMEOUT_SECONDS,
+  DEFAULT_WAKE_TIMEOUT_MS,
+  MAX_WAKE_TIMEOUT_MS,
+  type Trigger,
   type TriggerLanguage,
 } from "../../../storage/triggers.js";
 import {
@@ -27,8 +30,128 @@ import {
   triggerCapError,
 } from "../../background/triggers/index.js";
 import { log } from "../../../util/log.js";
-import { validateJobModelOverride } from "./validation.js";
+import {
+  validateIsolatedJobTarget,
+  validateJobModelOverride,
+} from "./validation.js";
 import type { SharedActionHandlers } from "./types.js";
+
+/** Longest accepted isolated-wake brief (mirrors cron `instructions`). */
+const MAX_INSTRUCTIONS_CHARS = 4_000;
+
+type WakeOptions = {
+  isolated: boolean;
+  instructions?: string;
+  provider?: string;
+  wakeTimeoutMs?: number;
+};
+
+/**
+ * Parse the wake-routing params of trigger_create. `instructions`, `provider`
+ * and `wake_timeout_seconds` only mean something for an isolated wake — passed
+ * with the default chat mode they are an error rather than silently ignored.
+ */
+export function parseWakeOptions(
+  body: Record<string, unknown>,
+): { ok: true; value: WakeOptions } | { ok: false; error: string } {
+  const mode = body.mode == null ? "chat" : String(body.mode);
+  if (mode !== "chat" && mode !== "isolated") {
+    return { ok: false, error: `mode must be "chat" or "isolated"` };
+  }
+  const instructions =
+    body.instructions != null && String(body.instructions).trim()
+      ? String(body.instructions).trim()
+      : undefined;
+  const provider =
+    body.provider != null && String(body.provider).trim()
+      ? String(body.provider).trim()
+      : undefined;
+  const timeoutRaw = body.wake_timeout_seconds;
+  if (mode === "chat") {
+    const stray = [
+      instructions !== undefined ? "instructions" : null,
+      provider !== undefined ? "provider" : null,
+      timeoutRaw != null ? "wake_timeout_seconds" : null,
+    ].filter(Boolean);
+    if (stray.length > 0) {
+      return {
+        ok: false,
+        error: `${stray.join(", ")} only apply to mode="isolated" — set mode="isolated" or drop them.`,
+      };
+    }
+    return { ok: true, value: { isolated: false } };
+  }
+  if (instructions && instructions.length > MAX_INSTRUCTIONS_CHARS) {
+    return {
+      ok: false,
+      error: `instructions too long (max ${MAX_INSTRUCTIONS_CHARS} chars)`,
+    };
+  }
+  let wakeTimeoutMs: number | undefined;
+  if (timeoutRaw != null) {
+    const seconds = Number(timeoutRaw);
+    const maxSeconds = MAX_WAKE_TIMEOUT_MS / 1000;
+    if (!Number.isInteger(seconds) || seconds < 30 || seconds > maxSeconds) {
+      return {
+        ok: false,
+        error: `wake_timeout_seconds must be an integer between 30 and ${maxSeconds}`,
+      };
+    }
+    wakeTimeoutMs = seconds * 1000;
+  }
+  return {
+    ok: true,
+    value: {
+      isolated: true,
+      ...(instructions ? { instructions } : {}),
+      ...(provider ? { provider } : {}),
+      ...(wakeTimeoutMs !== undefined ? { wakeTimeoutMs } : {}),
+    },
+  };
+}
+
+/**
+ * A chat-mode wake resumes the session, so its model must stay on the chat's
+ * backend; an isolated wake has no session to keep and follows the cron
+ * `query` rules (any background-capable provider, which then needs a model).
+ */
+async function validateWakeTarget(
+  chatKey: string,
+  wake: WakeOptions,
+  model: string | undefined,
+): Promise<string | null> {
+  if (wake.isolated) {
+    return validateIsolatedJobTarget(chatKey, model, wake.provider);
+  }
+  return model ? validateJobModelOverride(chatKey, model) : null;
+}
+
+/** The trigger-row fields an isolated wake configuration sets. */
+function wakeFields(wake: WakeOptions): Partial<Trigger> {
+  if (!wake.isolated) return {};
+  return {
+    wakeMode: "isolated",
+    ...(wake.instructions ? { instructions: wake.instructions } : {}),
+    ...(wake.provider ? { provider: wake.provider } : {}),
+    ...(wake.wakeTimeoutMs !== undefined
+      ? { wakeTimeoutMs: wake.wakeTimeoutMs }
+      : {}),
+  };
+}
+
+function describeWake(t: Trigger): string {
+  if (t.wakeMode !== "isolated") {
+    return t.model ? `chat session (model ${t.model})` : "chat session";
+  }
+  const target = [t.provider, t.model].filter(Boolean).join("/");
+  const seconds = Math.round(
+    (t.wakeTimeoutMs ?? DEFAULT_WAKE_TIMEOUT_MS) / 1000,
+  );
+  return (
+    `isolated one-shot${target ? ` on ${target}` : ""}, timeout ${seconds}s` +
+    (t.instructions ? ", with brief" : "")
+  );
+}
 
 export const triggerHandlers: SharedActionHandlers = {
   trigger_create: async (body, chatId, _backend, chatKey) => {
@@ -42,6 +165,8 @@ export const triggerHandlers: SharedActionHandlers = {
     const description = body.description ? String(body.description) : undefined;
     const persistent = body.persistent === true;
     const model = body.model ? String(body.model) : undefined;
+    const wake = parseWakeOptions(body);
+    if (!wake.ok) return { ok: false, error: wake.error };
 
     const nameErr = validateName(name);
     if (nameErr) return { ok: false, error: nameErr };
@@ -69,10 +194,8 @@ export const triggerHandlers: SharedActionHandlers = {
 
     // Validate the model up front so a bad id is rejected here instead of
     // silently failing at fire time.
-    if (model) {
-      const modelErr = await validateJobModelOverride(chatKey, model);
-      if (modelErr) return { ok: false, error: modelErr };
-    }
+    const targetErr = await validateWakeTarget(chatKey, wake.value, model);
+    if (targetErr) return { ok: false, error: targetErr };
 
     const id = generateTriggerId();
     const lang = language as TriggerLanguage;
@@ -102,6 +225,7 @@ export const triggerHandlers: SharedActionHandlers = {
       fireCount: 0,
       persistent,
       ...(model ? { model } : {}),
+      ...wakeFields(wake.value),
     };
     addTrigger(trigger);
 
@@ -136,6 +260,7 @@ export const triggerHandlers: SharedActionHandlers = {
         `Language: ${lang}\n` +
         `Timeout: ${timeoutSeconds}s\n` +
         `Persistent: ${persistent ? "yes (respawns on Talon restart)" : "no"}\n` +
+        `Wake: ${describeWake(stored)}\n` +
         `Status: ${stored.status}`,
     };
   },
@@ -160,6 +285,7 @@ export const triggerHandlers: SharedActionHandlers = {
         `  Created: ${created} (timeout ${t.timeoutSeconds}s)`,
         `  ${fireInfo}`,
       ];
+      detail.push(`  Wake: ${describeWake(t)}`);
       if (t.description) detail.push(`  Note: ${t.description}`);
       if (t.lastError) detail.push(`  Error: ${t.lastError}`);
       return detail.join("\n");

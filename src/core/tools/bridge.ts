@@ -26,6 +26,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
  * engaged, so they inherit transfer-grade budgets too.
  */
 const LONG_ACTION_TIMEOUTS_MS: Record<string, number> = {
+  // The wait's own cap is 300 s; leave room to deliver its answer.
+  wait_for_device: 310_000,
   // `wait_for_agent` blocks for up to its own 120s cap; the bridge budget
   // must sit above it so the layer that gives up is the tool (which reports
   // the agent's live state), never the transport.

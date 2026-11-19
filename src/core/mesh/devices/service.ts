@@ -54,7 +54,7 @@ import {
   computerCommandParams,
   formatComputerResult,
 } from "./computer.js";
-import { MeshRegistry } from "./registry.js";
+import { MeshRegistry, normalizeTags } from "./registry.js";
 import {
   auditErrorText,
   auditIssuer,
@@ -88,6 +88,9 @@ export type MeshTransport = {
   command(command: DeviceCommand): boolean | void;
 };
 
+const WAIT_FOR_DEVICE_DEFAULT_SEC = 60;
+const WAIT_FOR_DEVICE_MAX_SEC = 300;
+
 /** Outcome of pinging one device (see {@link MeshService.pingAll}). */
 export type MeshPingResult = {
   device: DeviceInfo;
@@ -108,6 +111,8 @@ export type MeshServiceOptions = {
   commandTimeoutMs?: number;
   /** How often a long command re-checks that its device is still present. */
   presenceWatchIntervalMs?: number;
+  /** How often `waitForDevice` re-reads presence. */
+  deviceWaitPollMs?: number;
   /**
    * How long an undelivered command (no transport has a live connection to
    * its device) waits for the device to reconnect before failing. Default
@@ -196,6 +201,7 @@ export class MeshService {
   private readonly pollIntervalMs: number;
   private readonly commandTimeoutMs: number;
   private readonly presenceWatchIntervalMs: number;
+  private readonly deviceWaitPollMs: number;
   private commandHoldMs: number;
   private loading: Promise<void> | null = null;
   /** Per-device credentials (null = shared-token-only mesh). */
@@ -216,6 +222,7 @@ export class MeshService {
       options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     this.presenceWatchIntervalMs =
       options.presenceWatchIntervalMs ?? PRESENCE_WATCH_INTERVAL_MS;
+    this.deviceWaitPollMs = options.deviceWaitPollMs ?? 2_000;
     this.commandHoldMs = options.commandHoldMs ?? DEFAULT_COMMAND_HOLD_MS;
     this.resolveNode = options.nodeBinaryResolver ?? resolveNodeBinary;
     this.files = new DeviceFiles({
@@ -624,6 +631,60 @@ export class MeshService {
 
   // ── Model-facing tool surface ──────────────────────────────────────────────
 
+  /**
+   * `wait_for_device`: block until a device reaches a presence state, or the
+   * budget runs out. Presence comes from heartbeats, so "offline" lands one
+   * grace period after the device goes quiet. Requires an explicit target:
+   * waiting on a defaulted device could report success about the wrong one.
+   * The device is pinned by id at the start, so a name that later resolves
+   * elsewhere can't satisfy the wait.
+   */
+  async waitForDevice(
+    query: unknown,
+    state: unknown = "online",
+    timeoutSec?: unknown,
+  ): Promise<MeshToolResult> {
+    await this.load();
+    if (typeof query !== "string" || !query.trim()) {
+      return { ok: false, text: "wait_for_device needs a device id or name." };
+    }
+    if (state !== "online" && state !== "offline") {
+      return { ok: false, text: 'state must be "online" or "offline".' };
+    }
+    const resolved = this.resolveDevice(query);
+    if ("error" in resolved) return { ok: false, text: resolved.error };
+    const { id, name } = resolved.target;
+    const seconds =
+      typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+        ? Math.min(Math.max(timeoutSec, 0), WAIT_FOR_DEVICE_MAX_SEC)
+        : WAIT_FOR_DEVICE_DEFAULT_SEC;
+    const startedAt = Date.now();
+    const deadline = startedAt + seconds * 1000;
+    for (;;) {
+      const current = this.registry.list().devices.find((d) => d.id === id);
+      if (!current) {
+        return {
+          ok: false,
+          text: `${name} was removed from the mesh during the wait.`,
+        };
+      }
+      const waited = Math.round((Date.now() - startedAt) / 1000);
+      if (current.online === (state === "online")) {
+        return { ok: true, text: `${name} is ${state} (waited ${waited}s).` };
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return {
+          ok: false,
+          text: `${name} did not go ${state} within ${seconds}s; it is ${current.online ? "online" : "offline"}, last seen ${age(Date.now() - current.lastSeen)}.`,
+        };
+      }
+      await new Promise((r) =>
+        setTimeout(r, Math.min(this.deviceWaitPollMs, remaining)),
+      );
+    }
+  }
+
   /** `list_devices`: every mesh device with presence, battery, last-known
    *  position, and capabilities — the model's full view of the mesh. */
   async describeDevices(): Promise<MeshToolResult> {
@@ -699,6 +760,37 @@ export class MeshService {
       };
     }
     return { ok: true, text: this.locationSummary(target, loc) };
+  }
+
+  /**
+   * `set_device_tags`: replace a device's operator-assigned tags (an empty
+   * list clears them). Requires an explicit target, like remove_device.
+   */
+  async setDeviceTags(query: unknown, tags: unknown): Promise<MeshToolResult> {
+    await this.load();
+    if (typeof query !== "string" || !query.trim()) {
+      return {
+        ok: false,
+        text: "set_device_tags needs an explicit device id or name. See list_devices.",
+      };
+    }
+    const normalized = normalizeTags(tags);
+    if (!normalized) {
+      return {
+        ok: false,
+        text: "tags must be a list of up to 16 labels of at most 32 characters: letters, digits, '-' or '_', starting with a letter or digit.",
+      };
+    }
+    const resolved = this.resolveDevice(query);
+    if ("error" in resolved) return { ok: false, text: resolved.error };
+    const updated = await this.registry.setTags(resolved.target.id, normalized);
+    if (!updated) return { ok: false, text: this.noSuchDevice(query).text };
+    return {
+      ok: true,
+      text: normalized.length
+        ? `${updated.name} [id: ${updated.id}] tags: ${normalized.join(", ")}. Address with "tag:<name>".`
+        : `Cleared the tags on ${updated.name} [id: ${updated.id}].`,
+    };
   }
 
   /**
@@ -1171,6 +1263,15 @@ export class MeshService {
         return undefined;
       };
 
+      if (q.startsWith("tag:")) {
+        const tag = q.slice(4).trim();
+        return (
+          pick(devices.filter((d) => d.tags?.includes(tag))) ?? {
+            error: `No device has the tag "${tag}". See list_devices.`,
+          }
+        );
+      }
+
       const exactMatch = pick(devices.filter((d) => fold(d.name) === folded));
       if (exactMatch) return exactMatch;
 
@@ -1219,6 +1320,7 @@ export class MeshService {
       `${device.name} [id: ${device.id}] (${device.platform}${device.arch ? `/${device.arch}` : ""})`,
       device.online ? "online" : "offline",
       `last seen ${age(Date.now() - device.lastSeen)}`,
+      ...(device.tags?.length ? [`tags: ${device.tags.join(", ")}`] : []),
     ];
     if (typeof device.battery === "number") {
       parts.push(`${device.battery}%${device.charging ? " charging" : ""}`);

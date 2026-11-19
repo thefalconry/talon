@@ -94,6 +94,10 @@ function ensureSchema(database: SqlDatabase): void {
     dbSql.addHistoryAttachmentsColumn,
     dbSql.addSessionsLastTurnEndedAtColumn,
     dbSql.addCronTimeoutMsColumn,
+    dbSql.addTriggerWakeModeColumn,
+    dbSql.addTriggerWakeInstructionsColumn,
+    dbSql.addTriggerWakeProviderColumn,
+    dbSql.addTriggerWakeTimeoutMsColumn,
   ]) {
     try {
       database.exec(addColumn);
