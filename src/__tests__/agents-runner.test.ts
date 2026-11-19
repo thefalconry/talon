@@ -645,6 +645,32 @@ describe("spawnAgent settlement", () => {
     });
   });
 
+  it("settles killed when the backend swallows the kill and returns", async () => {
+    // The agy and codex one-shots log the abort and return normally.
+    let running = false;
+    await withBackend(
+      (params) =>
+        new Promise<void>((resolve) => {
+          running = true;
+          params.onAssistantText?.("partial answer");
+          if (params.abortController.signal.aborted) resolve();
+          params.abortController.signal.addEventListener("abort", () =>
+            resolve(),
+          );
+        }),
+    );
+    const outcome = await spawn();
+    if (!outcome.ok) return;
+    // Kill inside the backend call, not during startup, which settles apart.
+    await vi.waitFor(() => expect(running).toBe(true));
+    expect(killAgent(outcome.agentId)).toBe(true);
+    const record = await settled(outcome.agentId);
+    expect(record?.state).toBe("killed");
+
+    const task = taskTable.list().find((entry) => entry.id === record?.taskId);
+    expect(task).toMatchObject({ state: "killed" });
+  });
+
   it("kills a settled agent's still-running children", async () => {
     let childId: string | undefined;
     await withBackend(async (params) => {

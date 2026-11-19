@@ -155,19 +155,15 @@ export function resetRedactionCache(): void {
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
-/** Redact credentials from one inbound message's text. */
-export function redactInbound(
+/** Replace stored secret values and known token shapes (matchers 1 and 2). */
+function redactKnownCredentials(
   text: string,
-  opts: { secretsDir?: string } = {},
-): RedactionResult {
-  if (!text) return { text, kinds: [] };
-  const kinds: RedactionKind[] = [];
-  const hit = (k: RedactionKind): void => {
-    if (!kinds.includes(k)) kinds.push(k);
-  };
+  secretsDir: string,
+  hit: (k: RedactionKind) => void,
+): string {
   let out = text;
 
-  for (const value of storedValues(opts.secretsDir ?? dirs.secrets)) {
+  for (const value of storedValues(secretsDir)) {
     if (out.includes(value)) {
       out = out.split(value).join(marker("stored"));
       hit("stored");
@@ -187,6 +183,37 @@ export function redactInbound(
       return marker(kind);
     });
   }
+
+  return out;
+}
+
+/**
+ * Redact credentials from machine-written text such as a run log. Leaves out
+ * the password-word matchers, which are tuned for what people type in chat.
+ */
+export function redactCredentials(
+  text: string,
+  opts: { secretsDir?: string } = {},
+): string {
+  if (!text) return text;
+  return redactKnownCredentials(
+    text,
+    opts.secretsDir ?? dirs.secrets,
+    () => {},
+  );
+}
+
+/** Redact credentials from one inbound message's text. */
+export function redactInbound(
+  text: string,
+  opts: { secretsDir?: string } = {},
+): RedactionResult {
+  if (!text) return { text, kinds: [] };
+  const kinds: RedactionKind[] = [];
+  const hit = (k: RedactionKind): void => {
+    if (!kinds.includes(k)) kinds.push(k);
+  };
+  let out = redactKnownCredentials(text, opts.secretsDir ?? dirs.secrets, hit);
 
   out = replaceWordValues(out, PASSWORD_RE, "password", looksLikePassword, hit);
   out = replaceWordValues(

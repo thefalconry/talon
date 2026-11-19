@@ -36,6 +36,21 @@ ALTER TABLE sessions ADD COLUMN last_turn_ended_at INTEGER
 -- carry its own run timeout. Fresh databases get the column via schema.sql.
 ALTER TABLE cron_jobs ADD COLUMN timeout_ms INTEGER
 
+-- name: addTriggerWakeModeColumn
+-- Column reconciliation for databases that shipped before a trigger could
+-- wake an isolated one-shot instead of the chat session. Fresh databases get
+-- the wake_* columns via schema.sql.
+ALTER TABLE triggers ADD COLUMN wake_mode TEXT
+
+-- name: addTriggerWakeInstructionsColumn
+ALTER TABLE triggers ADD COLUMN wake_instructions TEXT
+
+-- name: addTriggerWakeProviderColumn
+ALTER TABLE triggers ADD COLUMN wake_provider TEXT
+
+-- name: addTriggerWakeTimeoutMsColumn
+ALTER TABLE triggers ADD COLUMN wake_timeout_ms INTEGER
+
 -- name: vacuumInto
 -- Transactionally consistent copy of the whole database into a new file,
 -- produced by SQLite itself (storage/db.ts snapshotDatabase). A backup
