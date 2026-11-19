@@ -14,7 +14,11 @@ export {
   loadBackendLedger,
   recordBackendRunUsage,
 } from "./ledger.js";
-export { recordBackendRunFailure, recordBackendRunSuccess } from "./breaker.js";
+export {
+  openBreaker,
+  recordBackendRunFailure,
+  recordBackendRunSuccess,
+} from "./breaker.js";
 export {
   formatHeadroom,
   getBackendHeadroom,

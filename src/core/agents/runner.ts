@@ -48,6 +48,7 @@ import {
 } from "../engine/backend-controller/index.js";
 import {
   chooseBackend,
+  openBreaker,
   getBackendHeadroom,
   type BackendHeadroom,
   recordBackendRunFailure,
@@ -425,6 +426,22 @@ export async function spawnAgent(
   if (!isBackendAllowed(backendId)) {
     return { ok: false, error: disallowedBackendError(backendId) };
   }
+  // Routing already steers around open breakers; an explicit pin bypasses
+  // it, so refuse here rather than burn a run on a backend known to fail.
+  const tripped = spec.backendId ? openBreaker(backendId) : undefined;
+  if (tripped) {
+    const minutes = Math.max(
+      1,
+      Math.ceil((tripped.until - Date.now()) / 60_000),
+    );
+    return {
+      ok: false,
+      error:
+        `Backend "${backendId}" is failing right now (${tripped.reason}); ` +
+        `its circuit breaker is open for another ~${minutes}m. Omit ` +
+        `backend= to let routing pick a healthy one.`,
+    };
+  }
   const minHeadroomPct = capsHolder.caps.minHeadroomPct;
   if (!spec.force && minHeadroomPct > 0) {
     const refusal = headroomRefusal(
@@ -560,6 +577,10 @@ async function buildRunParams(
   };
 }
 
+/** Settlement error for a run that returned having done nothing at all. */
+const EMPTY_RUN_ERROR =
+  "empty run: the agent produced no output and made no tool calls";
+
 /** Settle a run that returned normally, applying the result precedence. */
 function settleSuccess(
   id: string,
@@ -567,6 +588,7 @@ function settleSuccess(
   lastText: string,
   usage: TaskUsage | undefined,
   trail: AgentTrail,
+  emptyRun = false,
 ): AgentRecord | null {
   if (agentRegistry.hasReported(id)) {
     task.succeed(usage);
@@ -585,8 +607,9 @@ function settleSuccess(
       ...(usage ? { usage } : {}),
     });
   }
-  const error =
-    "the agent finished without calling report_result and produced no text";
+  const error = emptyRun
+    ? EMPTY_RUN_ERROR
+    : "the agent finished without calling report_result and produced no text";
   task.fail(new Error(error), usage);
   return agentRegistry.settle(id, {
     state: "failed",
@@ -667,6 +690,27 @@ function watchRun(
     },
   });
   return { watch, watchdog };
+}
+
+/**
+ * A run that reported nothing, said nothing and called no tools did not
+ * work, whatever the backend's exit code claims — count it against the
+ * backend so the breaker can open on it. Returns whether it was empty.
+ */
+function recordFinishedRun(
+  backendId: string,
+  id: string,
+  lastText: string,
+  toolCalls: number,
+): boolean {
+  const emptyRun =
+    !agentRegistry.hasReported(id) && lastText.trim() === "" && toolCalls === 0;
+  if (emptyRun) {
+    recordBackendRunFailure(backendId, new Error(EMPTY_RUN_ERROR));
+  } else {
+    recordBackendRunSuccess(backendId);
+  }
+  return emptyRun;
 }
 
 /**
@@ -767,13 +811,19 @@ async function runAgent(
             trail.snapshot(),
           );
         } else {
-          recordBackendRunSuccess(record.backendId);
+          const emptyRun = recordFinishedRun(
+            record.backendId,
+            id,
+            capture.last,
+            trail.toolCalls,
+          );
           settled = settleSuccess(
             id,
             task,
             capture.last,
             usage ?? undefined,
             trail.snapshot(),
+            emptyRun,
           );
         }
       }

@@ -46,6 +46,7 @@ vi.mock("../core/engine/backend-router/index.js", () => ({
     reason: "no candidates",
     routed: false,
   })),
+  openBreaker: () => undefined,
   // Unmeasured: the headroom guard lets every spawn through.
   getBackendHeadroom: vi.fn(async (id: string, label: string) => ({
     id,
