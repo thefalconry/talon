@@ -137,6 +137,54 @@ describe("provision seam", () => {
     expect(exec.calls[0].cmd).toBe("py");
   });
 
+  it("skips a default python above the cap for a versioned one", async () => {
+    const exec = fakeExec([
+      {
+        match: (c, a) => c === "py" && a[0] === "-3",
+        result: { ok: true, stdout: "3.15\n" },
+      },
+      {
+        match: (c, a) => c === "py" && a[0] === "-3.14",
+        result: { ok: false, code: 1, stdout: "", stderr: "not installed" },
+      },
+      {
+        match: (c, a) => c === "py" && a[0] === "-3.13",
+        result: { ok: true, stdout: "3.13\n" },
+      },
+    ]);
+    const found = await findBasePython(
+      exec,
+      "win32",
+      { major: 3, minor: 10 },
+      { major: 3, minor: 14 },
+    );
+    expect(found).toMatchObject({
+      command: "py",
+      args: ["-3.13"],
+      version: "3.13",
+    });
+  });
+
+  it("finds a versioned posix python when python3 is above the cap", async () => {
+    const exec = fakeExec([
+      {
+        match: (c) => c === "python3",
+        result: { ok: true, stdout: "3.15\n" },
+      },
+      {
+        match: (c) => c === "python3.14",
+        result: { ok: true, stdout: "3.14\n" },
+      },
+    ]);
+    const found = await findBasePython(
+      exec,
+      "linux",
+      { major: 3, minor: 10 },
+      { major: 3, minor: 14 },
+    );
+    expect(found).toMatchObject({ command: "python3.14", version: "3.14" });
+  });
+
   it("failDetail prefers spawn error, then stderr tail, then exit code", () => {
     expect(
       failDetail({
