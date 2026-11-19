@@ -120,7 +120,7 @@
     "baileys": "^7.0.0-rc14",
     "big-integer": "^1.6.52",
     "cheerio": "^1.2.0",
-    "croner": "^10.0.1",
+    "croner": "^11.0.0",
     "cross-spawn": "^7.0.6",
     "discord.js": "^14.16.3",
     "file-type": "^22.0.1",
