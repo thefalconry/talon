@@ -242,3 +242,37 @@ func TestHandleCommandAnswersWhenTheAuditCannotBeWritten(t *testing.T) {
 		t.Fatal("command was not answered")
 	}
 }
+
+func TestAuditSkipsOnlyExecJobStatusPolls(t *testing.T) {
+	cases := []struct {
+		name   string
+		params map[string]any
+		want   bool
+	}{
+		{"exec", map[string]any{"cmd": "make"}, true},
+		{"exec_job", map[string]any{"jobId": "job_1"}, false},
+		{"exec_job", map[string]any{"jobId": "job_1", "action": "status"}, false},
+		{"exec_job", map[string]any{"jobId": "job_1", "action": "kill"}, true},
+		{"stat", map[string]any{"path": "/tmp"}, true},
+	}
+	for _, c := range cases {
+		if got := auditable(c.name, c.params); got != c.want {
+			t.Errorf("auditable(%s, %v) = %v, want %v", c.name, c.params, got, c.want)
+		}
+	}
+}
+
+func TestHandleCommandLeavesStatusPollsOutOfTheAudit(t *testing.T) {
+	srv, results := resultSink(t)
+	n := streamTestNode(t, srv.URL)
+	ctx := context.Background()
+	n.handleCommand(ctx, map[string]any{"id": "p1", "name": "exec_job", "params": map[string]any{"jobId": "job_x"}})
+	n.handleCommand(ctx, map[string]any{"id": "k1", "name": "exec_job", "params": map[string]any{"jobId": "job_x", "action": "kill"}})
+	<-results
+	<-results
+
+	got, err := readAudit(auditPath(n.cfg.Path), 0)
+	if err != nil || len(got) != 1 || got[0].CommandID != "k1" {
+		t.Fatalf("audit = %+v, %v; want only the kill", got, err)
+	}
+}

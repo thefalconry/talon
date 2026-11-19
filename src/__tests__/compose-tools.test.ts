@@ -92,6 +92,7 @@ const ALL_TOOLS_ORDER = [
   "get_device_status",
   "wait_for_device",
   "device_exec",
+  "device_exec_job",
   "device_computer",
   "device_list_dir",
   "device_read_file",

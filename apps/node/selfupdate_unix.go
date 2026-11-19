@@ -55,6 +55,9 @@ func reexecInto(_ *Node) {
 		exe = resolved
 	}
 	log.Printf("update_node: restarting into %s", exe)
+	// execve drops the job table, and a job left running would have nothing
+	// to report it, kill it or enforce its lifetime limit.
+	execJobs.killAll()
 	if err := syscall.Exec(exe, os.Args, os.Environ()); err != nil {
 		// If execve fails the process keeps running the OLD image; the
 		// supervisor will pick up the new one on the next restart anyway.

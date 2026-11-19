@@ -240,6 +240,8 @@ class MeshAudit {
         return cmd == null
             ? null
             : 'sha256:${sha256.convert(utf8.encode(cmd))}';
+      case 'exec_job':
+        return str('jobId');
       case 'move':
         final from = str('from');
         final to = str('to');

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -35,10 +36,12 @@ import 'log.dart';
 /// app-UID path and is only *reported* differently. See docs/companion-root.md.
 class DeviceExec {
   DeviceExec({
+    @visibleForTesting String elevatedJobRoot = _apkStageRoot,
     MethodChannel? shizukuChannel,
     MethodChannel? rootChannel,
     bool Function()? isAndroid,
-  })  : _shizuku = shizukuChannel ?? const MethodChannel('talon/shizuku'),
+  })  : _elevatedJobRoot = elevatedJobRoot,
+        _shizuku = shizukuChannel ?? const MethodChannel('talon/shizuku'),
         _root = rootChannel ?? const MethodChannel('talon/root'),
         _isAndroid = isAndroid ?? (() => !kIsWeb && Platform.isAndroid);
 
@@ -123,6 +126,19 @@ class DeviceExec {
 
   static const int _maxChunkBytes = 256 * 1024;
 
+  /// Hard stop for a detached command; same as talon-node.
+  static const Duration maxExecJobLifetime = Duration(hours: 24);
+
+  /// What the mesh may leave running. Past it a timeout kills the command.
+  static const int maxRunningExecJobs = 16;
+
+  /// How long a finished job's result stays readable.
+  static const Duration finishedExecJobTtl = Duration(hours: 1);
+
+  final Map<String, _ExecJob> _execJobs = {};
+
+  final String _elevatedJobRoot;
+
   /// Default for the largest file a mesh write (write_file chunks,
   /// download_file) may produce on this device — the same 4 GiB as
   /// talon-node. The mesh points [writeLimit] at the user's setting.
@@ -143,6 +159,7 @@ class DeviceExec {
   /// exited. A backgrounded child holding the inherited pipes must not pin
   /// the exec call open past this.
   static const Duration _pipeDrainGrace = Duration(seconds: 2);
+
   /// Per-stream cap on exec output shipped back over the mesh. Head + tail
   /// (not head-only): the daemon's teleport wrapper prints its cwd marker at
   /// the very END of stdout, and losing it would break cwd tracking.
@@ -159,10 +176,9 @@ class DeviceExec {
   Future<Map<String, dynamic>?> rootStatus({bool probe = false}) async {
     if (!_isAndroid()) return null;
     try {
-      final status = await _root.invokeMapMethod<String, dynamic>(
-        'getStatus',
-        {'probe': probe},
-      );
+      final status = await _root.invokeMapMethod<String, dynamic>('getStatus', {
+        'probe': probe,
+      });
       if (status != null) {
         _lastRoot = status;
         AppLog.info(
@@ -207,11 +223,12 @@ class DeviceExec {
         DateTime.now().difference(probedAt) < _rootProbeTtl) {
       return cached['tier'] == 'root';
     }
-    final probe = _pendingRootProbe ??=
-        rootStatus(probe: true).whenComplete(() {
-      _pendingRootProbe = null;
-      _rootProbedAt = DateTime.now();
-    });
+    final probe = _pendingRootProbe ??= rootStatus(probe: true).whenComplete(
+      () {
+        _pendingRootProbe = null;
+        _rootProbedAt = DateTime.now();
+      },
+    );
     final status = await probe;
     return status?['tier'] == 'root';
   }
@@ -240,8 +257,9 @@ class DeviceExec {
   Future<bool> shizukuReady() async {
     if (!_isAndroid()) return false;
     try {
-      final status =
-          await _shizuku.invokeMapMethod<String, dynamic>('getStatus');
+      final status = await _shizuku.invokeMapMethod<String, dynamic>(
+        'getStatus',
+      );
       final state = status?['state'];
       if (state is String) _lastShizukuState = state;
       final ready = status?['ready'] == true;
@@ -370,6 +388,12 @@ class DeviceExec {
           _str(params['cmd']) ?? '',
           cwd: _str(params['cwd']),
           timeoutMs: _int(params['timeoutMs']),
+          detachOnTimeout: params['detachOnTimeout'] == true,
+        );
+      case 'exec_job':
+        return execJob(
+          _str(params['jobId']) ?? '',
+          action: _str(params['action']) ?? 'status',
         );
       case 'read_file':
         return readFile(
@@ -412,17 +436,29 @@ class DeviceExec {
     String cmd, {
     String? cwd,
     int? timeoutMs,
+    bool detachOnTimeout = false,
   }) async {
     if (cmd.trim().isEmpty) {
       return CommandOutcome.fail('No command given.');
     }
-    final budget =
-        Duration(milliseconds: (timeoutMs ?? 60000).clamp(1000, 300000));
+    final budget = Duration(
+      milliseconds: (timeoutMs ?? 60000).clamp(1000, 300000),
+    );
     // Root first — it is the only tier that reaches other apps' data, /data,
     // and the whole system, so anything the daemon asks for lands where the
     // operator expects rather than inside a scoped-storage view.
     if (await ensureRootReady()) {
       try {
+        if (detachOnTimeout) {
+          final detached = await _execElevatedDetached(
+            _root,
+            'root',
+            cmd,
+            cwd,
+            budget,
+          );
+          if (detached != null) return detached;
+        }
         final res = await _root.invokeMapMethod<String, dynamic>('exec', {
           'cmd': cmd,
           if (cwd != null) 'cwd': cwd,
@@ -432,6 +468,9 @@ class DeviceExec {
       } catch (e) {
         AppLog.warn('exec', 'root exec failed, falling back', e);
         _demoteRoot('exec failed: $e');
+        if (e is _ElevatedJobLost) {
+          return CommandOutcome.fail('Root exec failed: ${e.cause}');
+        }
       }
     }
     // Then Shizuku (shell UID). If it is installed but permission has not
@@ -439,6 +478,16 @@ class DeviceExec {
     // silently run as the app UID and return a misleading scoped-storage view.
     if (await ensureShizukuReady()) {
       try {
+        if (detachOnTimeout) {
+          final detached = await _execElevatedDetached(
+            _shizuku,
+            'shizuku',
+            cmd,
+            cwd,
+            budget,
+          );
+          if (detached != null) return detached;
+        }
         final res = await _shizuku.invokeMapMethod<String, dynamic>('exec', {
           'cmd': cmd,
           if (cwd != null) 'cwd': cwd,
@@ -447,10 +496,14 @@ class DeviceExec {
         if (res != null) return _nativeOutcome(res, 'shizuku');
       } catch (e) {
         AppLog.warn('exec', 'shizuku exec failed, falling back', e);
+        if (e is _ElevatedJobLost) {
+          return CommandOutcome.fail('Shizuku exec failed: ${e.cause}');
+        }
         return _execAppUid(
           cmd,
           cwd: cwd,
           budget: budget,
+          detachOnTimeout: detachOnTimeout,
           privilegeWarning: 'Shizuku exec failed ($e); ran as app UID.',
         );
       }
@@ -459,12 +512,13 @@ class DeviceExec {
       cmd,
       cwd: cwd,
       budget: budget,
+      detachOnTimeout: detachOnTimeout,
       privilegeWarning: _isAndroid() && !allowElevation()
           ? 'Elevated access is off in the companion settings; ran as app UID.'
           : _isAndroid()
-          ? 'Elevation not used (root=${_rootStateLabel() ?? 'unknown'}, '
-              'shizuku=${_lastShizukuState ?? 'unknown'}); ran as app UID.'
-          : null,
+              ? 'Elevation not used (root=${_rootStateLabel() ?? 'unknown'}, '
+                  'shizuku=${_lastShizukuState ?? 'unknown'}); ran as app UID.'
+              : null,
     );
   }
 
@@ -489,6 +543,7 @@ class DeviceExec {
     String cmd, {
     String? cwd,
     required Duration budget,
+    bool detachOnTimeout = false,
     String? privilegeWarning,
   }) async {
     final invocation = shellInvocation(cmd);
@@ -506,12 +561,38 @@ class DeviceExec {
       final outF = proc.stdout.transform(utf8.decoder).forEach(out.add);
       final errF = proc.stderr.transform(utf8.decoder).forEach(err.add);
       var timedOut = false;
-      final timer = Timer(budget, () {
-        timedOut = true;
-        proc.kill(ProcessSignal.sigkill);
-      });
+      Timer? timer;
+      if (detachOnTimeout) {
+        final early = await proc.exitCode
+            .then<int?>((c) => c)
+            .timeout(budget, onTimeout: () => null);
+        if (early == null) {
+          final job = _adoptJob(proc, out, err, outF, errF);
+          if (job != null) {
+            return CommandOutcome(
+              ok: true,
+              message: 'Command still running; detached as a job.',
+              data: {
+                'stdout': out.value(),
+                'stderr': err.value(),
+                'detached': true,
+                'jobId': job.id,
+                if (_isAndroid()) 'via': 'app',
+              },
+            );
+          }
+          // Job table full: the budget has lapsed, so kill as usual.
+          timedOut = true;
+          proc.kill(ProcessSignal.sigkill);
+        }
+      } else {
+        timer = Timer(budget, () {
+          timedOut = true;
+          proc.kill(ProcessSignal.sigkill);
+        });
+      }
       final code = await proc.exitCode;
-      timer.cancel();
+      timer?.cancel();
       // The shell has exited, but a backgrounded child (`long-running &`)
       // inherits the stdout/stderr pipes and can hold them open long after —
       // awaiting pipe closure unconditionally here used to hang the whole
@@ -519,8 +600,10 @@ class DeviceExec {
       // lingering writers a short grace to flush, then answer with whatever
       // arrived: redirect-to-file is the supported channel for persistent
       // streams (`cmd > /tmp/log 2>&1 &`, then read the file).
-      await Future.wait([outF, errF])
-          .timeout(_pipeDrainGrace, onTimeout: () => const []);
+      await Future.wait([
+        outF,
+        errF,
+      ]).timeout(_pipeDrainGrace, onTimeout: () => const []);
       final stdout = out.value();
       final stderr = err.value();
       return CommandOutcome(
@@ -542,6 +625,316 @@ class DeviceExec {
       );
     } catch (e) {
       return CommandOutcome.fail('Failed to run command: $e');
+    }
+  }
+
+  /// Registers a command that outlived its budget, or returns null when
+  /// [maxRunningExecJobs] are already running. Jobs live in memory, so an app
+  /// restart forgets them. Root and Shizuku commands use
+  /// [_execElevatedDetached] instead, because their bridges kill at the budget.
+  _ExecJob? _adoptJob(
+    Process proc,
+    _CappedOutput out,
+    _CappedOutput err,
+    Future<void> outF,
+    Future<void> errF,
+  ) {
+    final now = DateTime.now();
+    _execJobs.removeWhere(
+      (_, j) =>
+          j.finished != null &&
+          now.difference(j.finished!) > finishedExecJobTtl,
+    );
+    final running = _execJobs.values.where((j) => j.finished == null).length;
+    if (running >= maxRunningExecJobs) return null;
+    final rand = Random.secure();
+    final id =
+        'job_${List.generate(8, (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0')).join()}';
+    final job = _ExecJob(id, proc, out, err, now);
+    _execJobs[id] = job;
+    final lifetime = Timer(
+      maxExecJobLifetime,
+      () => proc.kill(ProcessSignal.sigkill),
+    );
+    job.done = proc.exitCode.then((code) async {
+      lifetime.cancel();
+      await Future.wait([
+        outF,
+        errF,
+      ]).timeout(_pipeDrainGrace, onTimeout: () => const []);
+      job.exitCode = code;
+      job.finished = DateTime.now();
+    });
+    return job;
+  }
+
+  /// Reads (action `status`) or kills a job left by a detached [exec].
+  Future<CommandOutcome> execJob(
+    String jobId, {
+    String action = 'status',
+  }) async {
+    if (jobId.isEmpty) return CommandOutcome.fail('No jobId.');
+    if (jobId.startsWith('ejob_')) return _elevatedJob(jobId, action);
+    final job = _execJobs[jobId];
+    if (job == null) {
+      return CommandOutcome.fail(
+        'No such job: $jobId (it may have expired, or the app restarted).',
+      );
+    }
+    switch (action) {
+      case 'status':
+        break;
+      case 'kill':
+        job.proc.kill(ProcessSignal.sigkill);
+        try {
+          await job.done.timeout(const Duration(seconds: 5));
+        } on TimeoutException {
+          return CommandOutcome.fail('Job $jobId did not stop within 5s.');
+        }
+      default:
+        return CommandOutcome.fail('Unknown action: $action');
+    }
+    final finished = job.finished;
+    return CommandOutcome(
+      ok: true,
+      data: {
+        'jobId': job.id,
+        'running': finished == null,
+        'stdout': job.out.value(),
+        'stderr': job.err.value(),
+        if (finished != null) 'exitCode': job.exitCode,
+        'runtimeMs':
+            (finished ?? DateTime.now()).difference(job.started).inMilliseconds,
+      },
+    );
+  }
+
+  // ── elevated jobs ─────────────────────────────────────────────────────────
+
+  static const Duration _elevatedStartBudget = Duration(seconds: 15);
+  static final RegExp _elevatedJobId = RegExp(
+    r'^ejob_(root|shizuku)_([A-Za-z0-9]{1,32})$',
+  );
+
+  /// Per-stream bytes of job output that trigger a trim on the device's disk.
+  static const int _jobOutputDiskBytes = 1024 * 1024;
+
+  /// Exit code of [elevatedJobStartScript] when nothing was launched and the
+  /// command should run the ordinary way, killed at its budget.
+  static const int _jobNotStarted = 75;
+
+  /// Exit code of [elevatedJobReadScript] for an unknown job directory.
+  static const int _jobMissing = 76;
+
+  /// Shell function: is the process in `\$2` still the worker of job dir `\$1`?
+  /// Job directories outlive a reboot and pids get reused, so a live pid alone
+  /// proves nothing, and signalling it could hit an unrelated process group
+  /// with root's rights. The worker carries its directory as an argument.
+  static const String _jobAliveFn =
+      'job_alive() { [ -n "\$2" ] && [ -r "/proc/\$2/cmdline" ] && '
+      'tr \'\\000\' \'\\n\' <"/proc/\$2/cmdline" 2>/dev/null | grep -qxF "\$1"; }; ';
+
+  /// Starts a job in a private directory, printing the directory's suffix.
+  /// The root and Shizuku bridges kill what they run at the budget, so a
+  /// command that may outlive it has to be launched from the start in its own
+  /// session, with output in files. Finished jobs older than an hour are
+  /// removed here, and jobs over a day old are killed; both happen only when
+  /// a new job starts. Once a second, a stream over [_jobOutputDiskBytes] is cut
+  /// to its first and last bytes, so a fast writer can overshoot between cuts
+  /// and bytes written during a cut can be lost.
+  @visibleForTesting
+  static String elevatedJobStartScript(String root, String cmd) {
+    final worker = 'echo \$\$ >"\$1/pid"; : >"\$1/out"; : >"\$1/err"; '
+        'trim() { for f in "\$1/out" "\$1/err"; do '
+        '[ "\$(wc -c <"\$f")" -gt $_jobOutputDiskBytes ] || continue; '
+        '[ -f "\$f.head" ] || head -c $_execOutputHeadBytes "\$f" >"\$f.head"; '
+        'tail -c $_execOutputTailBytes "\$f" >"\$f.t"; cat "\$f.t" >"\$f"; rm -f "\$f.t"; '
+        'done; }; '
+        '{ while sleep 1; do trim "\$1"; done; } & w=\$!; '
+        // Appending, so a writer carries on at the new end after a trim.
+        'sh -c ${_shQuote(cmd)} >>"\$1/out" 2>>"\$1/err" </dev/null; c=\$?; '
+        'kill \$w 2>/dev/null; trim "\$1"; '
+        'echo \$c >"\$1/exit.tmp"; mv "\$1/exit.tmp" "\$1/exit"';
+    return '${_jobAliveFn}umask 077; r=${_shQuote(root)}; running=0; '
+        'for j in "\$r"/talon-job.*; do [ -d "\$j" ] || continue; '
+        'if [ -f "\$j/exit" ]; then '
+        '[ -n "\$(find "\$j/exit" -mmin +60 2>/dev/null)" ] && rm -rf "\$j"; '
+        'else p=\$(cat "\$j/pid" 2>/dev/null); '
+        'if job_alive "\$j" "\$p"; then '
+        'if [ -n "\$(find "\$j/pid" -mmin +1440 2>/dev/null)" ]; then '
+        'kill -9 -"\$p" 2>/dev/null; echo 137 >"\$j/exit"; '
+        'else running=\$((running+1)); fi; '
+        // Lost to a reboot or a kill: give it an exit file so it ages out.
+        'elif [ -n "\$p" ]; then echo -1 >"\$j/exit"; fi; fi; done; '
+        '[ "\$running" -ge $maxRunningExecJobs ] && exit $_jobNotStarted; '
+        'd=\$(mktemp -d "\$r/talon-job.XXXXXXXXXX") || exit $_jobNotStarted; '
+        'setsid sh -c ${_shQuote(worker)} talon-job "\$d" >/dev/null 2>&1 </dev/null & '
+        'echo "\${d##*/talon-job.}"';
+  }
+
+  /// Prints `R`, or `F <code>`, on the first stdout line, then the job's
+  /// stdout; the job's stderr goes to stderr. A job that left no exit file
+  /// and no live process (the device rebooted) reads as finished with -1.
+  @visibleForTesting
+  static String elevatedJobReadScript(String root, String suffix) {
+    const head = _execOutputHeadBytes;
+    const tail = _execOutputTailBytes;
+    return '${_jobAliveFn}d=${_shQuote('$root/talon-job.$suffix')}; '
+        '[ -d "\$d" ] || exit $_jobMissing; '
+        'show() { [ -f "\$1" ] || return 0; '
+        'if [ -s "\$1.head" ]; then cat "\$1.head"; '
+        'printf \'\\n…[job output trimmed]…\\n\'; fi; n=\$(wc -c <"\$1"); '
+        'if [ "\$n" -le ${head + tail} ]; then cat "\$1"; else '
+        'head -c $head "\$1"; printf \'\\n…[%s bytes truncated]…\\n\' \$((n-${head + tail})); '
+        'tail -c $tail "\$1"; fi; }; '
+        'p=\$(cat "\$d/pid" 2>/dev/null); '
+        'if [ -f "\$d/exit" ]; then echo "F \$(cat "\$d/exit")"; '
+        'elif [ -z "\$p" ] || job_alive "\$d" "\$p"; then echo R; '
+        // Checked again: the worker may have finished since the first look.
+        'elif [ -f "\$d/exit" ]; then echo "F \$(cat "\$d/exit")"; '
+        'else echo "F -1"; fi; '
+        'show "\$d/out"; show "\$d/err" >&2';
+  }
+
+  /// Kills the job's whole session and records 137 unless it already ended.
+  @visibleForTesting
+  static String elevatedJobKillScript(String root, String suffix) {
+    return '${_jobAliveFn}d=${_shQuote('$root/talon-job.$suffix')}; '
+        '[ -d "\$d" ] || exit $_jobMissing; '
+        '[ -f "\$d/exit" ] && exit 0; '
+        'p=\$(cat "\$d/pid" 2>/dev/null); '
+        'job_alive "\$d" "\$p" && kill -9 -"\$p" 2>/dev/null; '
+        'echo 137 >"\$d/exit"';
+  }
+
+  /// Runs [cmd] as a job and waits up to [budget]. A command that ends in time
+  /// looks like any other exec; one that doesn't is reported as detached.
+  /// Null means nothing was launched and the caller should exec normally.
+  /// Throws [_ElevatedJobLost] once the command may be running, because
+  /// retrying at another tier could run it twice.
+  Future<CommandOutcome?> _execElevatedDetached(
+    MethodChannel channel,
+    String via,
+    String cmd,
+    String? cwd,
+    Duration budget,
+  ) async {
+    final Map<String, dynamic>? started;
+    try {
+      started = await channel.invokeMapMethod<String, dynamic>('exec', {
+        'cmd': elevatedJobStartScript(_elevatedJobRoot, cmd),
+        if (cwd != null) 'cwd': cwd,
+        'timeoutMs': _elevatedStartBudget.inMilliseconds,
+      });
+    } catch (e) {
+      throw _ElevatedJobLost('starting the job: $e');
+    }
+    if (started == null) return null;
+    final startCode = (started['exitCode'] as num?)?.toInt() ?? -1;
+    if (startCode == _jobNotStarted) return null;
+    final suffix = '${started['stdout'] ?? ''}'.trim();
+    final id = 'ejob_${via}_$suffix';
+    if (startCode != 0 || !_elevatedJobId.hasMatch(id)) {
+      // The shell refused before launching, such as for a missing cwd.
+      return _nativeOutcome(started, via);
+    }
+    final deadline = DateTime.now().add(budget);
+    var delay = const Duration(milliseconds: 50);
+    while (true) {
+      final Map<String, dynamic>? read;
+      try {
+        read = await channel.invokeMapMethod<String, dynamic>('exec', {
+          'cmd': elevatedJobReadScript(_elevatedJobRoot, suffix),
+          'timeoutMs': _elevatedStartBudget.inMilliseconds,
+        });
+      } catch (e) {
+        throw _ElevatedJobLost('reading job $id: $e');
+      }
+      final state = _parseElevatedRead(read);
+      if (state.exitCode != null) {
+        return _nativeOutcome({
+          ...?read,
+          'stdout': state.stdout,
+          'stderr': state.stderr,
+          'exitCode': state.exitCode,
+        }, via);
+      }
+      final left = deadline.difference(DateTime.now());
+      if (left <= Duration.zero) {
+        return CommandOutcome(
+          ok: true,
+          message: 'Command still running; detached as a job.',
+          data: {
+            'stdout': state.stdout,
+            'stderr': state.stderr,
+            'detached': true,
+            'jobId': id,
+            'via': via,
+          },
+        );
+      }
+      await Future<void>.delayed(delay < left ? delay : left);
+      if (delay < const Duration(seconds: 1)) delay *= 2;
+    }
+  }
+
+  ({int? exitCode, String stdout, String stderr}) _parseElevatedRead(
+    Map<String, dynamic>? res,
+  ) {
+    final raw = '${res?['stdout'] ?? ''}';
+    final nl = raw.indexOf('\n');
+    final first = nl < 0 ? raw : raw.substring(0, nl);
+    final rest = nl < 0 ? '' : raw.substring(nl + 1);
+    final stderr = '${res?['stderr'] ?? ''}';
+    if (first == 'R') return (exitCode: null, stdout: rest, stderr: stderr);
+    final code = first.startsWith('F ') ? int.tryParse(first.substring(2)) : -1;
+    return (exitCode: code ?? -1, stdout: rest, stderr: stderr);
+  }
+
+  Future<CommandOutcome> _elevatedJob(String jobId, String action) async {
+    final m = _elevatedJobId.firstMatch(jobId);
+    if (m == null) return CommandOutcome.fail('No such job: $jobId');
+    if (action != 'status' && action != 'kill') {
+      return CommandOutcome.fail('Unknown action: $action');
+    }
+    final via = m.group(1)!;
+    final suffix = m.group(2)!;
+    final ready =
+        via == 'root' ? await ensureRootReady() : await ensureShizukuReady();
+    if (!ready) {
+      return CommandOutcome.fail(
+        'Job $jobId ran under $via, which is not available now.',
+      );
+    }
+    final channel = via == 'root' ? _root : _shizuku;
+    try {
+      Future<Map<String, dynamic>?> run(String script) =>
+          channel.invokeMapMethod<String, dynamic>('exec', {
+            'cmd': script,
+            'timeoutMs': _elevatedStartBudget.inMilliseconds,
+          });
+      if (action == 'kill') {
+        await run(elevatedJobKillScript(_elevatedJobRoot, suffix));
+      }
+      final read = await run(elevatedJobReadScript(_elevatedJobRoot, suffix));
+      if ((read?['exitCode'] as num?)?.toInt() == _jobMissing) {
+        return CommandOutcome.fail(
+          'No such job: $jobId (it may have expired).',
+        );
+      }
+      final state = _parseElevatedRead(read);
+      return CommandOutcome(
+        ok: true,
+        data: {
+          'jobId': jobId,
+          'running': state.exitCode == null,
+          'stdout': _CappedOutput.clamp(state.stdout),
+          'stderr': _CappedOutput.clamp(state.stderr),
+          if (state.exitCode != null) 'exitCode': state.exitCode,
+        },
+      );
+    } catch (e) {
+      return CommandOutcome.fail('Could not read job $jobId: $e');
     }
   }
 
@@ -748,8 +1141,11 @@ class DeviceExec {
 
   // ── filesystem ────────────────────────────────────────────────────────────
 
-  Future<CommandOutcome> readFile(String path,
-      {required int offset, required int len}) async {
+  Future<CommandOutcome> readFile(
+    String path, {
+    required int offset,
+    required int len,
+  }) async {
     if (path.isEmpty) return CommandOutcome.fail('No path.');
     try {
       final file = File(path);
@@ -844,8 +1240,9 @@ class DeviceExec {
           'mtime': stat.modified.millisecondsSinceEpoch,
         });
       }
-      entries
-          .sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+      entries.sort(
+        (a, b) => (a['name'] as String).compareTo(b['name'] as String),
+      );
       return CommandOutcome.okData({'entries': entries});
     } catch (e) {
       return CommandOutcome.fail('list_dir failed: $e');
@@ -943,6 +1340,25 @@ class CommandOutcome {
 /// Bounded exec-output collector: keeps the head and a rolling tail, counts
 /// what it elides. The tail is load-bearing — the daemon's teleport wrapper
 /// emits its cwd marker as the LAST bytes of stdout.
+/// The command may already be running, so it must not be retried elsewhere.
+class _ElevatedJobLost implements Exception {
+  _ElevatedJobLost(this.cause);
+  final String cause;
+}
+
+class _ExecJob {
+  _ExecJob(this.id, this.proc, this.out, this.err, this.started);
+
+  final String id;
+  final Process proc;
+  final _CappedOutput out;
+  final _CappedOutput err;
+  final DateTime started;
+  late final Future<void> done;
+  int? exitCode;
+  DateTime? finished;
+}
+
 class _CappedOutput {
   final StringBuffer _head = StringBuffer();
   String _tail = '';

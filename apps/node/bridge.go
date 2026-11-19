@@ -66,6 +66,7 @@ var nodeCapabilities = []string{
 	"ring",
 	"status",
 	"exec",
+	"exec_job",
 	"read_file",
 	"write_file",
 	"list_dir",
@@ -376,6 +377,7 @@ func (n *Node) PostCommandResult(ctx context.Context, r commandResult) error {
 // Run is the forever loop: register, heartbeat, and consume the SSE stream,
 // reconnecting with capped exponential backoff until ctx is done.
 func (n *Node) Run(ctx context.Context) {
+	defer execJobs.killAll()
 	// Heartbeat runs independently of the event stream: registration is how
 	// presence works, and it must survive SSE reconnect churn.
 	go n.heartbeatLoop(ctx)
@@ -681,7 +683,7 @@ func (n *Node) handleCommand(ctx context.Context, event map[string]any) {
 	}
 	// Audited after the answer is on its way (so the log never delays a
 	// reply) but before any re-exec (so an update is still recorded).
-	if n.audit != nil {
+	if n.audit != nil && auditable(name, params) {
 		n.audit.record(newAuditEntry(id, name, params, result, elapsed, n.token()))
 	}
 	// A successful update_node swapped the on-disk binary; now that the ack

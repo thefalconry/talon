@@ -52,6 +52,9 @@ func reexecInto(_ *Node) {
 	if len(os.Args) > 1 {
 		args = os.Args[1:]
 	}
+	// os.Exit skips Run's cleanup, and a job left running would have nothing
+	// to report it, kill it or enforce its lifetime limit.
+	execJobs.killAll()
 	cmd := exec.Command(exe, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
