@@ -25,6 +25,7 @@ import {
 import { getSession } from "../../storage/sessions.js";
 import { getChatSettings } from "../../storage/chat-settings.js";
 import { resolveModelId } from "../../core/models/catalog.js";
+import { toSdkModelArg } from "./models/sdk-arg.js";
 import { isTurnTerminator } from "../../core/tools/index.js";
 import {
   talonHubUrl,
@@ -501,7 +502,7 @@ export function buildSdkOptions(
   );
 
   const options: Options = {
-    model: resolvedActiveModel,
+    model: toSdkModelArg(resolvedActiveModel),
     // Prefer the caller's frozen per-session prompt; fall back to the
     // global config split (warm-up and legacy callers), then to the
     // plain string for configs built without parts (tests).

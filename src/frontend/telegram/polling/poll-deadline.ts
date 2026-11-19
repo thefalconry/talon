@@ -34,10 +34,13 @@ export function pollDeadline(graceSeconds = POLL_GRACE_S): Transformer {
     const deadlineMs = (window + graceSeconds) * 1000;
     const deadline = new AbortController();
     const timer = setTimeout(() => deadline.abort(), deadlineMs);
-    const combined = signal
-      ? AbortSignal.any([signal as globalThis.AbortSignal, deadline.signal])
-      : deadline.signal;
-    return prev(method, payload, combined as typeof signal)
+    // grammY hands us an `abort-controller` polyfill signal, which
+    // AbortSignal.any() rejects ("signals[0] is not of type AbortSignal") —
+    // so forward its abort into our native controller by hand instead.
+    const onOuterAbort = () => deadline.abort();
+    if (signal?.aborted) deadline.abort();
+    else signal?.addEventListener("abort", onOuterAbort);
+    return prev(method, payload, deadline.signal as typeof signal)
       .catch((err: unknown) => {
         if (deadline.signal.aborted && !signal?.aborted) {
           logWarn(
@@ -47,6 +50,9 @@ export function pollDeadline(graceSeconds = POLL_GRACE_S): Transformer {
         }
         throw err;
       })
-      .finally(() => clearTimeout(timer));
+      .finally(() => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onOuterAbort);
+      });
   };
 }
