@@ -728,9 +728,39 @@ describe("playwright provisioner", () => {
         pathExists: () => true,
         statePath: join(d, "state.json"),
         env: { PLAYWRIGHT_BROWSERS_PATH: "/isolated", DROPPED: undefined },
+        osRelease: "",
       },
     );
     expect(seen[0]).toEqual({ PLAYWRIGHT_BROWSERS_PATH: "/isolated" });
+  });
+
+  it("adds the host-platform override on an Ubuntu the CLI doesn't know", async () => {
+    const d = tmp();
+    const seen: Array<Record<string, string> | undefined> = [];
+    const exec: ExecFn = async (_c, _a, opts) => {
+      seen.push(opts.env);
+      return { ok: true, code: 0, stdout: "", stderr: "" };
+    };
+    await provisionPlaywright(
+      { browser: "chromium" },
+      {
+        exec,
+        registry: REGISTRY,
+        listDir: () => [],
+        cliPath: "/x/cli.js",
+        pathExists: () => true,
+        statePath: join(d, "state.json"),
+        platform: "linux",
+        env: { PLAYWRIGHT_BROWSERS_PATH: "/isolated" },
+        osRelease: 'ID=ubuntu\nVERSION_ID="26.04"\n',
+      },
+    );
+    expect(seen[0]).toMatchObject({
+      PLAYWRIGHT_BROWSERS_PATH: "/isolated",
+      PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: expect.stringMatching(
+        /^ubuntu24\.04-(x64|arm64)$/,
+      ),
+    });
   });
 
   it("downloads a missing build via the bundled CLI", async () => {

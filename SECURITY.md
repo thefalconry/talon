@@ -83,13 +83,12 @@ Every release asset is built by GitHub Actions from this repository and
 carries a [build-provenance attestation](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations)
 signed with the workflow's GitHub-issued Sigstore identity (no long-lived key
 of ours). That covers the standalone binaries and `SHA256SUMS`, the `.deb` /
-`.rpm` packages, the talon-node binaries and `talon-node-SHA256SUMS`, the
-companion app packages, and the npm tarball. Check one with the GitHub CLI:
+`.rpm` packages, the talon-node binaries and `talon-node-SHA256SUMS`, and
+the npm tarball. Check one with the GitHub CLI:
 
 ```sh
 gh attestation verify talon-linux-x64 --repo thefalconry/talon
 gh attestation verify talon-node-linux-amd64 --repo thefalconry/talon
-gh attestation verify talon-companion-android.apk --repo thefalconry/talon
 
 # npm: fetch the exact tarball the registry serves, then verify it
 npm pack talon-agent@<version>
@@ -98,13 +97,11 @@ gh attestation verify talon-agent-<version>.tgz --repo thefalconry/talon
 
 To pin the workflow as well as the repository, add
 `--signer-workflow thefalconry/talon/.github/workflows/publish.yml` (or
-`node.yml` / `companion.yml`). The npm package additionally carries npm's own
+`node.yml`). The npm package additionally carries npm's own
 provenance statement (`npm audit signatures`).
 
-Release builds also fail closed: the Android job refuses to publish an APK
-without the release keystore (and re-checks the built APK's signer), and the
-Windows companion and talon-node executables must have ASLR (`DYNAMICBASE`)
-and DEP (`NXCOMPAT`) set (`scripts/check-pe-hardening.mjs`).
+Release builds also fail closed: the Windows talon-node executable must have ASLR
+(`DYNAMICBASE`) and DEP (`NXCOMPAT`) set (`scripts/check-pe-hardening.mjs`).
 
 ## Scope
 
