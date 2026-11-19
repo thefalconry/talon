@@ -25,11 +25,16 @@ import {
   execute as dispatcherExecute,
 } from "./core/engine/dispatcher.js";
 import { bus } from "./core/bus/index.js";
+import {
+  resolveIdleCompactSettings,
+  type WeaverDeps,
+} from "./core/weaver/index.js";
 import { appendToJournal } from "./storage/journal.js";
 import { initPulse, resetPulseTimer } from "./core/background/pulse/pulse.js";
-import { initCron } from "./core/background/cron/scheduler.js";
+import { initCron, runIsolatedJob } from "./core/background/cron/scheduler.js";
 import { initPlanAlerts } from "./core/background/pulse/plan-alerts.js";
 import { setAdminNotifier } from "./core/frontend-runtime/admin-notify.js";
+import { askInlineChoice } from "./core/engine/inline-choice.js";
 import { configureAlerts } from "./core/frontend-runtime/alerts.js";
 import { startAuthExpiryMonitor } from "./core/auth/expiry-monitor.js";
 import {
@@ -87,6 +92,23 @@ function resolveFrontendByNumericId(
   frontends: Frontend[],
 ): Frontend {
   return resolveFrontend(stringId ?? String(chatId), frontends);
+}
+
+/**
+ * How idle compaction reaches a chat whose turn waits for an in-flight
+ * pass: a status message, and the `"ask"` buttons (cache-economics.md).
+ */
+function idleCompactChatDeps(
+  frontends: Frontend[],
+): NonNullable<WeaverDeps["idleCompactChat"]> {
+  const frontendOf = (t: { chatId: string; numericChatId: number }) =>
+    resolveFrontendByNumericId(t.numericChatId, t.chatId, frontends);
+  return {
+    notify: (target, text) =>
+      frontendOf(target).sendMessage(target.numericChatId, text),
+    ask: (target, question) =>
+      askInlineChoice(frontendOf(target).name, target.numericChatId, question),
+  };
 }
 
 export type BootstrapOptions = {
@@ -503,11 +525,9 @@ export async function initBackendAndDispatcher(
   );
 
   initDispatcher({
-    // Dispatcher reads the backend per query so per-chat overrides
-    // and chat-role rebinds both propagate without re-init. The
-    // chat id is always present from the dispatcher, but the type
-    // is `chatId?: string` to keep test stubs simple — fall back to
-    // the chat-role default if a caller ever passes `undefined`.
+    // Dispatcher reads the backend per query so per-chat overrides and
+    // chat-role rebinds propagate without re-init. The chat id is always
+    // present; `chatId?` keeps test stubs simple (undefined → chat role).
     getBackend: (chatId?: string) =>
       chatId ? getBackendForChat(chatId) : getBackendForRole("chat"),
     // Send-time guard: the dispatcher walks the active-model chain
@@ -550,6 +570,8 @@ export async function initBackendAndDispatcher(
       resolveFrontendByNumericId(chatId, stringId, frontends).sendTyping(
         chatId,
       ),
+    idleCompact: resolveIdleCompactSettings(config), // cache-economics.md PR C
+    idleCompactChat: idleCompactChatDeps(frontends),
   });
 
   // Cross-subsystem reactions ride the bus, so the Weaver stays ignorant of
@@ -599,7 +621,7 @@ export async function initBackendAndDispatcher(
       model: config.heartbeatModel ?? config.model ?? null,
     }),
   });
-  initWakeSubsystems(config);
+  initWakeSubsystems(config, frontends);
   resumeTriggersAfterRestart().catch((err) =>
     log("triggers", `resumeAfterRestart failed: ${err}`),
   );
@@ -732,9 +754,20 @@ function initRecurringAgents(
  * scripts firing, and sub-agents reporting. Same dependency (the dispatcher),
  * same delivery shape, so they are wired together.
  */
-function initWakeSubsystems(config: TalonConfig): void {
+function initWakeSubsystems(
+  config: TalonConfig,
+  frontends: Parameters<typeof resolveFrontendByNumericId>[2],
+): void {
   initTriggers({
     execute: dispatcherExecute,
+    // Isolated-mode triggers run each wake through the cron `query` executor
+    // (own session, no chat history) and post a plain notice on failure.
+    runIsolated: runIsolatedJob,
+    notify: async (chatId: number, text: string, stringId?: string) =>
+      resolveFrontendByNumericId(chatId, stringId, frontends).sendMessage(
+        chatId,
+        text,
+      ),
     ...(config.triggers ? { caps: config.triggers } : {}),
   });
   // A device_exec that outlived its budget wakes its chat when the job ends.

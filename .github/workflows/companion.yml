@@ -129,7 +129,7 @@ jobs:
 
       - name: Set up Java
         if: matrix.platform == 'android'
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "17"
@@ -166,6 +166,19 @@ jobs:
           set -euo pipefail
           sed -i '/^project(/a add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' windows/CMakeLists.txt
           grep -q _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS windows/CMakeLists.txt
+
+      # tray_manager calls app_indicator_new, which current appindicator headers
+      # mark deprecated, and the generated runner builds plugins with -Werror.
+      # linux/ is regenerated above, so relax that one warning here; the grep
+      # fails the build if the template ever changes shape. Drop once the
+      # plugin moves off the deprecated call.
+      - name: Allow tray_manager's deprecated appindicator call
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/-Wall -Werror/-Wall -Werror -Wno-error=deprecated-declarations/' linux/CMakeLists.txt
+          grep -q 'Wno-error=deprecated-declarations' linux/CMakeLists.txt
 
       # The dart package stays talon_companion (valid identifier), but every
       # user-facing name should read "Talon": the native window title, and on

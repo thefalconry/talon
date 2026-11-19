@@ -41,6 +41,12 @@ describe("job-prompt helpers", () => {
     expect(p).toContain('chat_id="123"');
   });
 
+  it("tells a job to pass chat_id to spawn_agent, which has no ambient chat", () => {
+    const p = buildJobSystemPrompt("123", "cron");
+    expect(p).toContain('pass chat_id="123" to spawn_agent');
+    expect(p).toContain("No active chat context");
+  });
+
   it("appends instructions verbatim", () => {
     const p = buildJobSystemPrompt(
       "123",

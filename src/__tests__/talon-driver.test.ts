@@ -181,19 +181,24 @@ exit ${code}
     // an attacker-planted ./node from the current working directory.
     const { dir, bin } = appWithJs();
     const evil = mkdtempSync(join(root, "cwd-"));
-    // ./node in the attacker-controlled cwd that would "succeed" if run.
-    fakeNode(join(evil, "node"), "v99.0.0", 0);
+    // Any execution of ./node, including the --version probe, leaves this
+    // marker, written with a shell builtin because the test's PATH has no
+    // touch. The launcher also searches fixed dirs such as /usr/local/bin, so
+    // its exit status depends on whether the machine has a real node.
+    const marker = join(evil, "ran");
+    writeFileSync(
+      join(evil, "node"),
+      `#!/bin/sh\n: > "${marker}"\necho v99.0.0\n`,
+    );
+    chmodSync(join(evil, "node"), 0o755);
 
-    const res = spawnSync(bin, ["x"], {
+    spawnSync(bin, ["x"], {
       cwd: evil,
       env: { PATH: ".:/nonexistent" },
       encoding: "utf-8",
     });
     void dir;
-    // No usable node found → exit 69, and the planted ./node never ran
-    // (it would have printed the NODE_ARGV line on success).
-    expect(res.status).toBe(69);
-    expect(res.stdout).not.toContain("NODE_ARGV");
+    expect(existsSync(marker)).toBe(false);
   });
 
   it("accepts a chatty node that prints a banner after the version line", () => {

@@ -6,35 +6,41 @@ INSERT OR REPLACE INTO triggers
   (id, chat_id, numeric_chat_id, name, language, script_path, log_path,
    description, status, created_at, started_at, ended_at, pid,
    pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-   last_fire_payload, last_error, persistent, model)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+   last_fire_payload, last_error, persistent, model, wake_mode,
+   wake_instructions, wake_provider, wake_timeout_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?)
 
 -- name: get
 SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers WHERE id = ?
 
 -- name: getByName
 SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers WHERE chat_id = ? AND name = ? LIMIT 1
 
 -- name: listByChat
 SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers WHERE chat_id = ? ORDER BY created_at
 
 -- name: listAll
 SELECT id, chat_id, numeric_chat_id, name, language, script_path, log_path,
        description, status, created_at, started_at, ended_at, pid,
        pid_starttime, timeout_seconds, exit_code, fire_count, last_fire_at,
-       last_fire_payload, last_error, persistent, model
+       last_fire_payload, last_error, persistent, model, wake_mode,
+       wake_instructions, wake_provider, wake_timeout_ms
 FROM triggers ORDER BY created_at
 
 -- name: remove

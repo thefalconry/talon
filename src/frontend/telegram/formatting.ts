@@ -26,6 +26,27 @@ export function escapeHtml(text: string): string {
 }
 
 /**
+ * Turn Unicode bullet glyphs into Markdown list markers before sending.
+ * Telegram's Rich Markdown parser recognizes `-`/`*`/`+` lists, but treats
+ * `•` as plain text; its soft line breaks can then collapse adjacent items.
+ * Leave fenced code blocks untouched so literal bullets in examples survive.
+ */
+export function normalizeTelegramMarkdownLists(text: string): string {
+  let inFence = false;
+  return text
+    .split("\n")
+    .map((line) => {
+      if (/^[ \t]*```/.test(line)) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) return line;
+      return line.replace(/^([ \t]*)•([ \t]+)/, "$1-$2");
+    })
+    .join("\n");
+}
+
+/**
  * True when every tag in `html` is closed in the order it was opened.
  *
  * The inline formatters below are independent regex passes with no

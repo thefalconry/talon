@@ -48,7 +48,10 @@ export function buildJobSystemPrompt(
     `You are Talon running an isolated ${kind} job for chat ${chatId}. ` +
     `You have NO conversation history — only the task below and your tools. ` +
     `Investigate and act using your tools. If you need to message the user, ` +
-    `call the messaging tool with chat_id="${chatId}". Be concise and ` +
+    `call the messaging tool with chat_id="${chatId}". You have no ambient ` +
+    `chat, so also pass chat_id="${chatId}" to spawn_agent and any other tool ` +
+    `that fails with "No active chat context". If a tool you needed still ` +
+    `fails, say so in your message instead of ending quietly. Be concise and ` +
     `action-oriented; if there is nothing to report, do nothing.`;
   return instructions ? `${base}\n\n${instructions}` : base;
 }
