@@ -125,6 +125,8 @@ vi.mock("../storage/sessions.js", () => ({
   setSessionId: vi.fn(),
   setSessionName: vi.fn(),
   updateLiveTurn: vi.fn(),
+  notePromptCacheRequest: vi.fn(),
+  notePromptCacheRateLimit: vi.fn(),
   clearLiveTurn: vi.fn(),
   recordSessionMetrics: vi.fn(),
   recordSessionMetricEvent: vi.fn(),

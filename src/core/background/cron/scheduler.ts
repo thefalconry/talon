@@ -41,7 +41,8 @@ import {
   chooseBackend,
   resolveRoutedModel,
 } from "../../engine/backend-router/index.js";
-import { runJobOneShot } from "./job-oneshot.js";
+import { runJobOneShot, type JobOneShotResult } from "./job-oneshot.js";
+import type { JobKind } from "./job-prompt.js";
 import {
   jobAllowsRun,
   pruneJobHealth,
@@ -511,7 +512,7 @@ export const _cronInternals = {
  * was rather than being sent somewhere it has no model to run.
  */
 async function routeQueryJob(
-  job: CronJob,
+  job: { readonly name: string; readonly model?: string },
   chat: { model: string | null; backendId: string },
 ): Promise<{ backendId: string; model: string | null }> {
   const decision = await chooseBackend({
@@ -538,6 +539,81 @@ async function routeQueryJob(
 /** Default hard limit per query run; a job's own `timeoutMs` overrides it. */
 const CRON_JOB_TIMEOUT_MS = 10 * 60_000;
 
+/**
+ * What an isolated one-shot run needs, independent of whether a cron `query`
+ * job or a trigger wake asked for it.
+ */
+export interface IsolatedJobSpec {
+  readonly chatId: string;
+  /** Job/trigger name — used for routing logs, the run log and the task. */
+  readonly name: string;
+  readonly kind: JobKind;
+  /** Model override; a model id is backend-specific, so it pins routing. */
+  readonly model?: string;
+  /** Provider override — honoured as written, never rerouted. */
+  readonly provider?: string;
+  /** System brief appended to the isolated agent's system prompt. */
+  readonly instructions?: string;
+  /** The user message for the run (already carries its `[System: …]` header). */
+  readonly payload: string;
+  readonly timeoutMs: number;
+}
+
+/**
+ * Resolve the target backend + model for an isolated one-shot and run it.
+ *
+ * Shared by cron `query` jobs and isolated trigger wakes: a pinned provider is
+ * honoured as written; otherwise the run starts from the chat's backend and
+ * model, may be routed to a backend with more plan headroom, and gets the
+ * heartbeat role backend as a safety net when the ambient one can't host an
+ * isolated run. Throws when no model resolves; returns `skipped` when every
+ * candidate backend was ruled out.
+ */
+export async function runIsolatedJob(
+  spec: IsolatedJobSpec,
+): Promise<JobOneShotResult> {
+  if (!deps) return { status: "skipped", reason: "cron is not initialised" };
+
+  let backendId: string;
+  let model: string | null;
+  // A job that pinned its own provider is honoured as written — no fallback.
+  // One that inherited the chat's ambient backend gets a safety net, because
+  // that backend can change under it at any time (`/model`, a rebind).
+  let fallback: { backendId: string; model: string } | undefined;
+  if (spec.provider) {
+    backendId = spec.provider;
+    model = spec.model ?? null;
+  } else {
+    const chat = await deps.resolveChatModel(spec.chatId);
+    const routed = await routeQueryJob(spec, chat);
+    backendId = routed.backendId;
+    model = routed.model;
+    const candidate = deps.resolveJobFallback?.();
+    if (candidate?.model) {
+      fallback = { backendId: candidate.backendId, model: candidate.model };
+    }
+  }
+  if (!model) {
+    throw new Error(
+      `${spec.kind === "cron" ? "Cron job" : "Trigger"} "${spec.name}": no model resolved for backend "${backendId}" — set a model or pick a model for the chat's backend.`,
+    );
+  }
+
+  // runJobOneShot enforces its own hard timeout (with abort + grace), so no
+  // outer withTimeout wrapper is needed here.
+  return runJobOneShot({
+    chatId: spec.chatId,
+    backendId,
+    model,
+    ...(spec.instructions ? { instructions: spec.instructions } : {}),
+    payload: spec.payload,
+    label: spec.name,
+    kind: spec.kind,
+    timeoutMs: spec.timeoutMs,
+    ...(fallback ? { fallback } : {}),
+  });
+}
+
 export async function executeJob(job: CronJob): Promise<ExecuteJobResult> {
   if (!deps) return { status: "skipped", reason: "cron is not initialised" };
 
@@ -548,51 +624,23 @@ export async function executeJob(job: CronJob): Promise<ExecuteJobResult> {
     return { status: "ran" };
   }
 
-  // type === "query" — run as an ISOLATED one-shot (no chat session). Resolve
-  // the target backend + model: a job-level override wins (and may name a
-  // different provider, since the run is isolated), otherwise fall back to the
-  // chat's backend + active model.
-  let backendId: string;
-  let model: string | null;
-  // A job that pinned its own provider is honoured as written — no fallback.
-  // One that inherited the chat's ambient backend gets a safety net, because
-  // that backend can change under it at any time (`/model`, a rebind).
-  let fallback: { backendId: string; model: string } | undefined;
-  if (job.provider) {
-    backendId = job.provider;
-    model = job.model ?? null;
-  } else {
-    const chat = await deps.resolveChatModel(job.chatId);
-    const routed = await routeQueryJob(job, chat);
-    backendId = routed.backendId;
-    model = routed.model;
-    const candidate = deps.resolveJobFallback?.();
-    if (candidate?.model) {
-      fallback = { backendId: candidate.backendId, model: candidate.model };
-    }
-  }
-  if (!model) {
-    throw new Error(
-      `Cron job "${job.name}": no model resolved for backend "${backendId}" — set a model or pick a model for the chat's backend.`,
-    );
-  }
-
+  // type === "query" — run as an ISOLATED one-shot (no chat session). A
+  // job-level model/provider override wins (and may name a different
+  // provider, since the run is isolated); otherwise the chat's backend +
+  // active model, subject to plan-aware routing.
   const payload =
     `[System: CRON JOB "${job.name}" (schedule: ${describeSchedule(job)}). ` +
     `Execute the task. Be concise and action-oriented.]\n\n${job.content}`;
 
-  // runJobOneShot enforces its own hard timeout (with abort + grace), so no
-  // outer withTimeout wrapper is needed here.
-  const result = await runJobOneShot({
+  const result = await runIsolatedJob({
     chatId: job.chatId,
-    backendId,
-    model,
+    name: job.name,
+    kind: "cron",
+    ...(job.model ? { model: job.model } : {}),
+    ...(job.provider ? { provider: job.provider } : {}),
     ...(job.instructions ? { instructions: job.instructions } : {}),
     payload,
-    label: job.name,
-    kind: "cron",
     timeoutMs: job.timeoutMs ?? CRON_JOB_TIMEOUT_MS,
-    ...(fallback ? { fallback } : {}),
   });
   if (result.status === "skipped") {
     await deps.sendMessage(

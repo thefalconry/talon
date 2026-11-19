@@ -43,6 +43,11 @@ export const MAX_ACTIVE_PER_CHAT = 5;
 /** Truncate fire payloads at this many bytes to keep wake prompts sane. */
 export const FIRE_PAYLOAD_MAX_BYTES = 4_096;
 
+/** Isolated-mode wakes: default hard limit per run (same as cron `query`). */
+export const DEFAULT_WAKE_TIMEOUT_MS = 10 * 60_000;
+/** Isolated-mode wakes: largest accepted per-run limit. */
+export const MAX_WAKE_TIMEOUT_MS = 60 * 60_000;
+
 function isTrigger(value: unknown): value is Trigger {
   return (
     typeof value === "object" &&

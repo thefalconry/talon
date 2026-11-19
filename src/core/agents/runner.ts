@@ -42,11 +42,15 @@ import { log, logError, logWarn } from "../../util/log.js";
 import {
   acquireBackendInstance,
   getBackendIdForChat,
+  getPoolConfig,
   isModelValidForBackend,
+  listAvailableBackends,
 } from "../engine/backend-controller/index.js";
 import {
   chooseBackend,
   openBreaker,
+  getBackendHeadroom,
+  type BackendHeadroom,
   recordBackendRunFailure,
   recordBackendRunSuccess,
   recordBackendRunUsage,
@@ -106,6 +110,7 @@ export const DEFAULT_AGENT_CAPS: AgentCaps = {
   maxConcurrent: 6,
   maxDepth: 2,
   stallTimeoutMs: 15 * 60 * 1000,
+  minHeadroomPct: 25,
 };
 
 /** Floor the tool boundary clamps a requested `timeout_s` up to. */
@@ -135,7 +140,8 @@ export function initAgents(
       `maxDepth=${capsHolder.caps.maxDepth} ` +
       `timeout=${describeTimeout(capsHolder.caps.defaultTimeoutMs)} ` +
       `ceiling=${describeTimeout(capsHolder.caps.maxTimeoutMs)} ` +
-      `stall=${describeTimeout(capsHolder.caps.stallTimeoutMs || undefined)}` +
+      `stall=${describeTimeout(capsHolder.caps.stallTimeoutMs || undefined)} ` +
+      `minHeadroom=${capsHolder.caps.minHeadroomPct}%` +
       (capsHolder.caps.allowedBackends?.length
         ? ` allowedBackends=${capsHolder.caps.allowedBackends.join(",")}`
         : ""),
@@ -193,6 +199,8 @@ interface SpawnTarget {
   /** The parent agent's model, inherited by an unpinned child. */
   readonly inheritedModel?: string;
   readonly routing?: string;
+  /** The router's reading of the chosen backend, when it took one. */
+  readonly headroom?: BackendHeadroom;
 }
 
 /**
@@ -246,7 +254,67 @@ async function resolveSpawnBackend(spec: AgentSpawnSpec): Promise<SpawnTarget> {
   return {
     backendId: decision.backendId,
     ...(decision.routed ? { routing: decision.reason } : {}),
+    ...(decision.headroom?.id === decision.backendId
+      ? { headroom: decision.headroom }
+      : {}),
   };
+}
+
+/**
+ * The headroom reading for the backend a spawn will run on: the router's own
+ * when it took one for this backend, else a (cached) fresh read. Never
+ * throws — a failed read is "unmeasured", which the guard allows.
+ */
+async function spawnHeadroom(
+  backendId: string,
+  routed: BackendHeadroom | undefined,
+): Promise<BackendHeadroom | null> {
+  if (routed && routed.id === backendId) return routed;
+  try {
+    const config = getPoolConfig() ?? undefined;
+    const label =
+      listAvailableBackends(config).find(({ id }) => id === backendId)?.label ??
+      backendId;
+    return await getBackendHeadroom(backendId, label, config);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The headroom guard: a tool error when the target backend's measured
+ * headroom is under `agents.minHeadroomPct`, else null. Unmeasured backends
+ * (no plan API, no local budget) pass — there is nothing to judge them by.
+ * A backend flagged unavailable (rejected credentials, open run breaker)
+ * counts as measured at 0%.
+ *
+ * Deliberately applied after routing AND to pinned backends/models: a model
+ * that names `model: "opus"` on every spawn would otherwise walk straight
+ * past a router that already knows the plan is nearly spent.
+ */
+function headroomRefusal(
+  reading: BackendHeadroom | null,
+  minHeadroomPct: number,
+): string | null {
+  if (!(minHeadroomPct > 0) || !reading) return null;
+  if (reading.source === "none" && !reading.unavailable) return null;
+  if (reading.headroom * 100 >= minHeadroomPct) return null;
+  const pct = Math.round(reading.headroom * 100);
+  const window = reading.limiting;
+  const why = reading.unavailable
+    ? `unavailable: ${reading.unavailable}`
+    : window
+      ? `${window.label} ${Math.round(window.percent)}% used`
+      : "";
+  const reset = window?.resetsAt ? ` It resets at ${window.resetsAt}.` : "";
+  return (
+    `Refusing to spawn: backend "${reading.id}" has ${pct}% headroom left` +
+    (why ? ` (${why})` : "") +
+    `, below the ${minHeadroomPct}% floor (agents.minHeadroomPct).${reset} ` +
+    `A sub-agent started now is likely to hit the plan limit and return ` +
+    `nothing. Do the work yourself, pick a backend with room (plan_usage ` +
+    `shows them), wait for the reset, or pass force: true to spawn anyway.`
+  );
 }
 
 /** Whether `agents.allowedBackends` (when set) lets an agent run here. */
@@ -373,6 +441,17 @@ export async function spawnAgent(
         `its circuit breaker is open for another ~${minutes}m. Omit ` +
         `backend= to let routing pick a healthy one.`,
     };
+  }
+  const minHeadroomPct = capsHolder.caps.minHeadroomPct;
+  if (!spec.force && minHeadroomPct > 0) {
+    const refusal = headroomRefusal(
+      await spawnHeadroom(backendId, routed.headroom),
+      minHeadroomPct,
+    );
+    if (refusal) {
+      log("agents", `spawn "${spec.label}" refused — ${refusal}`);
+      return { ok: false, error: refusal };
+    }
   }
   const model = spec.model ?? routed.inheritedModel;
 
@@ -699,6 +778,16 @@ async function runAgent(
             watch.stalled,
             trail.snapshot(),
             watch.stalled,
+          );
+        } else if (agentRegistry.killRequested(id)) {
+          // The backend swallowed the kill and returned. agy and codex
+          // one-shots do this, so without this branch a killed run reads as
+          // done, or as failed for not reporting.
+          settled = settleFailure(
+            id,
+            task,
+            new Error("killed on request"),
+            trail.snapshot(),
           );
         } else {
           // A run that reported nothing, said nothing and called no tools

@@ -17,13 +17,18 @@ import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { OneShotAgentParams, OneShotUsage } from "../../core/types.js";
 import { log, logWarn } from "../../util/log.js";
 import { ALLOWED_TOOLS_BACKGROUND } from "../../core/constants.js";
-import { CLAUDE_RETENTION_SETTINGS, EFFORT_MAP } from "./constants.js";
+import {
+  CLAUDE_RETENTION_SETTINGS,
+  EFFORT_MAP,
+  nativeSubagentDisallowedTools,
+} from "./constants.js";
 import {
   DEFAULT_CLAUDE_ACCOUNT,
   sdkEnvFor,
   type ClaudeRunAccount,
 } from "./accounts/account.js";
 import { buildMcpServers, buildPluginMcpServers } from "./options.js";
+import { toSdkModelArg } from "./models/sdk-arg.js";
 import { isBackgroundToolContext } from "../../core/agents/context.js";
 import { warnIfBelowCacheMinimum } from "../runtime/cache/cache-telemetry.js";
 import { emitAssistantText, emitSessionId } from "../runtime/one-shot-hooks.js";
@@ -56,12 +61,25 @@ export type OneShotConfig = {
   claudeBinary?: string;
   /** MemPalace MCP config gate — only relevant for the dream context. */
   mempalace?: { pythonPath: string; palacePath: string };
+  /**
+   * Config `allowNativeSubagents`. Off (the default) adds Claude Code's own
+   * sub-agent tool to `disallowedTools` for every one-shot (heartbeat,
+   * dream, cron/query jobs, Talon sub-agents).
+   */
+  allowNativeSubagents?: boolean;
 };
 
 let oneShotConfig: OneShotConfig = {};
 
 export function initClaudeOneShot(cfg: OneShotConfig): void {
   oneShotConfig = cfg;
+}
+
+function disallowedToolsOption(): { disallowedTools?: string[] } {
+  const disallowedTools = nativeSubagentDisallowedTools(
+    oneShotConfig.allowNativeSubagents,
+  );
+  return disallowedTools.length > 0 ? { disallowedTools } : {};
 }
 
 export async function runOneShotAgent(
@@ -97,7 +115,7 @@ export async function runOneShotAgent(
   const env = sdkEnvFor(account, params.env);
 
   const options = {
-    model,
+    model: toSdkModelArg(model),
     systemPrompt,
     ...thinkingConfig,
     cwd: workspace,
@@ -115,6 +133,10 @@ export async function runOneShotAgent(
     // dream). Same as chat minus `Agent` — nested sub-agent dispatch from
     // inside an unattended pass complicates lifecycle tracking.
     tools: [...ALLOWED_TOOLS_BACKGROUND],
+    // And an explicit deny for Claude Code's own sub-agent tool, which the
+    // whitelist already omits: `disallowedTools` also blocks it when the
+    // harness would dispatch it internally.
+    ...disallowedToolsOption(),
     // A sub-agent interrupted by a daemon restart continues its own SDK
     // session: the transcript (brief, tool calls, results) is intact on disk
     // and the prompt below is only the "you were interrupted" note.

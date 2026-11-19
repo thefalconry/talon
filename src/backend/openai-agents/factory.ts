@@ -6,7 +6,8 @@
  * instances at turn time + closed in `finally`.
  *
  * Returns a composed `Backend` with capability slots for chat,
- * models, and sessions.
+ * background (isolated one-shot runs: sub-agents, cron query jobs,
+ * heartbeat, dream), models, and sessions.
  */
 
 import { registerBackend } from "../../core/agent-runtime/backend-registry.js";
@@ -17,6 +18,7 @@ import { handlerToEvents } from "../runtime/turn/handler-to-events.js";
 import { interruptChatTurn } from "../runtime/turn/turn-interrupt.js";
 import {
   composeBackend,
+  type BackgroundRunner,
   type ChatBackend,
   type ModelCatalog,
   type SessionBackend,
@@ -24,6 +26,7 @@ import {
 
 import { initOpenAIAgentsAgent, getOpenAIBaseUrl } from "./init.js";
 import { handleMessage as openAIAgentsHandleMessage } from "./handler/index.js";
+import { runOneShotAgent as openAIAgentsRunOneShotAgent } from "./one-shot.js";
 import { resetState, clearChatSession } from "./state.js";
 import { releaseAllBundles } from "./mcp-pool.js";
 import { OPENAI_AGENTS_DEFAULT_MODEL } from "./constants.js";
@@ -53,6 +56,14 @@ const openAIAgentsFactory: BackendFactory = {
       runChatTurn: (params) =>
         handlerToEvents((p) => openAIAgentsHandleMessage(p), params),
       interruptChatTurn: (chatId) => interruptChatTurn(chatId),
+    };
+
+    const background: BackgroundRunner = {
+      runOneShotAgent: (p) => openAIAgentsRunOneShotAgent(p),
+      // Every run starts a blank conversation (no persisted session to
+      // resume), so an interrupted sub-agent is re-briefed instead. No
+      // subprocesses to evict either: the model is an HTTP endpoint and
+      // the MCP tools live in the daemon's hub.
     };
 
     const defaultIdSync = (): string | null => {
@@ -87,6 +98,7 @@ const openAIAgentsFactory: BackendFactory = {
       label: "OpenAI Agents",
       cacheMetrics: "read",
       chat,
+      background,
       models,
       sessions,
     });

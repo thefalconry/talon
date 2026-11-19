@@ -84,8 +84,9 @@ describe("buildSdkOptions", () => {
     const { activeModel, options } = buildSdkOptions("chat-1");
 
     expect(activeModel).toBe("claude-sonnet-4-6");
-    // Model is passed through as resolved — SDK handles context window
-    expect(options.model).toBe("default");
+    // "default" is pinned to its concrete id so the account's settings.json
+    // `model` can't silently swap in a different model.
+    expect(options.model).toBe("claude-sonnet-4-6");
   }, 10_000);
 
   it("passes model through unchanged when no alias resolution needed", async () => {
@@ -145,6 +146,76 @@ describe("buildSdkOptions", () => {
     const { options } = buildSdkOptions("chat-retention");
 
     expect(options.settings).toEqual({ cleanupPeriodDays: 100_000 });
+  });
+
+  describe("Claude Code's own sub-agent tool", () => {
+    const baseConfig = {
+      model: "claude-sonnet-4-6",
+      frontend: "terminal",
+      systemPrompt: "test prompt",
+      workspace: "/tmp/workspace",
+    };
+
+    it("is withheld and explicitly disallowed by default", async () => {
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-default");
+      expect(options.disallowedTools).toEqual(["Agent", "Task"]);
+      expect(options.tools).not.toContain("Agent");
+      expect(options.tools).not.toContain("Task");
+      // The rest of the chat whitelist is untouched.
+      expect(options.tools).toEqual(
+        expect.arrayContaining(["Bash", "Read", "Skill"]),
+      );
+    });
+
+    it("blocks only the built-in names, never an MCP tool like spawn_agent", async () => {
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-mcp");
+      for (const name of options.disallowedTools ?? []) {
+        expect(name).not.toMatch(/^mcp__|spawn_agent/);
+      }
+    });
+
+    it("is offered again with allowNativeSubagents: true", async () => {
+      mockGetConfig.mockReturnValue({
+        ...baseConfig,
+        allowNativeSubagents: true,
+      });
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-opt-in");
+      expect(options.disallowedTools).toBeUndefined();
+      expect(options.tools).toContain("Agent");
+    });
+
+    it("stays off under nativeTools even when opted in", async () => {
+      mockGetConfig.mockReturnValue({
+        ...baseConfig,
+        nativeTools: true,
+        allowNativeSubagents: true,
+      });
+      const { buildSdkOptions } =
+        await import("../backend/claude-sdk/options.js");
+      const { options } = buildSdkOptions("chat-subagents-native");
+      expect(options.tools).not.toContain("Agent");
+    });
+  });
+
+  it("pins the prompt-cache TTL only when cache.promptCacheTtl is set", async () => {
+    mockGetConfig.mockReturnValue({
+      ...mockGetConfig(),
+      cache: { promptCacheTtl: "1h" },
+    });
+    const { buildSdkOptions } =
+      await import("../backend/claude-sdk/options.js");
+    const { options } = buildSdkOptions("chat-ttl");
+
+    expect(options.settings).toEqual({
+      cleanupPeriodDays: 100_000,
+      promptCacheTtl: "1h",
+    });
   });
 
   describe("systemPrompt cache boundary", () => {

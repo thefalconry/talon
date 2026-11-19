@@ -50,10 +50,18 @@ class FakeChild extends EventEmitter {
   }
 }
 
+/** What the mocked `agy models` prints; init probes it in the background. */
+let modelsTsv = "";
 vi.mock("node:child_process", async (orig) => {
   const actual = await orig<typeof import("node:child_process")>();
   return {
     ...actual,
+    execFile: (
+      _cmd: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (e: unknown, r: { stdout: string; stderr: string }) => void,
+    ) => cb(null, { stdout: modelsTsv, stderr: "" }),
     spawn: (command: string, args: string[], options: { cwd?: string }) => {
       spawned.push({ command, args, cwd: options?.cwd });
       const child = new FakeChild();
@@ -73,7 +81,8 @@ const { runOneShotAgent, oneShotScope, buildOneShotArgs } =
 const { initAgyAgent } = await import("../backend/agy/init.js");
 const { resetState } = await import("../backend/agy/state.js");
 const { resetOwnership } = await import("../backend/agy/mcp/register.js");
-const { resetModelCache } = await import("../backend/agy/models.js");
+const { resetModelCache, refreshModels } =
+  await import("../backend/agy/models.js");
 
 let home: string;
 let configPath: string;
@@ -142,6 +151,7 @@ beforeEach(() => {
   stderrChunks = [];
   exitCode = 0;
   logged = "";
+  modelsTsv = "";
   resetState();
   resetModelCache();
   resetOwnership();
@@ -208,10 +218,34 @@ describe("agy one-shot — running", () => {
     });
   });
 
-  it("honours the requested model and effort", async () => {
+  it("expresses the requested effort through the sibling slug, with no conflicting --effort", async () => {
+    // The production failure: agy >= 1.4 exits 1 on
+    // `--model gemini-3.8-flash-high --effort medium`.
+    modelsTsv =
+      "gemini-3.8-flash-high\tH\ngemini-3.8-flash-medium\tM\ngemini-3.8-flash-low\tL\n";
+    await refreshModels(true);
+    await runOneShotAgent(
+      params({ model: "gemini-3.8-flash-high", reasoningEffort: "medium" }),
+    );
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("gemini-3.8-flash-medium");
+    expect(args).not.toContain("--effort");
+  });
+
+  it("drops a conflicting effort when the catalog has no sibling for it", async () => {
     await runOneShotAgent(params({ reasoningEffort: "medium" }));
-    expect(spawned[0].args).toContain("gemini-3.1-pro-high");
-    expect(spawned[0].args).toContain("medium");
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("gemini-3.1-pro-high");
+    expect(args).not.toContain("--effort");
+  });
+
+  it("passes --effort for a suffix-less model id", async () => {
+    await runOneShotAgent(
+      params({ model: "claude-sonnet-5-5", reasoningEffort: "low" }),
+    );
+    const args = spawned[0].args;
+    expect(args[args.indexOf("--model") + 1]).toBe("claude-sonnet-5-5");
+    expect(args[args.indexOf("--effort") + 1]).toBe("low");
   });
 
   it("reports the final answer through onAssistantText and the log", async () => {

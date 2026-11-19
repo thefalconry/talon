@@ -1,5 +1,91 @@
 # Changelog
 
+## [5.39.5](https://github.com/thefalconry/talon/compare/v5.39.4...v5.39.5) (2026-10-22)
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 6 updates ([#1330](https://github.com/thefalconry/talon/issues/1330)) ([84fb467](https://github.com/thefalconry/talon/commit/84fb467a112b71a598eba9486d536c216f0918f7))
+* **deps:** Bump github/codeql-action/analyze from 4.38.3 to 4.39.0 ([#1331](https://github.com/thefalconry/talon/issues/1331)) ([14ab37e](https://github.com/thefalconry/talon/commit/14ab37e0339616bf22c085ccac3186b986d3a090))
+* **deps:** Bump github/codeql-action/init from 4.38.3 to 4.39.0 ([#1332](https://github.com/thefalconry/talon/issues/1332)) ([4acd3fd](https://github.com/thefalconry/talon/commit/4acd3fd37079cd096b2fe0ecad66811563bd383c))
+* **deps:** Bump the production-dependencies group across 1 directory with 9 updates ([#1339](https://github.com/thefalconry/talon/issues/1339)) ([ee3f072](https://github.com/thefalconry/talon/commit/ee3f072409f15e9669cacd15d444b9ac7aece465))
+
+## [5.39.4](https://github.com/thefalconry/talon/compare/v5.39.3...v5.39.4) (2026-10-21)
+
+
+### Bug Fixes
+
+* **agy:** never pair a suffixed model id with a conflicting --effort ([#1335](https://github.com/thefalconry/talon/issues/1335)) ([9f7387f](https://github.com/thefalconry/talon/commit/9f7387ff1b7bd636422cf232305cbb3e42c9f5ed))
+
+## [5.39.3](https://github.com/thefalconry/talon/compare/v5.39.2...v5.39.3) (2026-10-21)
+
+
+### Bug Fixes
+
+* **agents:** block Claude Code's in-turn subagents and guard spawns on headroom ([#1329](https://github.com/thefalconry/talon/issues/1329)) ([6b5704c](https://github.com/thefalconry/talon/commit/6b5704ca1c8cf5b60067cfb7ea9697f79c277392))
+* **deps:** bump follow-redirects to 1.16.1 and hono to 4.13.13 for new advisories ([#1336](https://github.com/thefalconry/talon/issues/1336)) ([b596077](https://github.com/thefalconry/talon/commit/b5960770152c0a8d18fee6ff0dd51f0d1a50678b))
+
+## [5.39.2](https://github.com/thefalconry/talon/compare/v5.39.1...v5.39.2) (2026-10-16)
+
+
+### Miscellaneous Chores
+
+* **deps:** Bump actions/upload-artifact from 7.0.1 to 7.0.2 ([#1310](https://github.com/thefalconry/talon/issues/1310)) ([3ce8816](https://github.com/thefalconry/talon/commit/3ce8816949abf8628e82658c3f7ccef7d81346a9))
+* **deps:** Bump github/codeql-action/init from 4.38.2 to 4.38.3 ([#1312](https://github.com/thefalconry/talon/issues/1312)) ([6b656d5](https://github.com/thefalconry/talon/commit/6b656d5c04eb08801b985a7e9996235c3cc17f53))
+
+## [5.39.1](https://github.com/thefalconry/talon/compare/v5.39.0...v5.39.1) (2026-10-16)
+
+
+### Bug Fixes
+
+* **node:** de-flake the restart-notice failover test; ad-hoc mac signing under set -u ([#1320](https://github.com/thefalconry/talon/issues/1320)) ([af44246](https://github.com/thefalconry/talon/commit/af4424658042f6174562d16d62c99b8d3e54d963))
+
+## [5.39.0](https://github.com/thefalconry/talon/compare/v5.38.3...v5.39.0) (2026-10-16)
+
+
+### Features
+
+* **mesh:** tell devices when the daemon restarts so they come straight back ([#1292](https://github.com/thefalconry/talon/issues/1292)) ([241c929](https://github.com/thefalconry/talon/commit/241c929507f155864b98c51e3c9dd8000da6e698))
+
+
+### Bug Fixes
+
+* **mesh:** hold device commands across a reconnect instead of losing them ([#1291](https://github.com/thefalconry/talon/issues/1291)) ([7ed9545](https://github.com/thefalconry/talon/commit/7ed9545c039ef312e31a1d60839ba25e2ea21ee1))
+
+## [5.38.3](https://github.com/thefalconry/talon/compare/v5.38.2...v5.38.3) (2026-10-16)
+
+
+### Bug Fixes
+
+* **agents:** accept explicit chat_id on spawn_agent for background runs ([#1317](https://github.com/thefalconry/talon/issues/1317)) ([11eb97e](https://github.com/thefalconry/talon/commit/11eb97e52294e283a96248f57f909fcbb19d1a81))
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 4 updates ([#1316](https://github.com/thefalconry/talon/issues/1316)) ([16bc2ca](https://github.com/thefalconry/talon/commit/16bc2cab9a01b8a3706209e5662e1cd98197635c))
+* **deps:** Bump actions/setup-node from 7.0.0 to 7.1.0 ([#1307](https://github.com/thefalconry/talon/issues/1307)) ([d9e6c59](https://github.com/thefalconry/talon/commit/d9e6c59868741c533d55b033fb8f7b1abf5c853f))
+
+## [5.38.2](https://github.com/thefalconry/talon/compare/v5.38.1...v5.38.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* **whatsapp:** receive documents (PDF) and pass them to the model ([#1313](https://github.com/thefalconry/talon/issues/1313)) ([a5acfe1](https://github.com/thefalconry/talon/commit/a5acfe18babc3dbacbf9828173fcb3201e146fda))
+
+## [5.38.1](https://github.com/thefalconry/talon/compare/v5.38.0...v5.38.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **openai-agents:** lean tool surface and fail-fast for background runs ([#1305](https://github.com/thefalconry/talon/issues/1305)) ([376934b](https://github.com/thefalconry/talon/commit/376934bb8312b681bf2d381070a463e194af9b6e))
+
+## [5.38.0](https://github.com/thefalconry/talon/compare/v5.37.2...v5.38.0) (2026-10-13)
+
+
+### Features
+
+* **openai-agents:** background runner so it can host sub-agents ([#1302](https://github.com/thefalconry/talon/issues/1302)) ([a782b82](https://github.com/thefalconry/talon/commit/a782b825e208a563a01ec847f2f6fab407666d57))
+
 ## [5.37.2](https://github.com/thefalconry/talon/compare/v5.37.1...v5.37.2) (2026-10-11)
 
 

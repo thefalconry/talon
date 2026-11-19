@@ -57,7 +57,13 @@ class NeuralSpeechPipelineTest {
         pipeline.shutdown(2_000)
     }
 
-    private fun terminal(id: String) = events.any {
+    /// A copy of [events] taken under its lock. The pipeline's worker threads
+    /// append while the test polls, and iterating a synchronizedList (any,
+    /// filter, count) without holding its monitor races into a
+    /// ConcurrentModificationException.
+    private fun seen(): List<String> = synchronized(events) { events.toList() }
+
+    private fun terminal(id: String) = seen().any {
         it == "done:$id" || it == "stop:$id" || it.startsWith("fallback:$id:")
     }
 
@@ -78,14 +84,14 @@ class NeuralSpeechPipelineTest {
 
         assertEquals(listOf("First one.", "Second one.", "Third."), synthesized)
         assertEquals(listOf(10, 11, 6), written)
-        assertEquals(listOf("start:a", "done:a", "start:b", "done:b"), events.filter { it != "abort" })
+        assertEquals(listOf("start:a", "done:a", "start:b", "done:b"), seen().filter { it != "abort" })
     }
 
     @Test
     fun emptyUtteranceCompletesImmediately() {
         pipeline.enqueue("a", "   ", 1f, flush = true)
         awaitTerminal("a")
-        assertEquals(listOf("start:a", "done:a"), events.filter { it != "abort" })
+        assertEquals(listOf("start:a", "done:a"), seen().filter { it != "abort" })
     }
 
     @Test
@@ -99,9 +105,9 @@ class NeuralSpeechPipelineTest {
         gate.countDown()
         awaitTerminal("a", "b", "c")
 
-        assertEquals(1, events.count { it == "stop:a" })
-        assertEquals(1, events.count { it == "stop:b" })
-        assertFalse(events.any { it == "done:a" || it == "done:b" || it == "start:b" })
+        assertEquals(1, seen().count { it == "stop:a" })
+        assertEquals(1, seen().count { it == "stop:b" })
+        assertFalse(seen().any { it == "done:a" || it == "done:b" || it == "start:b" })
         assertTrue(events.contains("done:c"))
         assertFalse("stale audio was written", synthesized.contains("Queued behind."))
     }
@@ -116,7 +122,7 @@ class NeuralSpeechPipelineTest {
         assertTrue(pipeline.awaitIdle(2_000))
         Thread.sleep(50)
 
-        assertEquals(listOf("stop:a"), events.filter { it != "abort" })
+        assertEquals(listOf("stop:a"), seen().filter { it != "abort" })
         assertTrue(written.isEmpty())
     }
 
@@ -134,7 +140,7 @@ class NeuralSpeechPipelineTest {
                 "fallback:a:true:Broken here. And after.",
                 "fallback:b:false:Next utterance.",
             ),
-            events.filter { it != "abort" },
+            seen().filter { it != "abort" },
         )
         assertEquals(listOf("Fine first."), synthesized)
     }
@@ -144,7 +150,7 @@ class NeuralSpeechPipelineTest {
         failOn.add("Bad.")
         pipeline.enqueue("a", "Bad.", 1f, flush = true)
         awaitTerminal("a")
-        assertEquals(listOf("fallback:a:false:Bad."), events.filter { it != "abort" })
+        assertEquals(listOf("fallback:a:false:Bad."), seen().filter { it != "abort" })
     }
 
     @Test
@@ -156,6 +162,6 @@ class NeuralSpeechPipelineTest {
         synthGate = null
         assertTrue(pipeline.shutdown(2_000))
         pipeline.enqueue("late", "Ignored.", 1f, flush = false)
-        assertFalse(events.any { it.endsWith(":late") })
+        assertFalse(seen().any { it.endsWith(":late") })
     }
 }
