@@ -53,6 +53,9 @@ const MAX_PROVIDER_CHARS = 32;
  * so the mesh stays usable even when the cap is being pushed against.
  */
 const MAX_DEVICES = 128;
+const MAX_TAGS_PER_DEVICE = 16;
+const MAX_TAG_CHARS = 32;
+const TAG_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 /**
  * Location entries for device ids that never registered. A fix can legitimately
  * arrive just before the first registration lands, so these aren't refused —
@@ -132,6 +135,20 @@ export class MeshRegistry {
       await this.persistHistory();
     }
     return device;
+  }
+
+  /** Replace a device's tags; an empty list clears them. */
+  async setTags(
+    deviceId: string,
+    tags: string[],
+  ): Promise<DeviceInfo | undefined> {
+    const device = this.devices.get(deviceId);
+    if (!device) return undefined;
+    const { tags: _previous, ...rest } = device;
+    const next: DeviceInfo = tags.length ? { ...rest, tags } : rest;
+    this.devices.set(deviceId, next);
+    await this.persistDevices();
+    return next;
   }
 
   /**
@@ -358,7 +375,28 @@ function sanitizeDevice(
     ...(sanitizeCapabilities(body.capabilities)
       ? { capabilities: sanitizeCapabilities(body.capabilities) }
       : {}),
+    // requireCore marks a device's own registration. Tags belong to the
+    // operator, so they are only read back from the daemon's sidecar.
+    ...(requireCore ? {} : storedTags(body.tags)),
   };
+}
+
+function storedTags(value: unknown): Pick<DeviceInfo, "tags"> {
+  const tags = normalizeTags(value);
+  return tags?.length ? { tags } : {};
+}
+
+/** Lowercased, deduplicated tags; undefined when any entry is invalid. */
+export function normalizeTags(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tags = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") return undefined;
+    const tag = entry.trim().toLowerCase();
+    if (tag.length > MAX_TAG_CHARS || !TAG_PATTERN.test(tag)) return undefined;
+    tags.add(tag);
+  }
+  return tags.size <= MAX_TAGS_PER_DEVICE ? [...tags] : undefined;
 }
 
 function sanitizeLocation(

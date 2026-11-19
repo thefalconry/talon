@@ -43,6 +43,10 @@ import {
   evictOrphanSubprocesses as claudeEvictOrphanSubprocesses,
 } from "./index.js";
 import { createInProcessAgentHost } from "./host/in-process.js";
+import {
+  compactChatSession,
+  discardCompactedSession,
+} from "./session/compact.js";
 import { claimBankedReset, getBankedResetOffer } from "./usage/banked-reset.js";
 
 import * as modelProvider from "./model-provider.js";
@@ -165,6 +169,11 @@ async function initClaudeBackend(
   // `storage/sessions.ts:resetSession` regardless.
   const sessions: SessionBackend = {
     warmSession: (chatId) => host.warmSession(chatId),
+    // Idle compaction (docs/cache-economics.md PR C). Not a protocol-table
+    // row yet — like `evictOrphanSubprocesses`, bound directly until the
+    // agent-host protocol gains a `compact_session` request.
+    compactChat: (chatId, opts) => compactChatSession(chatId, opts, account),
+    discardSession: (sessionId) => discardCompactedSession(sessionId, account),
   };
 
   const tools: ToolRuntime = {

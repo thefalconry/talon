@@ -153,6 +153,7 @@ function readSpawnBody(body: Record<string, unknown>):
       reasoningEffort?: ReasoningEffortLevel;
       timeoutMs?: number;
       preflight: boolean;
+      force: boolean;
     }
   | { ok: false; error: string } {
   const brief = String(body.brief ?? "").trim();
@@ -175,10 +176,15 @@ function readSpawnBody(body: Record<string, unknown>):
   if (preflight !== undefined && typeof preflight !== "boolean") {
     return { ok: false, error: "preflight must be true or false" };
   }
+  const force = body.force;
+  if (force !== undefined && typeof force !== "boolean") {
+    return { ok: false, error: "force must be true or false" };
+  }
   return {
     ok: true,
     brief,
     label,
+    force: force === true,
     preflight: wantsPreflight(brief, preflight),
     ...(body.backend ? { backendId: String(body.backend) } : {}),
     ...(body.model ? { model: String(body.model) } : {}),
@@ -209,6 +215,7 @@ export const agentControlHandlers: SharedActionHandlers = {
         ? { timeoutMs: parsed.timeoutMs }
         : {}),
       preflight: parsed.preflight,
+      ...(parsed.force ? { force: true } : {}),
     });
     if (!outcome.ok) return { ok: false, error: outcome.error };
     const timeout = describeTimeout(clampTimeout(parsed.timeoutMs));

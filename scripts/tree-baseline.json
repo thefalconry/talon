@@ -1,11 +1,6 @@
 [
   {
     "kind": "flat",
-    "path": "src/backend/claude-sdk",
-    "files": 13
-  },
-  {
-    "kind": "flat",
     "path": "src/backend/codex",
     "files": 14
   },

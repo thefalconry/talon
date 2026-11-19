@@ -15,8 +15,8 @@ import { getChatSettings } from "../../storage/chat-settings.js";
 import { getState, agyBinary } from "./state.js";
 import { registerMcpForChat, unregisterMcpForChat } from "./mcp/register.js";
 import { ensureChild, killChild } from "./process/child.js";
-import { toAgyEffort } from "./effort.js";
-import { getDefaultModelId } from "./models.js";
+import { selectAgyRun } from "./effort.js";
+import { catalogForSelection, getDefaultModelId } from "./models.js";
 
 /**
  * Drop everything this chat holds: kill the child, remove its MCP
@@ -48,11 +48,18 @@ export async function warmSession(chatId: string): Promise<void> {
     const workspace = config.workspace || dirs.workspace;
     const settings = getChatSettings(chatId);
     const session = getSession(chatId);
+    // Same resolution as the turn itself, so the warm child's spec
+    // matches and is reused instead of respawned on the first message.
+    const { model, effort } = selectAgyRun(
+      settings.model ?? config.model ?? getDefaultModelId(),
+      settings.effort,
+      settings.effort ? await catalogForSelection() : [],
+    );
     ensureChild(chatId, {
       binary: agyBinary(config.agyBinary),
       cwd: workspace,
-      model: settings.model ?? config.model ?? getDefaultModelId(),
-      effort: toAgyEffort(settings.effort),
+      model,
+      effort,
       addDirs: [workspace],
       ...(session.sessionId ? { conversationId: session.sessionId } : {}),
     });

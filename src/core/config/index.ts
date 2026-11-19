@@ -222,6 +222,17 @@ const nativeConfigSchema = z
      */
     sseMaxLifetimeMs: z.number().int().min(60_000).optional(),
     /**
+     * How long a device command waits, in ms, when its device has no live
+     * event stream (it is reconnecting: after a daemon restart, a network
+     * change, an `sseMaxLifetimeMs` cycle). The command is sent the moment
+     * the device's stream returns; if it does not return in this window the
+     * command fails then, saying it was not delivered, rather than waiting
+     * out its whole timeout. Default 20000; 0 fails such commands at once.
+     * The hold always ends max(3 s, 10% of the command's timeout) before
+     * that timeout, so a command is never delivered too late to answer.
+     */
+    commandHoldMs: z.number().int().min(0).max(300_000).optional(),
+    /**
      * Origins allowed to call the bridge from a BROWSER. Native clients
      * (Electron main, Flutter, curl, talon-node) send no Origin header and
      * never need an entry here. Anything listed gets a matching
@@ -731,6 +742,12 @@ const configSchema = z.object({
    *   - `allowedBackends` — optional allowlist of backend ids sub-agents
    *     may run on. Unset = any backend with a background capability. A
    *     spawn that names (or inherits) a backend outside it is refused.
+   *   - `minHeadroomPct` — refuse a spawn when the backend it would run on
+   *     has less than this percent of measured plan headroom left (default
+   *     25; 0 disables). Checked on the final backend, so it also covers an
+   *     explicit backend or model, which skip routing. Unmeasured backends
+   *     (no plan API, no `backendBudgets` entry) are allowed. A spawn with
+   *     `force: true` bypasses it.
    */
   agents: z
     .object({
@@ -744,6 +761,7 @@ const configSchema = z.object({
         .min(0)
         .default(15 * 60 * 1000),
       allowedBackends: z.array(z.string().min(1)).optional(),
+      minHeadroomPct: z.number().min(0).max(100).default(25),
     })
     .optional(),
   /**
@@ -763,6 +781,45 @@ const configSchema = z.object({
     .object({
       maxActivePerChat: z.number().int().min(1).max(50).default(5),
       maxPersistentPerChat: z.number().int().min(1).max(50).optional(),
+    })
+    .optional(),
+  /**
+   * Prompt-cache economics (docs/cache-economics.md, PR C).
+   *
+   *   - `idleCompact` — compact a big, idle chat shortly before its prompt
+   *     cache expires (at 0.9 × the TTL after its last request), while the
+   *     transcript is still cached, as the Claude CLI's own idle
+   *     compaction does. Only when the last request observed a 1 h TTL.
+   *     Off by default.
+   *   - `idleCompactMinContextTokens` — only sessions whose context fill is
+   *     at least this are compacted. Default 200k (the CLI's); a value below
+   *     100k is raised to 100k.
+   *   - `idleCompactMode` — `"precompute"` (default): compact a fork of the
+   *     session and switch to it at the next turn only if the cache has
+   *     expired by then, else discard it. `"in-place"`: compact the session
+   *     itself when the timer fires.
+   *   - `idleCompactOnTurn` — what a user turn does to a pass whose
+   *     `/compact` request is already sent (its input is billed): `"wait"`
+   *     (default) — the turn waits for it, and a precompute is adopted even
+   *     though the cache is still warm; `"abort"` — abort it; `"ask"` — ask
+   *     the chat with two buttons (Telegram), `"wait"` after 30 s or where
+   *     buttons are unsupported. A turn before the request is sent always
+   *     aborts the pass.
+   *   - `promptCacheTtl` — the Claude CLI's prompt-cache TTL for chat turns
+   *     (its `promptCacheTtl` setting), passed through. Unset = the CLI's
+   *     automatic choice (1 h on a subscription within its limits, 5 min
+   *     on an API key / Bedrock / Vertex). Idle compaction arms on the TTL
+   *     it OBSERVES in the response usage, not on this setting.
+   */
+  cache: z
+    .object({
+      idleCompact: z.boolean().default(false),
+      // Any positive count: the resolver clamps it up to the 100k floor
+      // (core/weaver/idle-compact.ts) rather than refusing the config.
+      idleCompactMinContextTokens: z.number().int().positive().default(200_000),
+      idleCompactMode: z.enum(["precompute", "in-place"]).default("precompute"),
+      idleCompactOnTurn: z.enum(["wait", "abort", "ask"]).default("wait"),
+      promptCacheTtl: z.enum(["5m", "1h"]).optional(),
     })
     .optional(),
   /**
@@ -950,6 +1007,22 @@ const configSchema = z.object({
    * explicitly to "responses" only if your proxy supports it.
    */
   openaiApiMode: z.enum(["responses", "chat_completions"]).optional(),
+  /**
+   * Tool surface for the `openai-agents` backend's background runs
+   * (sub-agents, isolated cron jobs, heartbeat, dream).
+   *   - "lean" (default) — the built-ins (Read, Write, Edit, Bash, Glob,
+   *     Grep) plus the agent-plumbing tools (report_result, check_inbox,
+   *     message_parent, message_peer, list_peers). A few thousand tokens:
+   *     fits a 32k-context local model.
+   *   - "full" — every frontend tool server and every plugin, like the
+   *     chat path. Can run past 100k tokens of tool schemas.
+   *   - an array — the lean set plus these entries: a Talon tool name
+   *     (e.g. "send", "remember") adds that tool, a plugin server name
+   *     (e.g. "brave-search", "github-tools") adds that whole server.
+   */
+  openaiBackgroundTools: z
+    .union([z.enum(["lean", "full"]), z.array(z.string())])
+    .optional(),
   timezone: z.string().optional(),
   plugins: z.array(pluginEntrySchema).default([]),
 
@@ -1077,6 +1150,16 @@ const configSchema = z.object({
   // own hands, so the cutover should be deliberate and observed (flip to true
   // and restart), with an instant rollback by flipping back to false.
   nativeTools: z.boolean().default(false),
+
+  // Claude backend — offer Claude Code's OWN in-process sub-agent tool
+  // (`Agent`, `Task` on older builds) to the model. Off by default: those
+  // sub-agents live inside one turn, die with it without reporting, and are
+  // invisible to Talon's agent caps and headroom guard, so a model that
+  // reaches for them instead of `spawn_agent` can spend a whole plan window
+  // for no output. When false the tools are dropped from the whitelist and
+  // added to the SDK's `disallowedTools` for chat turns, heartbeat, dream,
+  // cron/query jobs and sub-agents. Talon's own `spawn_agent` is unaffected.
+  allowNativeSubagents: z.boolean().default(false),
 
   // FUSE layer for the talon:// namespace (~/.talon/ns). "auto" mounts the
   // live views (proc/, plugins/) when the host can (Linux, /dev/fuse, the

@@ -9,8 +9,12 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { downloadMediaMessage, type WAMessage } from "baileys";
+import { basename, extname, join } from "node:path";
+import {
+  downloadMediaMessage,
+  normalizeMessageContent,
+  type WAMessage,
+} from "baileys";
 import { makeWaLogger } from "../connection/wa-logger.js";
 import { addMedia } from "../../../storage/media-index.js";
 import { logWarn } from "../../../util/log.js";
@@ -29,7 +33,67 @@ export type SavedMedia = {
   filePath: string;
   type: "photo" | "video" | "voice" | "document" | "sticker";
   caption?: string;
+  /** The sender's own file name (documents). */
+  fileName?: string;
+  mimetype?: string;
+  /** Bytes written. */
+  size: number;
 };
+
+/** Extensions for MIME types whose subtype isn't one. */
+const MIME_EXTENSIONS: Record<string, string> = {
+  "application/pdf": "pdf",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    "docx",
+  "application/vnd.ms-powerpoint": "ppt",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+    "pptx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.oasis.opendocument.text": "odt",
+  "text/plain": "txt",
+  "text/markdown": "md",
+  "audio/ogg": "ogg",
+  "audio/mpeg": "mp3",
+  "image/jpeg": "jpg",
+};
+
+type MediaContent = {
+  mimetype?: string | null;
+  fileName?: string | null;
+  caption?: string | null;
+};
+
+/** A file extension for this media, from its name, its MIME type, or the kind. */
+function extensionFor(content: MediaContent, defaultExt: string): string {
+  const fromName = extname(content.fileName ?? "").slice(1);
+  if (/^[a-z0-9]{1,8}$/i.test(fromName)) return fromName.toLowerCase();
+  const mime = content.mimetype?.split(";")[0]?.trim().toLowerCase() ?? "";
+  if (MIME_EXTENSIONS[mime]) return MIME_EXTENSIONS[mime];
+  const subtype = mime.split("/")[1] ?? "";
+  return /^[a-z0-9]{1,5}$/.test(subtype) ? subtype : defaultExt;
+}
+
+/**
+ * Where a download is written: named after the chat and message so the
+ * workspace stays traceable, plus the sender's own file name when there
+ * is one (so "Essay.pdf" stays recognisable), always with an extension
+ * the file tools and extractors can go by.
+ */
+export function inboundMediaFileName(
+  chatId: string,
+  msgId: number,
+  content: MediaContent,
+  defaultExt: string,
+): string {
+  const ext = extensionFor(content, defaultExt);
+  const stem = basename(content.fileName ?? "", extname(content.fileName ?? ""))
+    .replace(/[^\p{L}\p{N}._-]+/gu, "_")
+    .replace(/^[._]+/, "")
+    .slice(0, 80);
+  return `${chatId}_${msgId}${stem ? `-${stem}` : ""}.${ext}`;
+}
 
 /**
  * How to recover media WhatsApp's CDN no longer serves. Media URLs expire
@@ -41,13 +105,33 @@ export type MediaRetrieval = {
   reuploadRequest: (message: WAMessage) => Promise<WAMessage>;
 };
 
-/** The media kind carried by a message, if any. */
+/**
+ * The media kind carried by a message, if any, and its media content.
+ * Looks through the wrappers WhatsApp puts around media — a document
+ * with a caption arrives as `documentWithCaptionMessage`, and disappearing
+ * or view-once chats wrap everything — the same way Baileys' downloader
+ * does, so whatever it can fetch is recognised here too.
+ */
 function mediaKindOf(
   message: WAMessage,
-): (typeof MEDIA_KINDS)[number] | undefined {
-  const content = message.message;
-  if (!content) return undefined;
-  return MEDIA_KINDS.find(([field]) => field in content && content[field]);
+): { kind: (typeof MEDIA_KINDS)[number]; content: MediaContent } | undefined {
+  const inner = normalizeMessageContent(message.message);
+  if (!inner) return undefined;
+  const kind = MEDIA_KINDS.find(([field]) => inner[field]);
+  if (!kind) return undefined;
+  return { kind, content: inner[kind[0]] as MediaContent };
+}
+
+/** File name and MIME type of a message's media, as the sender gave them. */
+export function inboundMediaMeta(message: WAMessage | undefined): {
+  fileName?: string;
+  mimetype?: string;
+} {
+  const content = message ? mediaKindOf(message)?.content : undefined;
+  return {
+    ...(content?.fileName ? { fileName: content.fileName } : {}),
+    ...(content?.mimetype ? { mimetype: content.mimetype } : {}),
+  };
 }
 
 /**
@@ -63,9 +147,10 @@ export async function saveInboundMedia(
   senderName: string,
   retrieval?: MediaRetrieval,
 ): Promise<SavedMedia | undefined> {
-  const kind = mediaKindOf(message);
-  if (!kind) return undefined;
-  const [field, type, defaultExt] = kind;
+  const found = mediaKindOf(message);
+  if (!found) return undefined;
+  const [, type, defaultExt] = found.kind;
+  const { content } = found;
 
   try {
     const buffer = await downloadMediaMessage(
@@ -78,24 +163,14 @@ export async function saveInboundMedia(
     );
     if (!Buffer.isBuffer(buffer) || buffer.length === 0) return undefined;
 
-    const content = message.message?.[field] as
-      | {
-          mimetype?: string | null;
-          fileName?: string | null;
-          caption?: string | null;
-        }
-      | undefined;
-    // Prefer the sender's own filename for documents; otherwise name the
-    // file after the message so the workspace stays traceable.
-    const ext =
-      content?.fileName?.includes(".") === true
-        ? content.fileName.slice(content.fileName.lastIndexOf(".") + 1)
-        : (content?.mimetype?.split("/")[1]?.split(";")[0] ?? defaultExt);
     mkdirSync(dirs.uploads, { recursive: true });
-    const filePath = join(dirs.uploads, `wa_${chatId}_${msgId}.${ext}`);
+    const filePath = join(
+      dirs.uploads,
+      inboundMediaFileName(chatId, msgId, content, defaultExt),
+    );
     writeFileSync(filePath, buffer);
 
-    const caption = content?.caption ?? undefined;
+    const caption = content.caption || undefined;
     // addMedia may dedupe onto an existing identical file and delete
     // this download — report the path it resolves to.
     const savedPath = await addMedia({
@@ -107,7 +182,14 @@ export async function saveInboundMedia(
       timestamp: Date.now(),
       ...(caption ? { caption } : {}),
     });
-    return { filePath: savedPath, type, ...(caption ? { caption } : {}) };
+    return {
+      filePath: savedPath,
+      type,
+      size: buffer.length,
+      ...(caption ? { caption } : {}),
+      ...(content.fileName ? { fileName: content.fileName } : {}),
+      ...(content.mimetype ? { mimetype: content.mimetype } : {}),
+    };
   } catch (err) {
     logWarn(
       "whatsapp",

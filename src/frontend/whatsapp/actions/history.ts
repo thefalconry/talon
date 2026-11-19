@@ -11,16 +11,42 @@
  * WhatsApp — via the sender's re-upload when the CDN copy is gone.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import {
   getHistoryMessage,
   getMessageById,
   setMessageFilePath,
 } from "../../../storage/history.js";
-import { saveInboundMedia } from "../messages/media-store.js";
+import { documentNote } from "../messages/attachment-note.js";
+import {
+  inboundMediaMeta,
+  saveInboundMedia,
+  type SavedMedia,
+} from "../messages/media-store.js";
 import { lookupMessage, resolveKey } from "../messages/message-store.js";
 import { tryAction } from "./try-action.js";
 import type { WhatsAppActionHandlers } from "./types.js";
+
+/**
+ * download_media's answer: the path, and for a document its extracted
+ * text too — a turn without file tools can't open the path itself.
+ */
+async function mediaAnswer(
+  media: { filePath: string; type: string } & Partial<Omit<SavedMedia, "type">>,
+  message: Parameters<typeof inboundMediaMeta>[0],
+): Promise<{ ok: true; text: string; file_path: string }> {
+  const { filePath } = media;
+  if (media.type !== "document") {
+    return { ok: true, text: filePath, file_path: filePath };
+  }
+  const note = await documentNote({
+    ...inboundMediaMeta(message),
+    ...media,
+    type: "document",
+    size: media.size ?? statSync(filePath).size,
+  });
+  return { ok: true, text: note, file_path: filePath };
+}
 
 function toMsgId(raw: unknown): number {
   return typeof raw === "number" ? raw : Number(raw);
@@ -73,7 +99,10 @@ export const historyHandlers: WhatsAppActionHandlers = {
       const { stored } = resolved;
       const row = getHistoryMessage(chatId, stored.msgId);
       if (row?.filePath && existsSync(row.filePath)) {
-        return { ok: true, text: row.filePath, file_path: row.filePath };
+        return mediaAnswer(
+          { filePath: row.filePath, type: row.mediaType ?? "" },
+          stored.message,
+        );
       }
       if (!stored.message) {
         return {
@@ -95,6 +124,6 @@ export const historyHandlers: WhatsAppActionHandlers = {
         };
       }
       setMessageFilePath(chatId, stored.msgId, saved.filePath);
-      return { ok: true, text: saved.filePath, file_path: saved.filePath };
+      return mediaAnswer(saved, stored.message);
     }),
 };

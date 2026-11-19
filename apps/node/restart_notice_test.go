@@ -156,6 +156,14 @@ func TestRestartNoticeDoesNotRotateEndpoints(t *testing.T) {
 		downFor    = 2500 * time.Millisecond
 		afterMs    = 100
 		restarting = httptest.NewTLSServer(nil)
+		// The restart starts once the node has finished connecting: its
+		// startup register and the one it sends when a stream opens have
+		// both been answered. Otherwise either can race into the 502
+		// window before the node has read the bye, and a failure before
+		// any notice is allowed to rotate.
+		registers = 0
+		settled   = make(chan struct{})
+		settle    sync.Once
 	)
 	restarting.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
@@ -168,18 +176,35 @@ func TestRestartNoticeDoesNotRotateEndpoints(t *testing.T) {
 		}
 		if r.URL.Path != "/events" {
 			_, _ = io.WriteString(w, `{"ok":true,"deviceId":"node-abc"}`)
+			if r.URL.Path == "/devices/register" {
+				mu.Lock()
+				registers++
+				if registers >= 2 && streams >= 1 {
+					settle.Do(func() { close(settled) })
+				}
+				mu.Unlock()
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
 		mu.Lock()
 		streams++
 		first := streams == 1
-		if first {
-			downUntil = time.Now().Add(downFor)
+		if registers >= 2 {
+			settle.Do(func() { close(settled) })
 		}
 		mu.Unlock()
 		if first {
+			select {
+			case <-settled:
+			case <-r.Context().Done():
+				return
+			}
+			mu.Lock()
+			downUntil = time.Now().Add(downFor)
+			mu.Unlock()
 			_, _ = fmt.Fprintf(w, `data: {"kind":"bye","reason":"restart","reconnectAfterMs":%d}`+"\n\n", afterMs)
 			return
 		}
