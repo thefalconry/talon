@@ -159,13 +159,24 @@ Agent-side (refused anywhere but an `agent:*` context):
   caller's tree, addressed by id or by exact label (a label two live agents
   share is refused as ambiguous)
 - `check_inbox()`
+- `board_post({ topic, kind, text })` / `board_read({ topic?, since_id? })` —
+  the chat tree's shared, append-only blackboard. `kind` is `finding`,
+  `claim`, `correction` or `question`; text ≤ 4 KB; 20 writes per agent per
+  10 minutes; the newest 200 live entries per chat are kept (oldest
+  non-lease entries drop first). Each entry carries its author's label.
+- `lease({ op: "acquire" | "release" | "list", resource, ttl_s ≤ 1800 })` —
+  advisory lock on a named resource. A conflicting `acquire` is refused with
+  `{ held_by, expires_in }`; nothing is enforced. Leases free themselves when
+  the holder settles (success or failure) or the TTL lapses.
 
 Visibility is scoped the way triggers are scoped to their chat: a chat sees
 the agents rooted in it, an agent sees its own descendants, and an id from
 another chat is simply "not found". **Messaging** reaches further than
 control: an agent can `message_peer` anything in its own tree, but can only
 `kill_agent` / `wait_for_agent` its own descendants, and nothing rooted in
-another chat is ever addressable.
+another chat is ever addressable. The blackboard and leases are scoped the
+same way: an agent only ever reads or writes the board of the chat its tree
+roots in.
 
 ## Pre-flight lane
 
