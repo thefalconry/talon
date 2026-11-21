@@ -182,7 +182,7 @@ apps pair with). No daemon-side changes are required for headless nodes.
 | OS      | Mechanism                                              | Notes                                                     |
 | ------- | ------------------------------------------------------ | --------------------------------------------------------- |
 | Linux   | systemd unit (system as root, else user)               | user units need `loginctl enable-linger` for boot         |
-| macOS   | LaunchAgent (`com.talon.node`)                         | per-user, `KeepAlive` restarts on crash                   |
+| macOS   | LaunchAgent (`com.talon.node`), or LaunchDaemon under sudo | agent starts at login, daemon at boot; `KeepAlive` restarts on crash |
 | Windows | Scheduled task (`TalonNode`, ONSTART, installing user) | runs as you, unelevated, no stored password (`/RU … /NP`) |
 
 The node always runs as the account that installed it, and it never runs as
@@ -196,6 +196,19 @@ A root install on Linux (system unit) refuses to register if the binary, the
 config, or any directory above them is owned by another user or is
 world-writable. For example, `TALON_NODE_DIR` pointed at a user-writable
 directory is refused.
+
+On macOS, `talon-node install` starts the node at login. To start it at boot,
+before anyone logs in, run this from the account that owns the node:
+
+```sh
+sudo talon-node install --config ~/.talon-node/config.json
+```
+
+Pass `--config` explicitly, since sudo can change the default path. This
+replaces that account's LaunchAgent with a LaunchDaemon, which still runs as
+that account, never as root. The install is refused if the binary or config can
+be replaced by another user. Until someone logs in, the `computer` capability
+has no screen to use. Remove it with `sudo talon-node uninstall`.
 
 ## Building all targets
 
