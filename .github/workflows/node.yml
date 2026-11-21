@@ -25,6 +25,24 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Windows telemetry calls kernel32 directly, so it only proves itself on
+  # Windows. Scoped to those tests: the rest of the suite has never run here.
+  test-windows-telemetry:
+    name: Windows telemetry
+    runs-on: windows-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/node
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: apps/node/go.mod
+          cache-dependency-path: apps/node/go.mod
+      - name: Test
+        run: go test -v -run "TestMemoryStatusExSize|TestPlatformTelemetryLive|TestFormat" .
+
   build:
     name: Vet, Test & Cross-compile
     runs-on: ubuntu-latest
