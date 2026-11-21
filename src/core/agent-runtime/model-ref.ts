@@ -36,6 +36,7 @@ export const BACKEND_IDS = [
   "claude",
   "codex",
   "kilo",
+  "kimi",
   "openai-agents",
   "opencode",
 ] as const;

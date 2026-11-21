@@ -42,6 +42,7 @@ beforeAll(async () => {
   await import("../backend/codex/factory.js");
   await import("../backend/agy/factory.js");
   await import("../backend/openai-agents/factory.js");
+  await import("../backend/kimi/factory.js");
 }, 30_000);
 
 describe("every backend declares its guest tool scope", () => {
