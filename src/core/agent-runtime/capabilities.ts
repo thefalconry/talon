@@ -399,6 +399,16 @@ export interface PlanWindow {
   percent: number;
   /** ISO timestamp of the next reset, when the plan reports one. */
   resetsAt?: string;
+  /** The window's length in the `5h` / `7d` vocabulary, when it has one. */
+  period?: string;
+  /**
+   * What the window limits when it is not the whole account: one model
+   * (Claude's weekly cap on Fable) or a group of models (an Antigravity
+   * quota group). Absent means every model on the backend counts.
+   */
+  scope?: string;
+  /** Names of the models `scope` covers, for matching a model id to it. */
+  models?: string[];
 }
 
 export interface PlanUsage {

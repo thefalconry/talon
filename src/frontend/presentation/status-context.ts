@@ -397,6 +397,14 @@ interface PlanWindowDisplay {
   bar: string;
   /** Local-time reset, absent for windows the plan reports no reset for. */
   resetLabel: string | undefined;
+  /** Time to the reset ("2h 10m", "6d 3h"), when it is still ahead. */
+  resetIn?: string;
+  /** The window's length (`5h`, `7d`), when the plan says. */
+  period?: string;
+  /** What the window limits when it is not the whole account. */
+  scope?: string;
+  /** The models `scope` covers. */
+  models?: string[];
 }
 
 export interface PlanDisplay {
@@ -408,6 +416,25 @@ export interface PlanDisplay {
   resetsExpireLabel?: string;
   /** Set only when the figures have aged, e.g. "12m ago". */
   ageLabel: string | undefined;
+}
+
+/** "45m", "3h 5m", "6d 3h": how long until `iso`, or undefined once past. */
+function timeUntil(
+  iso: string | undefined,
+  now = Date.now(),
+): string | undefined {
+  if (!iso) return undefined;
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return undefined;
+  // Rounded up to the minute, like the reset time itself.
+  const mins = Math.ceil((ts - now) / 60_000);
+  if (mins <= 0) return undefined;
+  const days = Math.floor(mins / 1440);
+  const hours = Math.floor((mins % 1440) / 60);
+  const rest = mins % 60;
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  if (hours > 0) return rest > 0 ? `${hours}h ${rest}m` : `${hours}h`;
+  return `${rest}m`;
 }
 
 function planResetLabel(iso: string | undefined): string | undefined {
@@ -444,11 +471,16 @@ export function buildPlanDisplay(
     windows: usage.windows.map((w) => {
       const percent = Math.max(0, Math.min(100, Math.round(w.percent)));
       const filled = Math.round((percent / 100) * barLen);
+      const resetIn = timeUntil(w.resetsAt);
       return {
         label: w.label,
         percent,
         bar: "█".repeat(filled) + "░".repeat(barLen - filled),
         resetLabel: planResetLabel(w.resetsAt),
+        ...(resetIn ? { resetIn } : {}),
+        ...(w.period ? { period: w.period } : {}),
+        ...(w.scope ? { scope: w.scope } : {}),
+        ...(w.models?.length ? { models: w.models } : {}),
       };
     }),
   };

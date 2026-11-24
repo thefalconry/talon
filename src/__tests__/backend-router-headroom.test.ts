@@ -25,8 +25,10 @@ const {
   collectBackendHeadroom,
   getBackendHeadroom,
   headroomFromLedger,
+  formatHeadroom,
   headroomFromPlan,
   limitingWindowOf,
+  modelInScope,
   resetHeadroomCacheForTest,
   HEADROOM_CACHE_MS,
 } = await import("../core/engine/backend-router/headroom.js");
@@ -83,6 +85,118 @@ describe("headroom from a plan", () => {
     expect(
       headroomFromPlan("claude", "Anthropic", { fetchedAt: 1, windows: [] }),
     ).toBeUndefined();
+  });
+});
+
+describe("headroom for the model a run would use", () => {
+  /** Claude: account-wide 5h and 7d, and Fable's own weekly cap. */
+  const claude = {
+    fetchedAt: 1,
+    windows: [
+      { label: "5h", percent: 20, period: "5h" },
+      { label: "7d", percent: 40, period: "7d" },
+      {
+        label: "Fable",
+        percent: 100,
+        period: "7d",
+        scope: "Fable",
+        models: ["Fable"],
+      },
+    ],
+  };
+  /** Antigravity: every window belongs to a group; Argon has one of its own. */
+  const agy = {
+    fetchedAt: 1,
+    windows: [
+      {
+        label: "Gemini · 7d",
+        percent: 30,
+        scope: "Gemini",
+        models: ["Gemini 4 Neon", "Gemini 4 Argon"],
+      },
+      {
+        label: "Claude/GPT · 7d",
+        percent: 95,
+        scope: "Claude/GPT",
+        models: ["Claude Opus 5.5", "GPT-OSS 120B"],
+      },
+      {
+        label: "Gemini 4 Argon · 7d",
+        percent: 90,
+        scope: "Gemini 4 Argon",
+        models: ["Gemini 4 Argon"],
+      },
+    ],
+  };
+
+  it("leaves a model's own cap out for the other models", () => {
+    const opus = headroomFromPlan(
+      "claude",
+      "Claude",
+      claude,
+      "claude-opus-5-5",
+    );
+    expect(opus?.headroom).toBeCloseTo(0.6, 5);
+    expect(opus?.limiting).toMatchObject({ label: "7d", percent: 40 });
+    expect(opus?.limiting?.scope).toBeUndefined();
+    expect(opus?.model).toBe("claude-opus-5-5");
+  });
+
+  it("counts a model's own cap for that model", () => {
+    const fable = headroomFromPlan(
+      "claude",
+      "Claude",
+      claude,
+      "claude-fable-5-2",
+    );
+    expect(fable?.headroom).toBe(0);
+    expect(fable?.limiting).toMatchObject({ label: "Fable", scope: "Fable" });
+    expect(formatHeadroom(fable!)).toBe(
+      "0% for claude-fable-5-2 — Fable 100% used",
+    );
+  });
+
+  it("judges by the account-wide windows when the model is unknown", () => {
+    expect(headroomFromPlan("claude", "Claude", claude)?.headroom).toBeCloseTo(
+      0.6,
+      5,
+    );
+  });
+
+  it("applies every group a model belongs to", () => {
+    const argon = limitingWindowOf(agy, "gemini-4-argon-high");
+    expect(argon).toMatchObject({ label: "Gemini 4 Argon · 7d", percent: 90 });
+    const neon = limitingWindowOf(agy, "gemini-4-neon-medium");
+    expect(neon).toMatchObject({ label: "Gemini · 7d", percent: 30 });
+    const opus = limitingWindowOf(agy, "claude-opus-5-5");
+    expect(opus).toMatchObject({ label: "Claude/GPT · 7d", percent: 95 });
+  });
+
+  it("takes the group with the most left when every window is scoped and no model matches", () => {
+    expect(limitingWindowOf(agy)).toMatchObject({ label: "Gemini · 7d" });
+    expect(limitingWindowOf(agy, "some-new-model")).toMatchObject({
+      label: "Gemini · 7d",
+    });
+  });
+
+  it("matches a model id against the words of a scope's model names", () => {
+    const window = { label: "x", percent: 0, scope: "Claude/GPT" };
+    expect(
+      modelInScope("claude-opus-5-5", {
+        ...window,
+        models: ["Claude Opus 5.5"],
+      }),
+    ).toBe(true);
+    expect(
+      modelInScope("claude-sonnet-5-5", {
+        ...window,
+        models: ["Claude Opus 5.5"],
+      }),
+    ).toBe(false);
+    expect(
+      modelInScope("claude-fable-5-2", { ...window, scope: "Fable" }),
+    ).toBe(true);
+    expect(modelInScope("anything", { ...window, scope: "" })).toBe(false);
   });
 });
 
