@@ -1,5 +1,70 @@
 # Changelog
 
+## [5.40.0](https://github.com/thefalconry/talon/compare/v5.39.5...v5.40.0) (2026-11-25)
+
+
+### Features
+
+* **cache:** compact big idle chats before the prompt cache expires ([#1384](https://github.com/thefalconry/talon/issues/1384)) ([23af7b8](https://github.com/thefalconry/talon/commit/23af7b826f6b09ba09e8ee9badaa0b57424afd03))
+* **mesh:** add wait_for_device ([#1372](https://github.com/thefalconry/talon/issues/1372)) ([4ed6e98](https://github.com/thefalconry/talon/commit/4ed6e98c3e2c3db9067b83c645acc2e61541564b))
+* **mesh:** operator-assigned device tags, addressable as tag:&lt;name&gt; ([#1378](https://github.com/thefalconry/talon/issues/1378)) ([ea2b225](https://github.com/thefalconry/talon/commit/ea2b225d838142aa750cd948576ef98f0e17a0f9))
+* **node:** report pending updates and reboots on Debian and Ubuntu ([#1377](https://github.com/thefalconry/talon/issues/1377)) ([925b936](https://github.com/thefalconry/talon/commit/925b93659c6c43bf2623c05a185f8f906c9fbd10))
+* **node:** report uptime, load and memory on macOS ([#1375](https://github.com/thefalconry/talon/issues/1375)) ([884b3cd](https://github.com/thefalconry/talon/commit/884b3cda4945adc3abd7f6ba6bd6b0f56d631d97))
+* **triggers:** run trigger wakes in an isolated session ([#1385](https://github.com/thefalconry/talon/issues/1385)) ([498bf92](https://github.com/thefalconry/talon/commit/498bf92e54a2403935215058c51309933849f23b))
+
+
+### Bug Fixes
+
+* **agents:** end a run that keeps going after report_result ([#1382](https://github.com/thefalconry/talon/issues/1382)) ([444cc57](https://github.com/thefalconry/talon/commit/444cc5744c9a3829d9621c5784d084effadfd0de))
+* **agents:** redact credentials from run logs ([#1356](https://github.com/thefalconry/talon/issues/1356)) ([b240145](https://github.com/thefalconry/talon/commit/b240145af599af70959562b5b5e95d1cadd9c0b8))
+* **agents:** settle a kill as killed when the backend returns normally ([#1365](https://github.com/thefalconry/talon/issues/1365)) ([36d9f75](https://github.com/thefalconry/talon/commit/36d9f75ca0205c322fa4060947a0240108598008))
+* **claude:** pin the default model alias to its concrete id ([#1393](https://github.com/thefalconry/talon/issues/1393)) ([6656490](https://github.com/thefalconry/talon/commit/66564904db116a2ae2146c87008f75385d11801e))
+* **cron:** let background runs list, edit and delete jobs by chat_id ([#1381](https://github.com/thefalconry/talon/issues/1381)) ([d76619a](https://github.com/thefalconry/talon/commit/d76619ae58797251cf7d9c774e30f6e1ddf84576))
+* **cron:** tell isolated jobs to pass chat_id to spawn_agent ([#1383](https://github.com/thefalconry/talon/issues/1383)) ([cb8e647](https://github.com/thefalconry/talon/commit/cb8e64764378d1f284971a743208db75ae3cd505))
+* **deps:** clear production audit findings ([#1357](https://github.com/thefalconry/talon/issues/1357)) ([beb51eb](https://github.com/thefalconry/talon/commit/beb51eb6d1f8ed948dc800c0112278be5e3bf1cc))
+* **errors:** classify provider content refusals as content_filter ([#1362](https://github.com/thefalconry/talon/issues/1362)) ([bc8dfe5](https://github.com/thefalconry/talon/commit/bc8dfe59c844aa759e66145cbdffa4d39414dc34))
+* **mcp-hub:** cap live children with LRU eviction of idle ones ([#1364](https://github.com/thefalconry/talon/issues/1364)) ([0502e08](https://github.com/thefalconry/talon/commit/0502e08c51938f58b96bf06507174aa3bf92fc3d))
+* **mempalace:** don't build the venv on a python with no onnxruntime wheels ([#1359](https://github.com/thefalconry/talon/issues/1359)) ([4588c88](https://github.com/thefalconry/talon/commit/4588c885cf6cbcaf62aa75259c8b4c6f257cf0ed))
+* **playwright:** chromium install and launch on Ubuntu 26.04 ([#1402](https://github.com/thefalconry/talon/issues/1402)) ([6e4ac60](https://github.com/thefalconry/talon/commit/6e4ac6081f92ed6286f31f4bd67f38705bae677f))
+* **plugins:** bump native runtime pins (github-mcp v2.2.0) ([#1361](https://github.com/thefalconry/talon/issues/1361)) ([3de2904](https://github.com/thefalconry/talon/commit/3de29044df7e2b2099d8d4ae9abbe5be92e819af))
+* **telegram:** forward grammY's polyfill abort signal by hand in pollDeadline ([#1389](https://github.com/thefalconry/talon/issues/1389)) ([6ee54c3](https://github.com/thefalconry/talon/commit/6ee54c3c5f5c8c855e1fe8c6c41dfdeebabb8b05))
+* **telegram:** preserve unicode bullet list breaks ([#1194](https://github.com/thefalconry/talon/issues/1194)) ([2508250](https://github.com/thefalconry/talon/commit/250825084efc9f7ea6e6d4412dd3577d9b000796))
+* **usage:** judge each model by its own limits and make /usage readable at a glance ([#1416](https://github.com/thefalconry/talon/issues/1416)) ([b6076ce](https://github.com/thefalconry/talon/commit/b6076cee6d8871219ad3f0a3a1cf9694b0a548d7))
+
+
+### Documentation
+
+* **mesh:** say device_push_file and device_pull_file take absolute paths ([#1379](https://github.com/thefalconry/talon/issues/1379)) ([5e1ffff](https://github.com/thefalconry/talon/commit/5e1ffff3acb32dce0a712036a793845e3537d996))
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 8 updates ([#1400](https://github.com/thefalconry/talon/issues/1400)) ([ee4198b](https://github.com/thefalconry/talon/commit/ee4198b1afd3834e9d38fdb0fe0c42f1888c1351))
+* **deps:** bump @anthropic-ai/claude-agent-sdk to 0.3.321 ([#1387](https://github.com/thefalconry/talon/issues/1387)) ([711b5a0](https://github.com/thefalconry/talon/commit/711b5a0e05ae19875d1e3ef9da8bc863fdd6b2e8))
+* **deps:** Bump actions/setup-java from 6.0.1 to 6.1.0 ([#1328](https://github.com/thefalconry/talon/issues/1328)) ([a3806c5](https://github.com/thefalconry/talon/commit/a3806c5bc3b0dc9cdbaae109f93c72301ff9df69))
+* **deps:** Bump actions/setup-python from 7.0.0 to 7.1.0 ([#1348](https://github.com/thefalconry/talon/issues/1348)) ([9408924](https://github.com/thefalconry/talon/commit/94089243c04b278083b974eb4dc27d047781d3cf))
+* **deps:** Bump croner from 10.0.1 to 11.0.0 ([#1392](https://github.com/thefalconry/talon/issues/1392)) ([bf1965a](https://github.com/thefalconry/talon/commit/bf1965a28d86f03f08df020597709710002b692a))
+* **deps:** Bump docker/login-action from 4.6.0 to 4.8.0 ([#1390](https://github.com/thefalconry/talon/issues/1390)) ([4ff005f](https://github.com/thefalconry/talon/commit/4ff005f34643f3686ba388c76fedaf7698030938))
+* **deps:** Bump github/codeql-action/init from 4.39.0 to 4.39.1 ([#1345](https://github.com/thefalconry/talon/issues/1345)) ([cef0ccd](https://github.com/thefalconry/talon/commit/cef0ccda502316083d8b52146932f28cb5a73aaa))
+* **deps:** Bump hono from 4.13.13 to 4.13.18 ([#1395](https://github.com/thefalconry/talon/issues/1395)) ([a7712fd](https://github.com/thefalconry/talon/commit/a7712fd26bf394c841404ece81fbed99fba7bd21))
+* **deps:** Bump Swatinem/rust-cache from 2.9.2 to 2.9.3 ([#1347](https://github.com/thefalconry/talon/issues/1347)) ([d1bb11e](https://github.com/thefalconry/talon/commit/d1bb11e0f340625b815e552d3165a357eb25f3e9))
+* **deps:** Bump the production-dependencies group across 1 directory with 11 updates ([#1371](https://github.com/thefalconry/talon/issues/1371)) ([08ae983](https://github.com/thefalconry/talon/commit/08ae983942e83a232fffd076c73fbceb75586f4b))
+* **deps:** Bump the production-dependencies group across 1 directory with 6 updates ([#1401](https://github.com/thefalconry/talon/issues/1401)) ([d1911cc](https://github.com/thefalconry/talon/commit/d1911cced8dec956e8931457b9b1a62637be9f1a))
+* drop barrel re-exports nothing imports (newer knip reports them) ([#1403](https://github.com/thefalconry/talon/issues/1403)) ([37f9253](https://github.com/thefalconry/talon/commit/37f925382c97174174f8043cdbdab74b784459fc))
+* remove companion client (moved to thefalconry/talos) ([#1322](https://github.com/thefalconry/talon/issues/1322)) ([fe1dae9](https://github.com/thefalconry/talon/commit/fe1dae9212e9e447091a39d12c74040c3f575580))
+
+
+### Tests
+
+* **driver:** check the planted node never runs, not the exit status ([#1370](https://github.com/thefalconry/talon/issues/1370)) ([9415a5b](https://github.com/thefalconry/talon/commit/9415a5ba1bc0801c9f2252f31fdeda1247e8a1b1))
+* **openai-agents:** compare PATH entries, not order, in the Bash env test ([#1358](https://github.com/thefalconry/talon/issues/1358)) ([8d3ea8f](https://github.com/thefalconry/talon/commit/8d3ea8f4bfb34db6d136ffd1a3ad16ca27f73b74))
+
+
+### Continuous Integration
+
+* boot a real daemon and check bridge auth across a restart ([#1380](https://github.com/thefalconry/talon/issues/1380)) ([3be828a](https://github.com/thefalconry/talon/commit/3be828a419bf00cec10f29b500253bdb0058bc84))
+* **companion:** stop tray_manager's deprecated call failing the Linux build ([#1368](https://github.com/thefalconry/talon/issues/1368)) ([c9fecaa](https://github.com/thefalconry/talon/commit/c9fecaa68158a474f4e15d21195a543b2733cebf))
+
 ## [5.39.5](https://github.com/thefalconry/talon/compare/v5.39.4...v5.39.5) (2026-10-22)
 
 
