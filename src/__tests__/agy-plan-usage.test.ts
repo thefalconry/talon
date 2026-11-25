@@ -95,7 +95,7 @@ afterEach(() => {
 describe("parseAgyUsage", () => {
   it("parses the real report into percent-used windows", () => {
     const usage = parseAgyUsage(SAMPLE);
-    expect(usage?.windows).toEqual([
+    expect(usage?.windows).toMatchObject([
       {
         label: "Gemini · 7d",
         percent: 40,
@@ -104,17 +104,14 @@ describe("parseAgyUsage", () => {
       {
         label: "Gemini · 5h",
         percent: 0,
-        resetsAt: "2026-09-23T21:23:05Z",
       },
       {
         label: "Claude/GPT · 7d",
         percent: 0,
-        resetsAt: "2026-09-30T16:23:47Z",
       },
       {
         label: "Claude/GPT · 5h",
         percent: 0,
-        resetsAt: "2026-09-23T21:23:47Z",
       },
     ]);
     expect(usage?.plan).toBeUndefined();
@@ -128,7 +125,7 @@ describe("parseAgyUsage", () => {
     const usage = parseAgyUsage(
       `${SAMPLE}Gemini 4 Argon\tGemini 4 Argon Weekly Limit\t23%\t2026-10-24T11:32:53Z\n`,
     );
-    expect(usage?.windows.at(-1)).toEqual({
+    expect(usage?.windows.at(-1)).toMatchObject({
       label: "Gemini 4 Argon · 7d",
       percent: 77,
       resetsAt: "2026-10-24T11:32:53Z",
@@ -140,7 +137,7 @@ describe("parseAgyUsage", () => {
     const usage = parseAgyUsage(
       "  Gemini Models \t Five Hour Limit Remaining \t 30% \t 2026-09-23T21:23:05Z \r\n",
     );
-    expect(usage?.windows).toEqual([
+    expect(usage?.windows).toMatchObject([
       { label: "Gemini · 5h", percent: 70, resetsAt: "2026-09-23T21:23:05Z" },
     ]);
   });
@@ -182,7 +179,7 @@ describe("parseAgyUsage", () => {
         "Gemini Models\tWeekly Limit Remaining\t50%\tsoon",
       ].join("\n"),
     );
-    expect(usage?.windows).toEqual([
+    expect(usage?.windows).toMatchObject([
       { label: "Gemini · 5h", percent: 20 },
       { label: "Gemini · 7d", percent: 50 },
     ]);
@@ -198,7 +195,7 @@ describe("parseAgyUsage", () => {
         "\u001b[1mGemini Models\u001b[0m\tFive Hour Limit Remaining\t90%\t2026-09-23T21:23:05Z",
       ].join("\n"),
     );
-    expect(usage?.windows).toEqual([
+    expect(usage?.windows).toMatchObject([
       { label: "Gemini · 5h", percent: 10, resetsAt: "2026-09-23T21:23:05Z" },
     ]);
   });
@@ -206,6 +203,153 @@ describe("parseAgyUsage", () => {
   it("returns undefined when nothing parses", () => {
     expect(parseAgyUsage("")).toBeUndefined();
     expect(parseAgyUsage("Error: not signed in\n")).toBeUndefined();
+  });
+});
+
+/** `agy -p /usage --output-format json` from a signed-in host (agy 1.6). */
+const JSON_SAMPLE = JSON.stringify({
+  conversation_id: "",
+  status: "SUCCESS",
+  response: SAMPLE,
+  command: {
+    name: "usage",
+    data: {
+      groups: [
+        {
+          name: "Gemini Models",
+          description:
+            "Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Gemini 4 Argon, Gemini 4 Hydrogen, Orchestrator (Neon), Orchestrator (Carbon), Orchestrator (Argon), Gemini 3.8 Flash",
+          buckets: [
+            {
+              id: "gemini-weekly",
+              name: "Weekly Limit Remaining",
+              window: "weekly",
+              remaining_fraction: 0.9817805886268616,
+              reset_time: "2026-11-30T20:50:34Z",
+            },
+            {
+              id: "gemini-5h",
+              name: "Five Hour Limit Remaining",
+              window: "5h",
+              remaining_fraction: 1,
+              reset_time: "2026-11-24T21:51:53Z",
+            },
+          ],
+        },
+        {
+          name: "Claude and GPT models",
+          description:
+            "Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B",
+          buckets: [
+            {
+              id: "3p-weekly",
+              name: "Weekly Limit Remaining",
+              window: "weekly",
+              remaining_fraction: 1,
+              reset_time: "2026-12-01T16:51:53Z",
+            },
+          ],
+        },
+      ],
+    },
+  },
+});
+
+describe("parseAgyUsage (JSON report)", () => {
+  it("scopes each window to its group and the models the group lists", () => {
+    const usage = parseAgyUsage(JSON_SAMPLE);
+    expect(usage?.windows).toEqual([
+      {
+        label: "Gemini · 7d",
+        percent: 2,
+        period: "7d",
+        scope: "Gemini",
+        models: [
+          "Gemini 4 Neon",
+          "Gemini 4 Carbon",
+          "Gemini 4 Argon",
+          "Gemini 4 Hydrogen",
+          "Gemini 3.8 Flash",
+        ],
+        resetsAt: "2026-11-30T20:50:34Z",
+      },
+      expect.objectContaining({ label: "Gemini · 5h", percent: 0 }),
+      {
+        label: "Claude/GPT · 7d",
+        percent: 0,
+        period: "7d",
+        scope: "Claude/GPT",
+        models: ["Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B"],
+      },
+    ]);
+  });
+
+  it("gives an unused window no reset, and ignores the epoch agy sends for one", () => {
+    const report = JSON.parse(JSON_SAMPLE);
+    for (const group of report.command.data.groups)
+      for (const bucket of group.buckets)
+        bucket.reset_time = "1970-01-01T00:00:00Z";
+    const windows = parseAgyUsage(JSON.stringify(report))?.windows ?? [];
+    expect(windows.length).toBeGreaterThan(0);
+    expect(windows.every((w) => w.resetsAt === undefined)).toBe(true);
+  });
+
+  it("keeps a model's own group apart from the group it is also listed in", () => {
+    const report = JSON.parse(JSON_SAMPLE);
+    report.command.data.groups.push({
+      name: "Gemini 4 Argon",
+      buckets: [
+        {
+          id: "argon-weekly",
+          name: "Gemini 4 Argon Weekly Limit",
+          window: "weekly",
+          remaining_fraction: 0.2257,
+          reset_time: "2026-10-24T11:32:53Z",
+        },
+      ],
+    });
+    const argon = parseAgyUsage(JSON.stringify(report))?.windows.at(-1);
+    expect(argon).toEqual({
+      label: "Gemini 4 Argon · 7d",
+      percent: 77,
+      period: "7d",
+      scope: "Gemini 4 Argon",
+      models: ["Gemini 4 Argon"],
+      resetsAt: "2026-10-24T11:32:53Z",
+    });
+  });
+
+  it("names a bucket's window from its name when the window field is unknown", () => {
+    const report = JSON.parse(JSON_SAMPLE);
+    report.command.data.groups = [
+      {
+        name: "Gemini Models",
+        buckets: [
+          {
+            name: "Daily Limit Remaining",
+            window: "",
+            remaining_fraction: 0.5,
+          },
+          { name: "Odd", window: "monthly", remaining_fraction: 0.25 },
+          { name: "No figure", window: "weekly" },
+        ],
+      },
+    ];
+    expect(parseAgyUsage(JSON.stringify(report))?.windows).toMatchObject([
+      { label: "Gemini · 1d", percent: 50 },
+      { label: "Gemini · monthly", percent: 75 },
+    ]);
+  });
+
+  it("reads the text in a JSON answer that carries no structured report", () => {
+    const usage = parseAgyUsage(JSON.stringify({ response: SAMPLE }));
+    expect(usage?.windows).toHaveLength(4);
+    expect(usage?.windows[0]).toMatchObject({
+      label: "Gemini · 7d",
+      scope: "Gemini",
+      models: ["Gemini"],
+    });
+    expect(usage?.windows[2]?.models).toEqual(["Claude", "GPT"]);
   });
 });
 
@@ -221,7 +365,7 @@ describe("runAgyUsage", () => {
       { shell?: boolean; env?: NodeJS.ProcessEnv },
     ];
     expect(bin).toBe("/opt/agy");
-    expect(args).toEqual(["-p", "/usage", "--output-format", "text"]);
+    expect(args).toEqual(["-p", "/usage", "--output-format", "json"]);
     expect(opts.shell).toBeFalsy();
     expect(opts.env).toBe(process.env);
   });

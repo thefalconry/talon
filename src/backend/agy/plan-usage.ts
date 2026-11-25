@@ -3,15 +3,25 @@
  * plan-aware router.
  *
  * `agy` has no account API, but its `/usage` slash command also runs
- * headlessly: `agy -p /usage --output-format text` prints one
- * tab-separated line per quota window and exits without a model call:
+ * headlessly and exits without a model call. `--output-format json` gives
+ * the report as data: quota groups, the models each group covers, and each
+ * group's buckets with the fraction REMAINING and the next reset:
  *
- *   Gemini Models  Weekly Limit Remaining     60%   2026-09-26T17:40:26Z
- *   Gemini Models  Five Hour Limit Remaining  100%  2026-09-23T21:23:05Z
+ *   {"command": {"name": "usage", "data": {"groups": [{
+ *     "name": "Gemini Models",
+ *     "description": "Models within this group: Gemini 4 Neon, …",
+ *     "buckets": [{"id": "gemini-weekly", "name": "Weekly Limit Remaining",
+ *                  "window": "weekly", "remaining_fraction": 0.6,
+ *                  "reset_time": "2026-09-26T17:40:26Z"}, …]}, …]}}}
  *
- * Columns are the model group, the window, the percent REMAINING, and the
- * next reset (ISO-8601 UTC). Talon speaks percent used, so the figure is
- * flipped on the way in.
+ * Each group becomes the scope of its windows: models share a group's
+ * limits, and nothing else. A model can also carry a group of its own
+ * (agy 1.4.4 reported "Gemini 4 Argon" apart from the Gemini group), so
+ * one model's limit never reads as the whole backend's. The same report's
+ * `response` field is the text form, one tab-separated line per window
+ * (group, window, percent remaining, reset), which is parsed when the JSON
+ * is not there. Talon speaks percent used, so figures are flipped on the
+ * way in.
  *
  * A read is a subprocess spawn (~a second of Go start-up plus an account
  * round-trip), so it is cached for a minute, concurrent callers share one
@@ -35,7 +45,7 @@ const AGY_USAGE_ARGS: readonly string[] = [
   "-p",
   "/usage",
   "--output-format",
-  "text",
+  "json",
 ];
 const RUN_TIMEOUT_MS = 20_000;
 const CACHE_TTL_MS = 60_000;
@@ -106,29 +116,139 @@ function columns(line: string): string[] {
   return parts.map((p) => p.trim()).filter((p) => p.length > 0);
 }
 
+/** One window from a group, its duration and how much of it is used. */
+function groupWindow(
+  group: string,
+  models: string[] | undefined,
+  period: string,
+  used: number,
+  reset: string | undefined,
+): PlanWindow {
+  const scope = groupLabel(group);
+  return {
+    label: `${scope} · ${period}`,
+    percent: used,
+    period,
+    scope,
+    // Without the report's list, the group's own name is what a model id
+    // is matched against ("Gemini 4 Argon", "Claude/GPT").
+    models: models && models.length > 0 ? models : scope.split("/"),
+    ...(used > 0 && hasReset(reset) ? { resetsAt: reset } : {}),
+  };
+}
+
+/**
+ * agy sends the epoch for a window nobody has used, and a window that is
+ * untouched has no reset worth showing yet.
+ */
+function hasReset(reset: string | undefined): reset is string {
+  const at = reset ? Date.parse(reset) : NaN;
+  return Number.isFinite(at) && at > 0;
+}
+
 function parseLine(line: string): PlanWindow | undefined {
   const [group, window, percent, reset] = columns(line);
   if (!group || !window || !percent) return undefined;
   const duration = windowLabel(window);
   const used = usedPercent(percent);
   if (!duration || used === undefined) return undefined;
-  return {
-    label: `${groupLabel(group)} · ${duration}`,
-    percent: used,
-    ...(reset && Number.isFinite(Date.parse(reset)) ? { resetsAt: reset } : {}),
-  };
+  return groupWindow(group, undefined, duration, used, reset);
 }
 
-/**
- * Parse `agy /usage` text output. Malformed or unknown lines are skipped;
- * `undefined` when no line yields a window.
- */
-export function parseAgyUsage(stdout: string): PlanUsage | undefined {
+/** The text form: one tab-separated line per window. */
+function parseText(stdout: string): PlanWindow[] {
   const windows: PlanWindow[] = [];
   for (const line of stdout.split(/\r?\n/)) {
     const window = parseLine(line);
     if (window) windows.push(window);
   }
+  return windows;
+}
+
+interface RawBucket {
+  name?: unknown;
+  window?: unknown;
+  remaining_fraction?: unknown;
+  reset_time?: unknown;
+}
+
+interface RawGroup {
+  name?: unknown;
+  description?: unknown;
+  buckets?: unknown;
+}
+
+const BUCKET_PERIODS: Record<string, string> = {
+  weekly: "7d",
+  daily: "1d",
+  "5h": "5h",
+};
+
+/**
+ * The models a group lists in its description, without the orchestrator
+ * roles, which name a model already in the list.
+ */
+function groupModels(description: unknown): string[] | undefined {
+  if (typeof description !== "string") return undefined;
+  const list = /models within this group:\s*(.+)$/i.exec(description.trim());
+  if (!list) return undefined;
+  const models = (list[1] as string)
+    .split(",")
+    .map((m) => m.trim().replace(/\.$/, ""))
+    .filter((m) => m.length > 0 && !/^orchestrator\b/i.test(m));
+  return models.length > 0 ? models : undefined;
+}
+
+/** The JSON form's groups, or undefined when the output is not that report. */
+function parseJson(stdout: string): PlanWindow[] | undefined {
+  let report: unknown;
+  try {
+    report = JSON.parse(stdout.trim());
+  } catch {
+    return undefined;
+  }
+  const result = report as {
+    response?: unknown;
+    command?: { name?: unknown; data?: { groups?: unknown } };
+  } | null;
+  const groups = result?.command?.data?.groups;
+  if (!Array.isArray(groups)) {
+    // An agy that answers in JSON but carries no structured report.
+    return typeof result?.response === "string"
+      ? parseText(result.response)
+      : undefined;
+  }
+  const windows: PlanWindow[] = [];
+  for (const group of groups as RawGroup[]) {
+    if (typeof group?.name !== "string" || !Array.isArray(group.buckets))
+      continue;
+    const models = groupModels(group.description);
+    for (const bucket of group.buckets as RawBucket[]) {
+      const period =
+        (typeof bucket?.window === "string" &&
+          BUCKET_PERIODS[bucket.window.toLowerCase()]) ||
+        (typeof bucket?.name === "string"
+          ? windowLabel(bucket.name)
+          : undefined) ||
+        (typeof bucket?.window === "string" ? bucket.window : undefined);
+      const left = bucket?.remaining_fraction;
+      if (!period || typeof left !== "number" || !Number.isFinite(left))
+        continue;
+      const used = Math.max(0, Math.min(100, Math.round((1 - left) * 100)));
+      const reset =
+        typeof bucket.reset_time === "string" ? bucket.reset_time : undefined;
+      windows.push(groupWindow(group.name, models, period, used, reset));
+    }
+  }
+  return windows;
+}
+
+/**
+ * Parse `agy /usage` output, JSON or text. Malformed or unknown entries are
+ * skipped; `undefined` when nothing yields a window.
+ */
+export function parseAgyUsage(stdout: string): PlanUsage | undefined {
+  const windows = parseJson(stdout) ?? parseText(stdout);
   if (windows.length === 0) return undefined;
   return { windows, fetchedAt: Date.now() };
 }

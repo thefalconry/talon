@@ -33,7 +33,7 @@
  * pretending the backend emptied.
  */
 
-import type { PlanUsage } from "../../agent-runtime/capabilities.js";
+import type { Backend, PlanUsage } from "../../agent-runtime/capabilities.js";
 import type { TalonConfig } from "../../config/index.js";
 import {
   acquireBackendInstance,
@@ -55,6 +55,8 @@ export interface LimitingWindow {
   /** 0-100. */
   readonly percent: number;
   readonly resetsAt?: string;
+  /** The model or group the window limits, when not the whole account. */
+  readonly scope?: string;
 }
 
 export interface BackendHeadroom {
@@ -68,6 +70,11 @@ export interface BackendHeadroom {
   readonly fetchedAt: number;
   /** True when the last refresh failed and this is the previous value. */
   readonly stale?: boolean;
+  /**
+   * The model the figure was judged for: the one a run routed here would
+   * use. A window limiting other models does not count against it.
+   */
+  readonly model?: string;
   /**
    * The raw plan reading this came from, when `source` is `"plan"`. Carried
    * so `/usage` and the `plan_usage` tool render the real windows off the
@@ -99,23 +106,96 @@ function headroomFor(percent: number): number {
   return Math.max(0, Math.min(1, 1 - clampPercent(percent) / 100));
 }
 
+type Window = PlanUsage["windows"][number];
+
+function words(name: string): string[] {
+  return name
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length > 0);
+}
+
 /**
- * The tightest of a plan's windows. `undefined` when the plan reports none,
- * which is how a backend that answers but has nothing to say is told apart
- * from one that never answered.
+ * Whether a model id belongs to a window's scope: every word of one of the
+ * scope's model names appears in the id. "Fable" matches
+ * `claude-fable-5-2`, "Gemini 4 Argon" matches `gemini-4-argon-high`,
+ * "Claude Opus 5.5" matches `claude-opus-5-5`.
+ */
+export function modelInScope(model: string, window: Window): boolean {
+  const id = new Set(words(model));
+  const names = window.models?.length ? window.models : [window.scope ?? ""];
+  return names.some((name) => {
+    const need = words(name);
+    return need.length > 0 && need.every((w) => id.has(w));
+  });
+}
+
+function tightest(windows: readonly Window[]): Window | undefined {
+  let worst: Window | undefined;
+  for (const window of windows) {
+    if (!worst || window.percent > worst.percent) worst = window;
+  }
+  return worst;
+}
+
+/** Scoped windows grouped by what they limit, in report order. */
+function byScope(windows: readonly Window[]): Window[][] {
+  const groups = new Map<string, Window[]>();
+  for (const w of windows) {
+    const key = w.scope as string;
+    groups.set(key, [...(groups.get(key) ?? []), w]);
+  }
+  return [...groups.values()];
+}
+
+/**
+ * The windows that limit a run, for the model it would use when known.
+ *
+ * Account-wide windows always count. A scoped window (one model's own cap,
+ * a quota group) counts only for the models it covers: Fable's weekly cap
+ * running out leaves Opus on the same account untouched. With no model to
+ * go on, or one that no scope names, the backend is judged by its
+ * account-wide windows, or, where every window is scoped (Antigravity's
+ * quota groups), by the group with the most left: a run there can use it.
+ */
+function applicable(usage: PlanUsage, model?: string): Window[] {
+  const account = usage.windows.filter((w) => !w.scope);
+  const scoped = usage.windows.filter((w) => w.scope);
+  if (model) {
+    const mine = scoped.filter((w) => modelInScope(model, w));
+    if (mine.length > 0) return [...account, ...mine];
+  }
+  if (account.length > 0 || scoped.length === 0) return account;
+  let best: Window[] = [];
+  let bestPercent = Infinity;
+  for (const group of byScope(scoped)) {
+    const percent = tightest(group)?.percent ?? 0;
+    if (percent < bestPercent) {
+      best = group;
+      bestPercent = percent;
+    }
+  }
+  return best;
+}
+
+/**
+ * The tightest window that limits a run on `model` (see `applicable`).
+ * `undefined` when the plan reports no windows, which is how a backend
+ * that answers but has nothing to say is told apart from one that never
+ * answered.
  */
 export function limitingWindowOf(
   usage: PlanUsage | undefined,
+  model?: string,
 ): LimitingWindow | undefined {
   if (!usage || usage.windows.length === 0) return undefined;
-  let worst = usage.windows[0] as NonNullable<(typeof usage.windows)[0]>;
-  for (const window of usage.windows) {
-    if (window.percent > worst.percent) worst = window;
-  }
+  const worst = tightest(applicable(usage, model));
+  if (!worst) return undefined;
   return {
     label: worst.label,
     percent: clampPercent(worst.percent),
     ...(worst.resetsAt ? { resetsAt: worst.resetsAt } : {}),
+    ...(worst.scope ? { scope: worst.scope } : {}),
   };
 }
 
@@ -124,8 +204,9 @@ export function headroomFromPlan(
   id: string,
   label: string,
   usage: PlanUsage | undefined,
+  model?: string,
 ): BackendHeadroom | undefined {
-  const limiting = limitingWindowOf(usage);
+  const limiting = limitingWindowOf(usage, model);
   if (!limiting || !usage) return undefined;
   return {
     id,
@@ -135,6 +216,7 @@ export function headroomFromPlan(
     source: "plan",
     fetchedAt: usage.fetchedAt,
     plan: usage,
+    ...(model ? { model } : {}),
   };
 }
 
@@ -212,6 +294,26 @@ function unknownHeadroom(
 interface PlanRead {
   usage?: PlanUsage;
   authFailure?: string;
+  /** The model a run routed here would use. */
+  model?: string;
+}
+
+/**
+ * The model a routed run would use: the operator's `backendDefaults`, else
+ * the backend's own default. Undefined when neither answers.
+ */
+async function defaultModelOf(
+  backend: Pick<Backend, "models">,
+  id: string,
+  config: TalonConfig | undefined,
+): Promise<string | undefined> {
+  const configured = config?.backendDefaults?.[id];
+  if (configured) return configured;
+  try {
+    return (await backend.models?.getDefaultModelId()) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function authFailureOf(
@@ -234,7 +336,10 @@ function authFailureOf(
  * is *not* currently in use. The read is the backend's own cached one, so at
  * most one boot per cache window.
  */
-async function readPlanUsage(id: string): Promise<PlanRead> {
+async function readPlanUsage(
+  id: string,
+  config: TalonConfig | undefined,
+): Promise<PlanRead> {
   const pooled = getPooledBackend(id);
   if (pooled) {
     const usage = pooled.usage?.getPlanUsage
@@ -242,9 +347,11 @@ async function readPlanUsage(id: string): Promise<PlanRead> {
       : undefined; // pooled, but reports no plan windows
     // Read after the plan fetch: that fetch is what discovers a 401.
     const authFailure = authFailureOf(pooled.usage);
+    const model = usage ? await defaultModelOf(pooled, id, config) : undefined;
     return {
       ...(usage ? { usage } : {}),
       ...(authFailure ? { authFailure } : {}),
+      ...(model ? { model } : {}),
     };
   }
   let acquired;
@@ -259,9 +366,13 @@ async function readPlanUsage(id: string): Promise<PlanRead> {
       ? await telemetry.getPlanUsage.call(telemetry)
       : undefined;
     const authFailure = authFailureOf(telemetry);
+    const model = usage
+      ? await defaultModelOf(acquired.backend, id, config)
+      : undefined;
     return {
       ...(usage ? { usage } : {}),
       ...(authFailure ? { authFailure } : {}),
+      ...(model ? { model } : {}),
     };
   } finally {
     await acquired.release().catch(() => {});
@@ -288,8 +399,8 @@ export async function getBackendHeadroom(
 
   let value: BackendHeadroom;
   try {
-    const read = await readPlanUsage(id);
-    const plan = headroomFromPlan(id, label, read.usage);
+    const read = await readPlanUsage(id, config);
+    const plan = headroomFromPlan(id, label, read.usage, read.model);
     value =
       plan ??
       headroomFromLedger(id, label, config, now) ??
@@ -346,7 +457,7 @@ export async function collectBackendHeadroom(
 export function formatHeadroom(entry: BackendHeadroom): string {
   if (entry.unavailable) return `0% — unavailable: ${entry.unavailable}`;
   if (entry.source === "none") return "unmeasured — no usage signal";
-  const pct = `${Math.round(entry.headroom * 100)}%`;
+  const pct = `${Math.round(entry.headroom * 100)}%${entry.model ? ` for ${entry.model}` : ""}`;
   const detail = `${entry.limiting?.label ?? "window"} ${Math.round(entry.limiting?.percent ?? 0)}% used`;
   const tag = entry.source === "ledger" ? " (local budget)" : "";
   const stale = entry.stale ? " (stale)" : "";

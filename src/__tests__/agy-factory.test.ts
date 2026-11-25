@@ -157,13 +157,16 @@ describe("agy factory — composed capability slots", () => {
     const usage = await backend.usage!.getPlanUsage!();
     expect(spawnMock).toHaveBeenCalledWith(
       "agy",
-      ["-p", "/usage", "--output-format", "text"],
+      ["-p", "/usage", "--output-format", "json"],
       expect.anything(),
     );
     expect(usage?.windows).toEqual([
       {
         label: "Gemini · 5h",
         percent: 25,
+        period: "5h",
+        scope: "Gemini",
+        models: ["Gemini"],
         resetsAt: "2026-09-23T21:23:05Z",
       },
     ]);

@@ -142,22 +142,33 @@ interface RawLimit {
   kind?: string;
   percent?: number;
   resets_at?: string | null;
-  scope?: { model?: { display_name?: string | null } | null } | null;
+  scope?: {
+    model?: { id?: string | null; display_name?: string | null } | null;
+  } | null;
 }
 
+type WindowShape = Pick<PlanWindow, "label" | "period" | "scope" | "models">;
+
 /**
- * Short display label for one window, or undefined to skip the row.
+ * What one window is called and what it limits, or undefined to skip it.
  *
  * Only the three documented kinds are rendered. The response also carries
  * internal codenamed windows; skipping unknown kinds keeps those out of the
- * user-facing panel.
+ * user-facing panel. A `weekly_scoped` window caps one model on top of the
+ * account-wide windows (Fable has its own weekly limit), so it carries that
+ * model as its scope: the router judges the other models without it.
  */
-function windowLabel(limit: RawLimit): string | undefined {
-  if (limit.kind === "session") return "5h";
-  if (limit.kind === "weekly_all") return "7d";
+function windowShape(limit: RawLimit): WindowShape | undefined {
+  if (limit.kind === "session") return { label: "5h", period: "5h" };
+  if (limit.kind === "weekly_all") return { label: "7d", period: "7d" };
   if (limit.kind === "weekly_scoped") {
-    const model = limit.scope?.model?.display_name?.trim();
-    return model && model.length > 0 ? model : undefined;
+    const model = limit.scope?.model;
+    const name = model?.display_name?.trim() || model?.id?.trim();
+    if (!name) return undefined;
+    const models = [name, model?.id?.trim()].filter(
+      (m, i, all): m is string => !!m && all.indexOf(m) === i,
+    );
+    return { label: name, period: "7d", scope: name, models };
   }
   return undefined;
 }
@@ -213,15 +224,15 @@ export function parsePlanUsage(
 
   const windows: PlanWindow[] = [];
   for (const limit of limits as RawLimit[]) {
-    const label = windowLabel(limit);
-    if (!label) continue;
+    const shape = windowShape(limit);
+    if (!shape) continue;
     const raw = limit.percent;
     const percent =
       typeof raw === "number" && Number.isFinite(raw)
         ? Math.max(0, Math.min(100, Math.round(raw)))
         : 0;
     windows.push({
-      label,
+      ...shape,
       percent,
       ...(typeof limit.resets_at === "string"
         ? { resetsAt: limit.resets_at }

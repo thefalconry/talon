@@ -56,7 +56,35 @@ describe("parsePlanUsage", () => {
         }),
       ],
     });
-    expect(usage?.windows).toEqual([{ label: "Fable", percent: 0 }]);
+    expect(usage?.windows).toEqual([
+      {
+        label: "Fable",
+        percent: 0,
+        period: "7d",
+        scope: "Fable",
+        models: ["Fable"],
+      },
+    ]);
+  });
+
+  it("scopes a model's own weekly cap to that model, the account-wide ones to none", () => {
+    const usage = parsePlanUsage({
+      limits: [
+        limit({ kind: "session", percent: 4 }),
+        limit({
+          kind: "weekly_scoped",
+          percent: 100,
+          scope: { model: { id: "claude-fable-5-2", display_name: null } },
+        }),
+      ],
+    });
+    expect(usage?.windows[0]).toMatchObject({ label: "5h", period: "5h" });
+    expect(usage?.windows[0]?.scope).toBeUndefined();
+    expect(usage?.windows[1]).toMatchObject({
+      label: "claude-fable-5-2",
+      scope: "claude-fable-5-2",
+      models: ["claude-fable-5-2"],
+    });
   });
 
   it("skips undocumented kinds and unnamed scopes", () => {

@@ -23,6 +23,9 @@ import {
 } from "../../core/engine/backend-router/index.js";
 import { buildPlanDisplay, type PlanDisplay } from "./status-context.js";
 
+/** Short enough that a row fits a phone held upright. */
+const USAGE_BAR_LENGTH = 12;
+
 export interface BackendUsageEntry {
   id: string;
   label: string;
@@ -48,7 +51,7 @@ export async function collectPlanUsage(
 ): Promise<BackendUsageEntry[]> {
   const snapshots = await collectBackendUsage(config, { force: true });
   return snapshots.map((snapshot) => {
-    const plan = buildPlanDisplay(snapshot.plan);
+    const plan = buildPlanDisplay(snapshot.plan, USAGE_BAR_LENGTH);
     return {
       id: snapshot.id,
       label: snapshot.label,

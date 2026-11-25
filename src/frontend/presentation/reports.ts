@@ -440,41 +440,122 @@ export function renderUsageMessage(
   fmt: ReportFormatter,
 ): string {
   const lines = [fmt.bold("📊 Plan usage")];
-
-  for (const entry of entries) {
-    const name = fmt.escape(entry.label || entry.id);
-    // Headroom is the one figure every backend can answer, so it goes on
-    // every block — including the ones with no plan windows to draw.
-    const headroom = `  ${fmt.bold("Headroom:")} ${fmt.escape(entry.headroomLabel)}`;
-    if (!entry.plan) {
-      lines.push(
-        "",
-        `${fmt.bold(name)} — ${fmt.italic(fmt.escape(entry.note ?? ""))}`,
-        headroom,
-      );
-      continue;
-    }
-    const age = entry.plan.ageLabel
-      ? ` ${fmt.emphasis(`(${entry.plan.ageLabel})`)}`
-      : "";
-    const plan = entry.plan.plan ? ` · ${fmt.escape(entry.plan.plan)}` : "";
-    lines.push("", `${fmt.bold(name)}${plan}${age}`, headroom);
-    if (entry.plan.resetsAvailable) {
-      const n = entry.plan.resetsAvailable;
-      const resets = `usage limit reset${n === 1 ? "" : "s"} available`;
-      const by = entry.plan.resetsExpireLabel
-        ? ` ${fmt.escape(`(use by ${entry.plan.resetsExpireLabel})`)}`
-        : "";
-      lines.push(`  • You have ${fmt.bold(String(n))} ${resets}${by}`);
-    }
-    for (const w of entry.plan.windows) {
-      const reset = w.resetLabel ? ` reset ${w.resetLabel}` : "";
-      const bar = `${fmt.escape(w.label.padEnd(6))}${w.bar} ${String(w.percent).padStart(3)}%`;
-      lines.push(`  ${fmt.code(bar)}${reset}`);
-    }
-  }
-
+  for (const entry of entries) lines.push("", ...usageBlock(entry, fmt));
   return lines.join("\n");
+}
+
+type UsageWindow = NonNullable<BackendUsageEntry["plan"]>["windows"][number];
+
+/**
+ * Green with half or more left, amber down to 15%, red below that or when
+ * the backend cannot run at all; grey when nothing is measured.
+ */
+function usageDot(entry: BackendUsageEntry): string {
+  const h = entry.headroom;
+  if (h.unavailable) return "🔴";
+  if (h.source === "none") return "⚪";
+  if (h.headroom >= 0.5) return "🟢";
+  return h.headroom >= 0.15 ? "🟡" : "🔴";
+}
+
+/** The headline: dot, name, plan tier, and how much is left. */
+function usageHeadline(entry: BackendUsageEntry, fmt: ReportFormatter): string {
+  const h = entry.headroom;
+  const name = fmt.bold(fmt.escape(entry.label || entry.id));
+  const tier = entry.plan?.plan ? ` · ${fmt.escape(entry.plan.plan)}` : "";
+  const head = `${usageDot(entry)} ${name}${tier}`;
+  if (h.unavailable)
+    return `${head} — unavailable: ${fmt.escape(h.unavailable)}`;
+  if (h.source === "none") {
+    return `${head} — ${fmt.italic(fmt.escape(entry.note ?? "not measured"))}`;
+  }
+  const left = fmt.bold(`${Math.round(h.headroom * 100)}% left`);
+  // Name the model when its own cap, not the account's, is what limits it.
+  const forModel =
+    h.model && h.limiting?.scope ? ` for ${fmt.escape(h.model)}` : "";
+  const budget = h.source === "ledger" ? " of its local budget" : "";
+  const age = entry.plan?.ageLabel
+    ? ` ${fmt.emphasis(`(${entry.plan.ageLabel})`)}`
+    : "";
+  const stale = h.stale ? ` ${fmt.emphasis("(stale)")}` : "";
+  return `${head} — ${left}${forModel}${budget}${age}${stale}`;
+}
+
+/** "4 Neon, 4 Carbon" under "Gemini": the scope's own name is not repeated. */
+function scopeModels(scope: string, models: string[] | undefined): string {
+  const lead = scope.split(/[\s/]+/)[0]?.toLowerCase() ?? "";
+  const names = (models ?? [])
+    .filter((m) => m.toLowerCase() !== scope.toLowerCase())
+    .map((m) => {
+      const [first, ...rest] = m.split(" ");
+      return first?.toLowerCase() === lead && rest.length > 0
+        ? rest.join(" ")
+        : m;
+    });
+  return names.join(", ");
+}
+
+function usageRow(w: UsageWindow, fmt: ReportFormatter): string {
+  const label = `${(w.period ?? w.label).padEnd(3)} `;
+  const bar = fmt.code(
+    `${fmt.escape(label)}${w.bar} ${String(w.percent).padStart(3)}%`,
+  );
+  const flag = w.percent >= 90 ? " 🔴" : w.percent >= 75 ? " 🟡" : "";
+  const reset = w.resetIn
+    ? ` resets in ${w.resetIn}`
+    : w.resetLabel
+      ? ` resets ${fmt.escape(w.resetLabel)}`
+      : "";
+  return `${bar}${flag}${reset}`;
+}
+
+/** `5h` → 5, `7d` → 168; a window with no period sorts last. */
+function periodHours(w: UsageWindow): number {
+  const m = /^(\d+)([hd])$/.exec(w.period ?? "");
+  if (!m) return Infinity;
+  return Number(m[1]) * (m[2] === "d" ? 24 : 1);
+}
+
+/** The windows, under a heading per model or group they limit. */
+function usageWindows(
+  all: readonly UsageWindow[],
+  fmt: ReportFormatter,
+): string[] {
+  // Shortest window first in every group, whatever order the plan used.
+  const windows = [...all].sort((a, b) => periodHours(a) - periodHours(b));
+  const account = windows.filter((w) => !w.scope);
+  const scoped = windows.filter((w) => w.scope);
+  const lines: string[] = [];
+  if (account.length > 0 && scoped.length > 0)
+    lines.push(fmt.italic("All models"));
+  lines.push(...account.map((w) => usageRow(w, fmt)));
+
+  const scopes = [...new Set(scoped.map((w) => w.scope as string))];
+  for (const scope of scopes) {
+    const rows = scoped.filter((w) => w.scope === scope);
+    const models = scopeModels(scope, rows[0]?.models);
+    const title = models
+      ? `${fmt.escape(scope)}: ${fmt.escape(models)}`
+      : `${fmt.escape(scope)} only`;
+    lines.push(fmt.italic(title), ...rows.map((w) => usageRow(w, fmt)));
+  }
+  return lines;
+}
+
+function usageBlock(entry: BackendUsageEntry, fmt: ReportFormatter): string[] {
+  const lines = [usageHeadline(entry, fmt)];
+  const plan = entry.plan;
+  if (!plan) return lines;
+  lines.push(...usageWindows(plan.windows, fmt));
+  if (plan.resetsAvailable) {
+    const n = plan.resetsAvailable;
+    const resets = `usage limit reset${n === 1 ? "" : "s"} available`;
+    const by = plan.resetsExpireLabel
+      ? ` ${fmt.escape(`(use by ${plan.resetsExpireLabel})`)}`
+      : "";
+    lines.push(`• You have ${fmt.bold(String(n))} ${resets}${by}`);
+  }
+  return lines;
 }
 
 /** Settings panel body — model, effort, and the pulse row. */
