@@ -52,10 +52,14 @@ jobs:
         with:
           subject-path: dist/*.tgz
 
+      # Trusted publishing: npm trades this job's OIDC token (id-token:
+      # write above) for a short-lived publish credential, so there is no
+      # NPM_TOKEN to expire. Needs npm >= 11.5.1 and the trusted publisher
+      # configured on npmjs.com (thefalconry/talon, publish.yml).
       - name: Publish
-        run: npm publish ./dist/*.tgz --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm --version
+          npm publish ./dist/*.tgz --provenance --access public
 
   # ── Verify the published package actually works ────────────────
   smoke-test:
