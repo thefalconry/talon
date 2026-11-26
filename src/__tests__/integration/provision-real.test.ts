@@ -24,6 +24,7 @@ import {
   findBasePython,
   runStep,
   venvPython,
+  type ExecResult,
   type ProvisionOutcome,
 } from "../../core/plugin/provision.js";
 import {
@@ -62,6 +63,10 @@ const INSTALL_TIMEOUT = 20 * 60_000;
 
 const detail = (o: ProvisionOutcome): string =>
   `status=${o.status} error=${o.error ?? "-"} warnings=[${o.warnings.join("; ")}] actions=[${o.actions.join("; ")}]`;
+
+/** A failed step's own output, so a red run says why (pip's error, not "false"). */
+const stepDetail = (r: ExecResult): string =>
+  `code=${r.code ?? "-"} error=${r.error ?? "-"}\n${r.stderr.slice(-2000) || r.stdout.slice(-2000)}`;
 
 async function resolveTarget(): Promise<string> {
   if (process.env.TALON_PROVISION_TARGET !== "latest") {
@@ -164,7 +169,7 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
         ["-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
         { timeoutMs: 30_000 },
       );
-      expect(purelib.ok).toBe(true);
+      expect(purelib.ok, stepDetail(purelib)).toBe(true);
       rmSync(join(purelib.stdout.trim(), "mempalace"), {
         recursive: true,
         force: true,
@@ -202,13 +207,13 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
         [...base!.args, "-m", "venv", venvDir],
         { timeoutMs: 120_000 },
       );
-      expect(venv.ok).toBe(true);
+      expect(venv.ok, stepDetail(venv)).toBe(true);
       const old = await runStep(
         python,
         ["-m", "pip", "install", "mempalace==3.3.6"],
         { timeoutMs: INSTALL_TIMEOUT },
       );
-      expect(old.ok).toBe(true);
+      expect(old.ok, stepDetail(old)).toBe(true);
 
       // A palace with a store present arms the one-time wing migration.
       mkdirSync(palace, { recursive: true });
@@ -305,7 +310,7 @@ describe.skipIf(!REAL_DOCKER)("github mcp real provisioning", () => {
         ["run", "--rm", githubMcpImageRef(imageTag), "--help"],
         { timeoutMs: 120_000 },
       );
-      expect(help.ok).toBe(true);
+      expect(help.ok, stepDetail(help)).toBe(true);
 
       // A real stdio session through the plugin's docker command line;
       // with a token (CI's GITHUB_TOKEN) a read-only call round-trips to
