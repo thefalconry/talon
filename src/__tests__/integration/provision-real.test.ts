@@ -44,6 +44,16 @@ import {
   githubMcpImageRef,
 } from "../../plugins/github/provision.js";
 
+// A browser or Python child can still be flushing files into `home` when the
+// test ends (crashpad, __pycache__), and macOS/Windows then fail the delete
+// with ENOTEMPTY/EBUSY. Retry briefly instead of failing a green run.
+const RM_HOME = {
+  recursive: true,
+  force: true,
+  maxRetries: 10,
+  retryDelay: 200,
+} as const;
+
 const REAL = process.env.TALON_PROVISION_REAL === "1";
 const REAL_PLAYWRIGHT = process.env.TALON_PROVISION_REAL_PLAYWRIGHT === "1";
 const REAL_DOCKER = process.env.TALON_PROVISION_REAL_DOCKER === "1";
@@ -166,7 +176,7 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
         `installed mempalace ${target}`,
       );
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 
@@ -220,7 +230,7 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
       );
       expect(settled.actions.join(" ")).toContain("wing-name migration");
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 });
@@ -270,7 +280,7 @@ describe.skipIf(!REAL_PLAYWRIGHT)("playwright real provisioning", () => {
         { ...SESSION, extraEnv: { PLAYWRIGHT_BROWSERS_PATH: browsers } },
       );
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 });
@@ -319,7 +329,7 @@ describe.skipIf(!REAL_DOCKER)("github mcp real provisioning", () => {
         SESSION,
       );
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 });
