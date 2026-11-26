@@ -24,6 +24,7 @@ import {
   findBasePython,
   runStep,
   venvPython,
+  type ExecResult,
   type ProvisionOutcome,
 } from "../../core/plugin/provision.js";
 import {
@@ -44,6 +45,16 @@ import {
   githubMcpImageRef,
 } from "../../plugins/github/provision.js";
 
+// A browser or Python child can still be flushing files into `home` when the
+// test ends (crashpad, __pycache__), and macOS/Windows then fail the delete
+// with ENOTEMPTY/EBUSY. Retry briefly instead of failing a green run.
+const RM_HOME = {
+  recursive: true,
+  force: true,
+  maxRetries: 10,
+  retryDelay: 200,
+} as const;
+
 const REAL = process.env.TALON_PROVISION_REAL === "1";
 const REAL_PLAYWRIGHT = process.env.TALON_PROVISION_REAL_PLAYWRIGHT === "1";
 const REAL_DOCKER = process.env.TALON_PROVISION_REAL_DOCKER === "1";
@@ -52,6 +63,10 @@ const INSTALL_TIMEOUT = 20 * 60_000;
 
 const detail = (o: ProvisionOutcome): string =>
   `status=${o.status} error=${o.error ?? "-"} warnings=[${o.warnings.join("; ")}] actions=[${o.actions.join("; ")}]`;
+
+/** A failed step's own output, so a red run says why (pip's error, not "false"). */
+const stepDetail = (r: ExecResult): string =>
+  `code=${r.code ?? "-"} error=${r.error ?? "-"}\n${r.stderr.slice(-2000) || r.stdout.slice(-2000)}`;
 
 async function resolveTarget(): Promise<string> {
   if (process.env.TALON_PROVISION_TARGET !== "latest") {
@@ -154,7 +169,7 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
         ["-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
         { timeoutMs: 30_000 },
       );
-      expect(purelib.ok).toBe(true);
+      expect(purelib.ok, stepDetail(purelib)).toBe(true);
       rmSync(join(purelib.stdout.trim(), "mempalace"), {
         recursive: true,
         force: true,
@@ -166,7 +181,7 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
         `installed mempalace ${target}`,
       );
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 
@@ -182,23 +197,28 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
       const statePath = join(home, "state.json");
 
       // Seed a genuine old install the way a pre-provisioner deployment had it.
-      const base = await findBasePython(runStep, process.platform, {
-        major: 3,
-        minor: 10,
-      });
+      // Capped at the 3.12 the workflow installs: 3.3.6's pinned deps have no
+      // wheels for the newer Python the Windows runner image now ships, and
+      // pip on Windows can't resolve them (ResolutionImpossible).
+      const base = await findBasePython(
+        runStep,
+        process.platform,
+        { major: 3, minor: 10 },
+        { major: 3, minor: 12 },
+      );
       expect(base).toBeDefined();
       const venv = await runStep(
         base!.command,
         [...base!.args, "-m", "venv", venvDir],
         { timeoutMs: 120_000 },
       );
-      expect(venv.ok).toBe(true);
+      expect(venv.ok, stepDetail(venv)).toBe(true);
       const old = await runStep(
         python,
         ["-m", "pip", "install", "mempalace==3.3.6"],
         { timeoutMs: INSTALL_TIMEOUT },
       );
-      expect(old.ok).toBe(true);
+      expect(old.ok, stepDetail(old)).toBe(true);
 
       // A palace with a store present arms the one-time wing migration.
       mkdirSync(palace, { recursive: true });
@@ -220,7 +240,7 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
       );
       expect(settled.actions.join(" ")).toContain("wing-name migration");
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 });
@@ -270,7 +290,7 @@ describe.skipIf(!REAL_PLAYWRIGHT)("playwright real provisioning", () => {
         { ...SESSION, extraEnv: { PLAYWRIGHT_BROWSERS_PATH: browsers } },
       );
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 });
@@ -295,7 +315,7 @@ describe.skipIf(!REAL_DOCKER)("github mcp real provisioning", () => {
         ["run", "--rm", githubMcpImageRef(imageTag), "--help"],
         { timeoutMs: 120_000 },
       );
-      expect(help.ok).toBe(true);
+      expect(help.ok, stepDetail(help)).toBe(true);
 
       // A real stdio session through the plugin's docker command line;
       // with a token (CI's GITHUB_TOKEN) a read-only call round-trips to
@@ -319,7 +339,7 @@ describe.skipIf(!REAL_DOCKER)("github mcp real provisioning", () => {
         SESSION,
       );
 
-      rmSync(home, { recursive: true, force: true });
+      rmSync(home, RM_HOME);
     },
   );
 });
