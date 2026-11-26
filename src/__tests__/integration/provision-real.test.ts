@@ -197,10 +197,15 @@ describe.skipIf(!REAL)("mempalace real provisioning", () => {
       const statePath = join(home, "state.json");
 
       // Seed a genuine old install the way a pre-provisioner deployment had it.
-      const base = await findBasePython(runStep, process.platform, {
-        major: 3,
-        minor: 10,
-      });
+      // Capped at the 3.12 the workflow installs: 3.3.6's pinned deps have no
+      // wheels for the newer Python the Windows runner image now ships, and
+      // pip on Windows can't resolve them (ResolutionImpossible).
+      const base = await findBasePython(
+        runStep,
+        process.platform,
+        { major: 3, minor: 10 },
+        { major: 3, minor: 12 },
+      );
       expect(base).toBeDefined();
       const venv = await runStep(
         base!.command,
