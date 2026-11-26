@@ -1,5 +1,28 @@
 # Changelog
 
+## [5.40.1](https://github.com/thefalconry/talon/compare/v5.40.0...v5.40.1) (2026-11-26)
+
+
+### Miscellaneous Chores
+
+* **deps-dev:** Bump the dev-dependencies group across 1 directory with 7 updates ([#1420](https://github.com/thefalconry/talon/issues/1420)) ([77d696c](https://github.com/thefalconry/talon/commit/77d696c434f055b94531fdf09cfcc685df9f9cb4))
+* **deps:** Bump actions/dependency-review-action from 5.0.0 to 5.0.1 ([#1411](https://github.com/thefalconry/talon/issues/1411)) ([03817d9](https://github.com/thefalconry/talon/commit/03817d997ab2c76b73cbaff34e625e0a15e19951))
+* **deps:** Bump actions/setup-go from 7.0.0 to 7.1.0 ([#1412](https://github.com/thefalconry/talon/issues/1412)) ([c623e40](https://github.com/thefalconry/talon/commit/c623e40c3f8ab6b7f351f169b317a2e84c376582))
+* **deps:** Bump p-retry from 8.0.1 to 9.0.0 ([#1409](https://github.com/thefalconry/talon/issues/1409)) ([5a0f6f9](https://github.com/thefalconry/talon/commit/5a0f6f9a602270d620e628e95253a41b3fd64aff))
+* **deps:** Bump the production-dependencies group across 1 directory with 9 updates ([#1414](https://github.com/thefalconry/talon/issues/1414)) ([1adf897](https://github.com/thefalconry/talon/commit/1adf897a618da67c48e85f1bfb0055cf3e33841f))
+* **deps:** Bump the production-dependencies group with 3 updates ([#1423](https://github.com/thefalconry/talon/issues/1423)) ([2a8e57b](https://github.com/thefalconry/talon/commit/2a8e57be4b791ce4238688ed6a3363d1767825c9))
+
+
+### Tests
+
+* **provision:** fix the macOS cleanup and the Windows mempalace seed in Native Provisioning ([#1421](https://github.com/thefalconry/talon/issues/1421)) ([93cc19a](https://github.com/thefalconry/talon/commit/93cc19a77c10f700a99330959f53808b7091b349))
+
+
+### Continuous Integration
+
+* bump codeql-action init and analyze together ([#1422](https://github.com/thefalconry/talon/issues/1422)) ([8ee4952](https://github.com/thefalconry/talon/commit/8ee49529c4ebb8098c125eb3a90493d8f5509387))
+* **publish:** publish to npm through trusted publishing, not NPM_TOKEN ([#1425](https://github.com/thefalconry/talon/issues/1425)) ([a2f20c2](https://github.com/thefalconry/talon/commit/a2f20c2b39f00c5a5509e45c44ad4bbae27dba20))
+
 ## [5.40.0](https://github.com/thefalconry/talon/compare/v5.39.5...v5.40.0) (2026-11-25)
 
 
