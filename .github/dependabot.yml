@@ -62,3 +62,9 @@ updates:
     labels:
       - "dependencies"
       - "ci"
+    # init and analyze must run the same codeql-action version, or the
+    # analyze step refuses the config init wrote. One PR bumps both.
+    groups:
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
