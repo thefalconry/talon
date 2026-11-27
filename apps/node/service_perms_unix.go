@@ -67,3 +67,24 @@ func checkOwnedPath(path string, uid uint32) error {
 	}
 	return nil
 }
+
+// requireFileOwner refuses a file not owned by exactly uid. Unlike
+// requireOwnedPaths it doesn't accept root: a service running as uid has to
+// read and rewrite this file. A config minted under sudo lands in root's home,
+// owned by root.
+func requireFileOwner(path string, uid uint32) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	if st.Uid != uid {
+		return fmt.Errorf(
+			"%s is owned by uid %d, not uid %d, which the service runs as: "+
+				"pass the account's own config with --config", path, st.Uid, uid)
+	}
+	return nil
+}
