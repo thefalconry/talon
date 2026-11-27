@@ -42,4 +42,5 @@ export async function loadBuiltinBackends(config?: {
   await import("./codex/factory.js");
   await import("./agy/factory.js");
   await import("./openai-agents/factory.js");
+  await import("./kimi/factory.js");
 }

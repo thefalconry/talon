@@ -47,8 +47,12 @@ import { loadSystemTemplate } from "../../../core/prompt/templates.js";
  *     reply; delivery tools add rich content / targeting (codex, kilo).
  *   - `text-preferred` — plain text is the normal route; tools only
  *     for genuine side effects (opencode).
+ *   - `text-only` — plain text is the only route; the backend has no
+ *     frontend MCP server wired, so the delivery tools do not exist
+ *     (kimi).
  */
-export type DeliveryMode = "tool-only" | "text-or-tools" | "text-preferred";
+export type DeliveryMode =
+  "tool-only" | "text-or-tools" | "text-preferred" | "text-only";
 
 /** Frontend-specific delivery tool names. */
 export type DeliveryToolNames = {
