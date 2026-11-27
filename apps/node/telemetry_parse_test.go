@@ -60,3 +60,29 @@ func TestParseUint64(t *testing.T) {
 		t.Fatal("oversize accepted")
 	}
 }
+
+func TestFormatMemory(t *testing.T) {
+	got, ok := formatMemory(2<<30, 8<<30)
+	if !ok || got != "2.0 GB free of 8.0 GB" {
+		t.Fatalf("got %q %v", got, ok)
+	}
+	if _, ok := formatMemory(0, 0); ok {
+		t.Fatal("zero total accepted")
+	}
+	if _, ok := formatMemory(9<<30, 8<<30); ok {
+		t.Fatal("free above total accepted")
+	}
+}
+
+func TestFormatDisk(t *testing.T) {
+	got, ok := formatDisk(1<<30, 4<<30, "C:")
+	if !ok || got != "1.0 GB free of 4.0 GB on C:" {
+		t.Fatalf("got %q %v", got, ok)
+	}
+	if _, ok := formatDisk(0, 0, "C:"); ok {
+		t.Fatal("zero total accepted")
+	}
+	if _, ok := formatDisk(5<<30, 4<<30, "C:"); ok {
+		t.Fatal("free above total accepted")
+	}
+}
