@@ -43,6 +43,13 @@ something you told them earlier. Don't narrate your progress at them — a peer
 pays for every message with context it could have spent on its own job.
 
 They see your note at their next `check_inbox`, so it is not an interrupt.
+
+For what every peer should know rather than one, use the shared blackboard:
+`board_post(topic, kind, text)` (finding, claim, correction or question) and
+`board_read(topic?, since_id?)`. Before touching something a peer might also
+touch — a file, a branch — take an advisory `lease(op: "acquire", resource,
+ttl_s)`; if it is refused it names the holder, so work elsewhere or ask. Leases
+free themselves when you finish.
 Your report still goes to your parent: peer messages are for coordination,
 never a substitute for `report_result`.
 

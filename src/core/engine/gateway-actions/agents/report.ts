@@ -14,6 +14,11 @@
 
 import {
   agentIdFromContextLabel,
+  boardPost,
+  boardRead,
+  leaseAcquire,
+  leaseList,
+  leaseRelease,
   agentRegistry,
   deliverMessage,
   deliverToAgent,
@@ -22,6 +27,7 @@ import {
 } from "../../../agents/index.js";
 import { logError } from "../../../../util/log.js";
 import type { ActionResult } from "../../../types.js";
+import type { BoardCaller } from "../../../agents/board.js";
 import type { AgentRecord } from "../../../agents/index.js";
 import type { SharedActionHandlers } from "../types.js";
 
@@ -66,6 +72,15 @@ function callingAgent(chatKey: string): AgentRecord | null {
   const id = agentIdFromContextLabel(chatKey);
   if (!id || !agentRegistry.isLive(id)) return null;
   return agentRegistry.get(id);
+}
+
+/** Identity for the blackboard, resolved from the registry — never the model. */
+function boardCaller(record: AgentRecord): BoardCaller {
+  return {
+    id: record.id,
+    label: record.label,
+    chatId: agentRegistry.chatOf(record.id),
+  };
 }
 
 export const agentReportHandlers: SharedActionHandlers = {
@@ -221,6 +236,116 @@ export const agentReportHandlers: SharedActionHandlers = {
     return {
       ok: true,
       text: `${messages.length} message(s):\n\n${rendered}`,
+    };
+  },
+
+  board_post: (body, _chatId, _backend, chatKey) => {
+    const record = callingAgent(chatKey);
+    if (!record) return notAnAgent("board_post");
+    const posted = boardPost(
+      boardCaller(record),
+      String(body.topic ?? ""),
+      String(body.kind ?? ""),
+      String(body.text ?? ""),
+    );
+    if (!posted.ok) return { ok: false, error: posted.error };
+    return {
+      ok: true,
+      text: `Posted #${posted.value.id} (${posted.value.kind}) on "${posted.value.topic}".`,
+    };
+  },
+
+  board_read: (body, _chatId, _backend, chatKey) => {
+    const record = callingAgent(chatKey);
+    if (!record) return notAnAgent("board_read");
+    const topic = body.topic ? String(body.topic).trim() : undefined;
+    const sinceId = Number(body.since_id ?? 0);
+    const read = boardRead(boardCaller(record), {
+      ...(topic ? { topic } : {}),
+      sinceId: Number.isFinite(sinceId) ? sinceId : 0,
+    });
+    if (!read.ok) return { ok: false, error: read.error };
+    if (read.value.length === 0) {
+      return { ok: true, text: "Board empty — nothing posted yet." };
+    }
+    return {
+      ok: true,
+      text:
+        `${read.value.length} entr${read.value.length === 1 ? "y" : "ies"}` +
+        ` (pass since_id=${read.value[read.value.length - 1]!.id} next time):\n\n` +
+        read.value
+          .map(
+            (e) =>
+              `#${e.id} [${e.kind}] ${e.topic} — ${e.authorLabel} (${e.author})` +
+              `:\n${e.text}`,
+          )
+          .join("\n\n"),
+    };
+  },
+
+  lease: (body, _chatId, _backend, chatKey) => {
+    const record = callingAgent(chatKey);
+    if (!record) return notAnAgent("lease");
+    const op = String(body.op ?? "");
+    if (op === "list") {
+      const leases = leaseList(boardCaller(record));
+      if (!leases.ok) return { ok: false, error: leases.error };
+      if (leases.value.length === 0) {
+        return { ok: true, text: "No live leases in your tree." };
+      }
+      const now = Date.now();
+      return {
+        ok: true,
+        text: leases.value
+          .map(
+            (l) =>
+              `- ${l.topic} — held by ${l.authorLabel} (${l.author}), ` +
+              `expires in ${Math.ceil(((l.expiresAt ?? now) - now) / 1000)}s`,
+          )
+          .join("\n"),
+      };
+    }
+    const resource = String(body.resource ?? "");
+    if (op === "release") {
+      const released = leaseRelease(boardCaller(record), resource);
+      if (!released.ok) return { ok: false, error: released.error };
+      return {
+        ok: true,
+        text: released.value
+          ? `Released "${resource.trim()}".`
+          : `You hold no live lease on "${resource.trim()}".`,
+      };
+    }
+    if (op === "acquire") {
+      const got = leaseAcquire(
+        boardCaller(record),
+        resource,
+        Number(body.ttl_s ?? 600),
+      );
+      if (got.ok) {
+        return {
+          ok: true,
+          text:
+            `${got.renewed ? "Renewed" : "Acquired"} "${resource.trim()}" ` +
+            `for ${got.expiresIn}s. Advisory only — it frees itself when ` +
+            `you settle or the TTL lapses.`,
+        };
+      }
+      if ("heldBy" in got) {
+        return {
+          ok: false,
+          error: JSON.stringify({
+            held_by: got.heldBy,
+            held_by_id: got.heldById,
+            expires_in: got.expiresIn,
+          }),
+        };
+      }
+      return { ok: false, error: got.error };
+    }
+    return {
+      ok: false,
+      error: 'Unknown op. Use "acquire", "release" or "list".',
     };
   },
 };

@@ -32,6 +32,7 @@ import * as agentsRepo from "../../storage/agents/repo.js";
 import { bus } from "../bus/index.js";
 import { logWarn } from "../../util/log.js";
 import { RunKilledError } from "./abort-reason.js";
+import { releaseLeases } from "./board.js";
 
 /** Settled agents kept for status queries after they leave the live map. */
 const DEFAULT_HISTORY_LIMIT = 100;
@@ -100,6 +101,11 @@ export interface AgentRegistryOptions {
   readonly persist?: (snapshot: PersistedAgent) => void;
   /** Drop a persisted row (a registration that never started). */
   readonly unpersist?: (id: string) => void;
+  /**
+   * Runs once after an agent settles (success or failure) — the singleton
+   * releases the agent's blackboard leases here. Must not throw (guarded).
+   */
+  readonly onSettled?: (id: string) => void;
 }
 
 type MutableAgentRecord = {
@@ -229,6 +235,7 @@ export class AgentRegistry {
   private readonly newId: () => string;
   private readonly persistHook?: (snapshot: PersistedAgent) => void;
   private readonly unpersistHook?: (id: string) => void;
+  private readonly settledHook?: (id: string) => void;
 
   constructor(options: AgentRegistryOptions = {}) {
     this.historyLimit = options.historyLimit ?? DEFAULT_HISTORY_LIMIT;
@@ -238,6 +245,7 @@ export class AgentRegistry {
       options.newId ?? (() => `agt_${randomBytes(4).toString("hex")}`);
     if (options.persist) this.persistHook = options.persist;
     if (options.unpersist) this.unpersistHook = options.unpersist;
+    if (options.onSettled) this.settledHook = options.onSettled;
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -578,6 +586,11 @@ export class AgentRegistry {
     }
     for (const waiter of entry.waiters) waiter(settled);
     entry.waiters.clear();
+    try {
+      this.settledHook?.(id);
+    } catch (err) {
+      logWarn("agents", `settle hook failed for ${id}: ${String(err)}`);
+    }
     this.publish?.({
       type: "agent.settled",
       agentId: settled.id,
@@ -750,6 +763,12 @@ export class AgentRegistry {
     return { ok: false, candidates: byLabel };
   }
 
+  /** The chat key an agent's tree roots in, or null if unknown. */
+  chatOf(id: string): string | null {
+    const self = this.get(id);
+    return self ? this.rootChat(self) : null;
+  }
+
   /** Live agents plus the bounded settled ring, oldest first. */
   list(): AgentRecord[] {
     const records = [...this.history];
@@ -850,4 +869,5 @@ export const agentRegistry = new AgentRegistry({
   publish: (event) => bus.publish(event),
   persist: (saved) => agentsRepo.upsert(saved),
   unpersist: (id) => void agentsRepo.remove(id),
+  onSettled: (id) => void releaseLeases(id),
 });
